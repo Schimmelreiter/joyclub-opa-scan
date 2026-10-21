@@ -1,0 +1,3 @@
+Changelog – JOYclub Opa-Scan (Userscript)
+Neueste Version oben. Ältere Versionen bis 1.69 siehe README.
+
