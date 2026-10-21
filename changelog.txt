@@ -1,3 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
-Neueste Version oben. Ältere Versionen bis 1.69 siehe README.
+Neueste Version oben. Einträge ab Version 1.70.
 
+1.70 (21.10.2026)
+- Mitgliedersuche neu: Opa-Lupen-Button im Seitenkopf, „Mit aktuellen Sucheinstellungen filtern“ und „Systematische Suche“ (Umkreise × Alter per Deeplink, Wiederholungen, Protokoll, Exporte)
+- Alte Behandlung der Mitgliedersuche abgeschaltet (MEMBER_SEARCH: false)
+- AREAS: GeoNames-IDs ergänzt, Niedersachsen / Hamburg / Bremen zusammengefasst
+- Party-Scan startet ohne Browser-Meldungen im Popup mit „Jetzt scannen …“
+- Alle Popups einheitlich mit großen Buttons im JOYclub-Stil

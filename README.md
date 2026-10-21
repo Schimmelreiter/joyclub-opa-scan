@@ -2,9 +2,9 @@
 
 Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
-Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach festen Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – in Gruppen, auf Partys und (in Planung) in der Mitgliedersuche.
+Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach festen Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – in Gruppen, auf Partys und in der Mitgliedersuche.
 
-Stand: Version 1.69
+Stand: Version 1.70 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -75,7 +75,9 @@ Zwei Übersichtsseiten der eigenen Eventanmeldungen haben einen Button **„Opa-
 
 ### Ablauf (im Hintergrund)
 
-Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, ein Popup zeigt Fortschritt, Statistik und „Abbrechen“. Für jede Party:
+Ein Klick auf „Opa-Scan starten“ öffnet sofort das Scan-Popup (keine Browser-Meldungen): Es sammelt die Partys, nennt ihre Zahl bzw. den Grund, warum gerade kein Scan möglich ist, und startet erst mit **„Jetzt scannen …“**. Danach wird daraus „Abbrechen“.
+
+Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, das Popup zeigt Fortschritt und Statistik. Für jede Party:
 
 1. Veranstalter dauerhaft auf die Whitelist (und ggf. entsperren).
 2. VIP-Gäste aus dem Veranstaltungstext auf die Whitelist.
@@ -113,12 +115,30 @@ Angezeigt wird er auf der Event-Seite (rechts in der Reiterleiste), als Badge au
 
 ## Mitgliedersuche
 
-Bisherige Behandlung der Suche `/member/` (wird demnächst abgeschaltet und neu implementiert, siehe „In Planung“):
+Im Seitenkopf der Suche `/member/` steht rechts neben der Lupe (Namenssuche) ein eigener Button mit **Opa-mit-Lupe-Icon**. Er öffnet ein Popup mit drei Möglichkeiten:
 
-- Ergebnisse vollständig nachladen (Scrollen, dann „Mehr Ergebnisse“), Treffer einfärben und mit Badges (Alter, Grund) versehen.
-- Treffer nacheinander über das Profil ignorieren; optional im Automatik-Modus.
-- Bereits ignorierte Mitglieder ausblenden; Mitglieder, die genau `MAX_AGE` alt sind, kommen auf die Vormerkliste und werden nach ihrem Geburtstag erneut geprüft.
-- Header-Badge mit der Zahl der blockierten Opas.
+### Mit aktuellen Sucheinstellungen filtern
+
+Lädt die gerade eingestellte Suche in einem unsichtbaren Frame komplett nach, bestimmt die Treffer nach den Regeln (MAX_AGE, Typen, Paar-Regeln, Whitelist) und ignoriert sie im Hintergrund (Notiz-Quelle „Suche“).
+
+### Systematische Suche
+
+Ein zweites Popup spiegelt die JOYclub-Filter **Ich suche** (Frauen, Männer, Paare, Non-binary) und **Alter** (18 bis 70+) und listet alle Bundesländer aus `CONFIG.AREAS` mit Checkbox und Zahl der Umkreise (Hamburg und Bremen laufen unter „Niedersachsen / Hamburg / Bremen“). Die Auswahl wird gemerkt.
+
+Ablauf:
+- Für jeden Umkreis (50 km um eine Stadt) und jedes Alter einzeln – rückwärts von 70+ bis zur Untergrenze – wird die Suche per Deeplink aufgerufen:
+  `/member/<ort>-x<GeoNames-ID>-r/is-<typen>/?user_geo_distance=50&user_age=<alter>_<alter>`
+  (JOYclub nutzt GeoNames-IDs als Orts-ID; `70_70` bedeutet „70 und älter“, Werte über 70 kennt die Suche nicht.)
+- Jede Einzelsuche wird wiederholt, bis ein Durchlauf keine neuen Profile mehr bringt (höchstens 20, bei 70+ höchstens 200 Durchläufe); Treffer werden nach jedem Durchlauf ignoriert.
+- Paare werden anhand ihrer zwei Altersangaben entschieden; Paare mit nur einer Altersangabe werden auf dem Profil geprüft und gesondert gemerkt.
+- Fortschritt: jeder Umkreis zählt gleich viel; innerhalb eines Umkreises zählt 70+ zehnfach, jedes weitere Alter einfach.
+- Protokoll je Einzelsuche: Stadt, Bundesland, Orts-ID, Alter, Zahl der Durchläufe bis ohne neue Treffer, gefundene und ignorierte Profile, ob die Obergrenze erreicht wurde.
+
+### Sonstiges
+
+- Das Popup während des Scans entspricht dem des Party-Scans (Warnhinweis, Fortschrittsbalken, Statistik, Abbrechen); am Ende gibt es Export-Buttons für Protokoll, Paare mit einer Altersangabe und Fehlschläge.
+- Header-Badge mit der Zahl der vom Skript blockierten Opas.
+- Die alte Behandlung der Suche (Einfärben, Badges, Automatik, Ignorieren im Tab, Umbenennung „Mann“) ist mit `MEMBER_SEARCH: false` abgeschaltet, der Code bleibt im Skript.
 
 ---
 
@@ -135,7 +155,7 @@ Im Tampermonkey-Menü (alle Exporte als CSV mit `;`, Excel-tauglich):
 
 | Menüeintrag | Inhalt |
 |---|---|
-| Automatik an/aus | Automatik-Modus der (alten) Mitgliedersuche |
+| Automatik an/aus | Automatik-Modus der alten Mitgliedersuche (nur mit `MEMBER_SEARCH: true`) |
 | Liste exportieren | alle vom Skript ignorierten Mitglieder mit Quelle, Grund, Zeitpunkt |
 | alle Konten mit Geburtsjahr exportieren | alle gesehenen Konten mit Geburtsjahr-Spannen |
 | Vorgemerkte exportieren | Mitglieder, die genau `MAX_AGE` alt sind (Vormerkliste) |
@@ -143,6 +163,9 @@ Im Tampermonkey-Menü (alle Exporte als CSV mit `;`, Excel-tauglich):
 | Whitelist exportieren | feste und gelernte Whitelist mit Grund |
 | Gruppen (zuletzt bearbeitet) exportieren | Gruppen mit Datum des letzten Scans |
 | Fehlschläge des Party-Scans exportieren / löschen | gespeicherte Fehlschläge |
+| Protokoll der Mitgliedersuche exportieren | Protokoll der systematischen Suche je Einzelsuche |
+| Paare mit nur einer Altersangabe exportieren | in der Suche gefundene Paare mit nur einem Alter |
+| Fehlschläge der Mitgliedersuche exportieren | gespeicherte Fehlschläge der Mitgliedersuche |
 | Partys beim nächsten Scan vollständig prüfen | vergisst die bereits geprüften Anmeldungen |
 | Lauf zurücksetzen | Notfall: beendet alle laufenden Vorgänge und gibt die Tab-Sperre frei |
 
@@ -153,14 +176,5 @@ Im Tampermonkey-Menü (alle Exporte als CSV mit `;`, Excel-tauglich):
 - **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
 - **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
 - **Fehleranzeige:** Startfehler erscheinen in einem Panel mit „Alles zurücksetzen“.
-- **Umkreise:** `CONFIG.AREAS` enthält 90 Städte, deren 50-km-Umkreise ganz Deutschland abdecken – gruppiert nach Bundesland (NRW zuerst und vollständig, dann absteigend). Grundlage für die geplante systematische Suche.
-
----
-
-## In Planung
-
-- **Mitgliedersuche neu:** eigener Opa-Lupen-Button im Seitenkopf
-  - „Mit aktuellen Sucheinstellungen filtern“: alle Ergebnisse nachladen, Treffer bestimmen und im Hintergrund ignorieren
-  - „Systematische Suche“: per Deeplink alle gewählten Umkreise und jedes Alter einzeln (70+ bis Untergrenze) abarbeiten, jede Suche wiederholen, bis keine neuen Profile mehr erscheinen; Einstellungen werden gemerkt, Protokoll exportierbar
-- **Party-Scan:** Start ohne Browser-Meldungen direkt im Scan-Popup („Jetzt scannen …“)
-- **Einheitliche Popups** mit großen Buttons im JOYclub-Stil
+- **Popups:** alle im selben Stil (dunkler Kasten, große Buttons untereinander wie bei JOYclub; rot nur für Buttons, die einen Scan starten; vorausgewählter Button weiß umrandet, Esc schließt).
+- **Umkreise:** `CONFIG.AREAS` enthält 90 Städte mit GeoNames-ID, deren 50-km-Umkreise ganz Deutschland abdecken – gruppiert nach Bundesland (NRW zuerst und vollständig, dann absteigend).

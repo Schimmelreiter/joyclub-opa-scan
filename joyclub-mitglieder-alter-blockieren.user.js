@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.69
-// @description  Mitgliedersuche und Gruppen (Opa-Scan) nach Alter bzw. Altersunterschied durchsuchen und Treffer über die Ignorierliste ignorieren; Moderatoren-Whitelist; Exporte.
+// @version      1.70
+// @description  Opa-Scan für JOYclub: Gruppen, Partys und Mitgliedersuche nach Alter bzw. Altersunterschied durchsuchen und Treffer ignorieren; Whitelist, AWO-Faktor, Exporte.
 // @match        https://www.joyclub.de/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=joyclub.de
 // @grant        GM_getValue
@@ -26,7 +26,9 @@
   // ===================== EINSTELLUNGEN =====================
   const CONFIG = {
     DRY_RUN: false,         // true = Testmodus: spielt alles durch, ignoriert aber niemanden (klickt „Abbrechen“)
-    DEBUG: false,           // true = jedes Element vor dem Klick gelb markieren und kurz warten
+    DEBUG: false,
+    MEMBER_SEARCH: false,   // alte Behandlung der Mitgliedersuche (/member/): true = wieder einschalten
+                            // (die neue Opa-Suche mit eigenem Button läuft unabhängig davon)           // true = jedes Element vor dem Klick gelb markieren und kurz warten
 
     MAX_AGE: 49,            // Mitglieder, die ÄLTER als dieser Wert sind, werden blockiert
     WARN_AGE: 29,           // Farben: bis WARN_AGE grün, darüber hellorange, genau MAX_AGE (1 Jahr vor der Grenze) dunkelorange
@@ -99,129 +101,127 @@
     // Umkreis-Suche: Städte, deren Umkreise (AREA_RADIUS_KM) zusammen ganz Deutschland abdecken.
     // Gruppiert nach Bundesland in dieser Reihenfolge; jede Gruppe deckt ihr Bundesland (zusammen mit den
     // Gruppen davor) zu 100 % ab. Städte aus Nachbarländern, deren Umkreis hineinreicht, stehen mit Länderkürzel
-    // in der Gruppe. Bremen und Hamburg sind bereits durch Niedersachsen abgedeckt.
-    // Eintrag: [Stadt, Breitengrad, Längengrad, Bundesland-Kürzel]
+    // in der Gruppe. Hamburg und Bremen sind über Niedersachsen abgedeckt.
+    // Eintrag: [Stadt, Breitengrad, Längengrad, Bundesland-Kürzel, GeoNames-ID = JOYclub-Orts-ID ohne „x“]
     AREA_RADIUS_KM: 50,
     AREAS: {
       'Nordrhein-Westfalen': [
-        ['Rheine', 52.28, 7.44, 'NW'],
-        ['Bocholt', 51.84, 6.62, 'NW'],
-        ['Essen', 51.46, 7.01, 'NW'],
-        ['Olpe', 51.03, 7.84, 'NW'],
-        ['Euskirchen', 50.66, 6.79, 'NW'],
-        ['Biedenkopf', 50.91, 8.53, 'HE'],
-        ['Soest', 51.57, 8.11, 'NW'],
-        ['Bad Driburg', 51.73, 9.02, 'NW'],
-        ['Lübbecke', 52.30, 8.62, 'NW'],
-        ['Heinsberg', 51.06, 6.10, 'NW'],
+        ['Rheine', 52.2851, 7.4405, 'NW', 2847645],
+        ['Bocholt', 51.8388, 6.6153, 'NW', 2947421],
+        ['Essen', 51.4566, 7.0123, 'NW', 2928810],
+        ['Olpe', 51.0290, 7.8514, 'NW', 2857306],
+        ['Euskirchen', 50.6606, 6.7872, 'NW', 2928396],
+        ['Biedenkopf', 50.9113, 8.5302, 'HE', 2949229],
+        ['Soest', 51.5756, 8.1062, 'NW', 2831708],
+        ['Bad Driburg', 51.7330, 9.0197, 'NW', 2953525],
+        ['Lübbecke', 52.3070, 8.6142, 'NW', 2875626],
+        ['Heinsberg', 51.0636, 6.0998, 'NW', 2907201],
       ],
       'Rheinland-Pfalz': [
-        ['Trier', 49.75, 6.64, 'RP'],
-        ['Limburg', 50.39, 8.06, 'HE'],
-        ['Bad Kreuznach', 49.84, 7.87, 'RP'],
-        ['Pirmasens', 49.20, 7.60, 'RP'],
-        ['Mannheim', 49.49, 8.47, 'BW'],
-        ['Daun', 50.20, 6.83, 'RP'],
+        ['Trier', 49.7557, 6.6394, 'RP', 2821164],
+        ['Limburg', 50.3836, 8.0503, 'HE', 2877648],
+        ['Bad Kreuznach', 49.8414, 7.8671, 'RP', 2953416],
+        ['Pirmasens', 49.2015, 7.6053, 'RP', 2853574],
+        ['Mannheim', 49.4891, 8.4669, 'BW', 2873891],
+        ['Daun', 50.1972, 6.8294, 'RP', 2938714],
       ],
-      'Niedersachsen': [
-        ['Cuxhaven', 53.86, 8.69, 'NI'],
-        ['Aurich', 53.47, 7.48, 'NI'],
-        ['Uelzen', 52.96, 10.56, 'NI'],
-        ['Verden', 52.92, 9.23, 'NI'],
-        ['Cloppenburg', 52.85, 8.04, 'NI'],
-        ['Meppen', 52.69, 7.29, 'NI'],
-        ['Hannover', 52.37, 9.73, 'NI'],
-        ['Northeim', 51.71, 10.00, 'NI'],
-        ['Brake', 53.33, 8.48, 'NI'],
-        ['Buxtehude', 53.47, 9.69, 'NI'],
-        ['Dannenberg', 53.10, 11.10, 'NI'],
-        ['Helmstedt', 52.23, 11.01, 'NI'],
+      'Niedersachsen / Hamburg / Bremen': [
+        ['Cuxhaven', 53.8683, 8.6990, 'NI', 2939658],
+        ['Aurich', 53.4692, 7.4823, 'NI', 2954006],
+        ['Uelzen', 52.9657, 10.5611, 'NI', 2820456],
+        ['Verden', 52.9234, 9.2349, 'NI', 2817599],
+        ['Cloppenburg', 52.8475, 8.0450, 'NI', 2939969],
+        ['Meppen', 52.6906, 7.2910, 'NI', 2871845],
+        ['Hannover', 52.3705, 9.7332, 'NI', 2910831],
+        ['Northeim', 51.7066, 10.0000, 'NI', 2861814],
+        ['Brake', 53.3333, 8.4833, 'NI', 2945545],
+        ['Buxtehude', 53.4672, 9.6864, 'NI', 2940451],
+        ['Dannenberg', 53.0967, 11.0900, 'NI', 2938991],
+        ['Helmstedt', 52.2279, 11.0099, 'NI', 2906676],
       ],
       'Hessen': [
-        ['Kassel', 51.31, 9.48, 'HE'],
-        ['Fulda', 50.55, 9.68, 'HE'],
-        ['Wertheim', 49.76, 9.52, 'BW'],
-        ['Gotha', 50.95, 10.70, 'TH'],
-        ['Friedberg', 50.33, 8.76, 'HE'],
+        ['Kassel', 51.3167, 9.5000, 'HE', 2892518],
+        ['Fulda', 50.5516, 9.6752, 'HE', 2923822],
+        ['Wertheim', 49.7590, 9.5085, 'BW', 2810716],
+        ['Gotha', 50.9482, 10.7019, 'TH', 2918752],
+        ['Friedberg', 50.3374, 8.7559, 'HE', 2924802],
       ],
       'Saarland': [
-        ['Merzig', 49.44, 6.64, 'SL'],
+        ['Merzig', 49.4433, 6.6387, 'SL', 2871675],
       ],
-      'Bremen': [], // schon durch Niedersachsen abgedeckt
-      'Hamburg': [], // schon durch Niedersachsen abgedeckt
       'Thüringen': [
-        ['Gera', 50.88, 12.08, 'TH'],
-        ['Saalfeld', 50.65, 11.37, 'TH'],
-        ['Coburg', 50.26, 10.96, 'BY'],
-        ['Sondershausen', 51.37, 10.87, 'TH'],
+        ['Gera', 50.8803, 12.0819, 'TH', 2921232],
+        ['Saalfeld', 50.6483, 11.3654, 'TH', 2842688],
+        ['Coburg', 50.2594, 10.9638, 'BY', 2939951],
+        ['Sondershausen', 51.3697, 10.8701, 'TH', 2831276],
       ],
       'Schleswig-Holstein': [
-        ['Heide', 54.20, 9.10, 'SH'],
-        ['Bad Segeberg', 53.94, 10.31, 'SH'],
-        ['Hagenow', 53.43, 11.19, 'MV'],
-        ['Eckernförde', 54.47, 9.84, 'SH'],
-        ['Fehmarn', 54.44, 11.19, 'SH'],
-        ['Niebüll', 54.79, 8.83, 'SH'],
+        ['Heide', 54.1958, 9.0988, 'SH', 2908032],
+        ['Bad Segeberg', 53.9431, 10.3021, 'SH', 2953341],
+        ['Hagenow', 53.4313, 11.1916, 'MV', 2912481],
+        ['Eckernförde', 54.4685, 9.8382, 'SH', 2933627],
+        ['Fehmarn', 54.4378, 11.1935, 'SH', 8051091],
+        ['Niebüll', 54.7866, 8.8285, 'SH', 2863696],
       ],
       'Baden-Württemberg': [
-        ['Freiburg', 47.99, 7.85, 'BW'],
-        ['Ravensburg', 47.78, 9.61, 'BW'],
-        ['Freudenstadt', 48.46, 8.41, 'BW'],
-        ['Schwäbisch Hall', 49.11, 9.74, 'BW'],
-        ['Günzburg', 48.45, 10.28, 'BY'],
-        ['Bruchsal', 49.12, 8.60, 'BW'],
-        ['Singen', 47.76, 8.84, 'BW'],
-        ['Reutlingen', 48.49, 9.21, 'BW'],
+        ['Freiburg', 47.9959, 7.8522, 'BW', 2925177],
+        ['Ravensburg', 47.7820, 9.6106, 'BW', 2849802],
+        ['Freudenstadt', 48.4669, 8.4137, 'BW', 2924894],
+        ['Schwäbisch Hall', 49.1113, 9.7391, 'BW', 2835481],
+        ['Günzburg', 48.4560, 10.2769, 'BY', 2913555],
+        ['Bruchsal', 49.1243, 8.5980, 'BW', 2943560],
+        ['Singen', 47.7593, 8.8403, 'BW', 2831924],
+        ['Reutlingen', 48.4914, 9.2043, 'BW', 2847736],
       ],
       'Bayern': [
-        ['Kaufbeuren', 47.88, 10.62, 'BY'],
-        ['Augsburg', 48.37, 10.90, 'BY'],
-        ['Garmisch-Partenkirchen', 47.49, 11.10, 'BY'],
-        ['Traunstein', 47.87, 12.64, 'BY'],
-        ['Cham', 49.22, 12.66, 'BY'],
-        ['Ansbach', 49.30, 10.57, 'BY'],
-        ['Amberg', 49.44, 11.86, 'BY'],
-        ['Bamberg', 49.89, 10.89, 'BY'],
-        ['Schweinfurt', 50.05, 10.23, 'BY'],
-        ['Marktredwitz', 50.00, 12.08, 'BY'],
-        ['Freyung', 48.81, 13.55, 'BY'],
-        ['Pfarrkirchen', 48.43, 12.94, 'BY'],
-        ['Erding', 48.31, 11.91, 'BY'],
-        ['Miesbach', 47.79, 11.83, 'BY'],
-        ['Eichstätt', 48.89, 11.18, 'BY'],
-        ['Kelheim', 48.92, 11.88, 'BY'],
+        ['Kaufbeuren', 47.8824, 10.6219, 'BY', 2892080],
+        ['Augsburg', 48.3715, 10.8985, 'BY', 2954172],
+        ['Garmisch-Partenkirchen', 47.4921, 11.0958, 'BY', 2922530],
+        ['Traunstein', 47.8683, 12.6433, 'BY', 2821515],
+        ['Cham', 49.2257, 12.6550, 'BY', 2940204],
+        ['Ansbach', 49.3048, 10.5931, 'BY', 2955936],
+        ['Amberg', 49.4429, 11.8627, 'BY', 2956656],
+        ['Bamberg', 49.8987, 10.9007, 'BY', 2952984],
+        ['Schweinfurt', 50.0494, 10.2218, 'BY', 2834498],
+        ['Marktredwitz', 50.0044, 12.0859, 'BY', 2873289],
+        ['Freyung', 48.8095, 13.5477, 'BY', 2924850],
+        ['Pfarrkirchen', 48.4320, 12.9381, 'BY', 2854179],
+        ['Erding', 48.3060, 11.9069, 'BY', 2929715],
+        ['Miesbach', 47.7890, 11.8338, 'BY', 2871198],
+        ['Eichstätt', 48.8885, 11.1967, 'BY', 2932069],
+        ['Kelheim', 48.9173, 11.8862, 'BY', 2891834],
       ],
       'Berlin': [
-        ['Berlin', 52.52, 13.40, 'BE'],
+        ['Berlin', 52.5244, 13.4105, 'BE', 2950159],
       ],
       'Brandenburg': [
-        ['Schwedt', 53.06, 14.28, 'BB'],
-        ['Frankfurt (Oder)', 52.34, 14.55, 'BB'],
-        ['Lübben', 51.94, 13.90, 'BB'],
-        ['Wittenberg', 51.87, 12.65, 'ST'],
-        ['Riesa', 51.31, 13.29, 'SN'],
-        ['Pritzwalk', 53.15, 12.18, 'BB'],
-        ['Rathenow', 52.60, 12.33, 'BB'],
-        ['Templin', 53.12, 13.50, 'BB'],
-        ['Weißwasser', 51.50, 14.64, 'SN'],
+        ['Schwedt', 53.0596, 14.2815, 'BB', 2834629],
+        ['Frankfurt (Oder)', 52.3471, 14.5506, 'BB', 2925535],
+        ['Lübben', 51.9381, 13.8883, 'BB', 2875625],
+        ['Wittenberg', 51.8661, 12.6497, 'ST', 7303020],
+        ['Riesa', 51.3078, 13.2917, 'SN', 2846939],
+        ['Pritzwalk', 53.1495, 12.1740, 'BB', 2851962],
+        ['Rathenow', 52.6066, 12.3370, 'BB', 2850213],
+        ['Templin', 53.1187, 13.5022, 'BB', 2823533],
+        ['Weißwasser', 51.5040, 14.6402, 'SN', 2811698],
       ],
       'Sachsen': [
-        ['Halle', 51.48, 11.97, 'ST'],
-        ['Bautzen', 51.18, 14.42, 'SN'],
-        ['Freiberg', 50.91, 13.34, 'SN'],
-        ['Aue', 50.59, 12.70, 'SN'],
+        ['Halle', 51.4816, 11.9795, 'ST', 2911522],
+        ['Bautzen', 51.1803, 14.4349, 'SN', 2951881],
+        ['Freiberg', 50.9109, 13.3388, 'SN', 2925192],
+        ['Aue', 50.5903, 12.7066, 'SN', 2954695],
       ],
       'Sachsen-Anhalt': [
-        ['Stendal', 52.60, 11.86, 'ST'],
-        ['Magdeburg', 52.13, 11.63, 'ST'],
+        ['Stendal', 52.6069, 11.8587, 'ST', 2827479],
+        ['Magdeburg', 52.1277, 11.6292, 'ST', 2874545],
       ],
       'Mecklenburg-Vorpommern': [
-        ['Rostock', 54.09, 12.10, 'MV'],
-        ['Stralsund', 54.31, 13.09, 'MV'],
-        ['Greifswald', 54.09, 13.38, 'MV'],
-        ['Schwerin', 53.63, 11.41, 'MV'],
-        ['Waren (Müritz)', 53.52, 12.68, 'MV'],
-        ['Ueckermünde', 53.74, 14.05, 'MV'],
+        ['Rostock', 54.0887, 12.1405, 'MV', 2844588],
+        ['Stralsund', 54.3091, 13.0818, 'MV', 2826287],
+        ['Greifswald', 54.0931, 13.3879, 'MV', 2917788],
+        ['Schwerin', 53.6294, 11.4132, 'MV', 2834282],
+        ['Waren (Müritz)', 53.5204, 12.6799, 'MV', 2814131],
+        ['Ueckermünde', 53.7379, 14.0447, 'MV', 2820471],
       ],
     },
 
@@ -584,7 +584,8 @@
   const setFailed = (p, why) => { const f = getFailed(); f[p] = why; GM_setValue(K_FAILED, f); };
   const clearFailed = (p) => { const f = getFailed(); if (p in f) { delete f[p]; GM_setValue(K_FAILED, f); } };
 
-  const currentListPage = () => CONFIG.LIST_PAGES.find((l) => !l.background && cleanPath(location.pathname) === l.path);
+  const currentListPage = () => CONFIG.LIST_PAGES.find((l) => !l.background && cleanPath(location.pathname) === l.path &&
+    !(l.path === '/member' && !CONFIG.MEMBER_SEARCH));
   const sourceOf = (name) => (CONFIG.LIST_PAGES.find((l) => l.name === name) || {}).source || '';
   const isProfilePage = () => CONFIG.PROFILE_PATH_RE.test(location.pathname);
 
@@ -2461,7 +2462,7 @@
     const w = window.open('about:blank', 'jaf-fresh-' + Date.now());
     try { if (w) w.document.write('<p style="font:16px system-ui;padding:20px">Profil wird entsperrt …</p>'); } catch (e) { /* egal */ }
     const r = await bgUnignore(info.id);
-    if (!r.ok) { if (w) w.close(); alert(`${info.name}: ${r.msg}`); return false; }
+    if (!r.ok) { if (w) w.close(); console.warn('[Alter-Filter]', `${info.name}: ${r.msg}`); return false; }
     const logPath = Object.keys(getLog()).find((p) => idOf(p) === String(info.id)) || info.path;
     markUnblocked(logPath, info, `Whitelist: ${CONFIG.PARTY_REASON}`);
     addWhiteEntry(info, CONFIG.PARTY_REASON, party);
@@ -2642,19 +2643,27 @@
     return own.length ? own[own.length - 1] : lines.join(' · ');
   }
   // Button im Stil der JOYclub-Knöpfe („Event merken“), untereinander
-  function popupButton(label, fn) {
+  // einheitliche Popup-Buttons (Stil wie „Event merken“ / „Anmelden“): primary = rot (startet einen Scan)
+  function popupButton(label, fn, opt = {}) {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = label;
-    b.style.cssText = 'display:block;width:100%;box-sizing:border-box;border:0;border-radius:10px;background:#4a4f53;color:#fff;' +
+    const bg = opt.primary ? '#c71b1b' : '#4a4f53', hover = opt.primary ? '#a81515' : '#5a6064';
+    b.style.cssText = `display:block;width:100%;box-sizing:border-box;border:0;border-radius:10px;background:${bg};color:#fff;` +
       'font:bold 17px/1.2 system-ui,sans-serif;padding:14px 16px;cursor:pointer;text-align:center;outline:none';
-    b.addEventListener('mouseenter', () => { b.style.background = '#5a6064'; });
-    b.addEventListener('mouseleave', () => { b.style.background = '#4a4f53'; });
+    if (opt.disabled) { b.disabled = true; b.style.opacity = '.4'; b.style.cursor = 'default'; }
+    b.addEventListener('mouseenter', () => { if (!b.disabled) b.style.background = hover; });
+    b.addEventListener('mouseleave', () => { b.style.background = bg; });
     b.addEventListener('focus', () => { b.style.boxShadow = '0 0 0 2px #1d2023, 0 0 0 4px #fff'; });
     b.addEventListener('blur', () => { b.style.boxShadow = ''; });
-    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (!b.disabled && fn) fn(); });
     return b;
   }
+  // Popup-Grundgerüst (dunkler Kasten in der Bildschirmmitte)
+  const POPUP_BOX_CSS = 'background:#1d2023;color:#fff;font:14px/1.5 system-ui,sans-serif;padding:18px 20px;border-radius:10px;' +
+    'max-width:440px;width:calc(100% - 32px);max-height:calc(100vh - 32px);overflow:auto;box-sizing:border-box;box-shadow:0 8px 30px rgba(0,0,0,.5)';
+  const opaIconSvg = (h = 22) => `<svg viewBox="0 0 640 1280" width="${Math.round(h * 0.58)}" height="${h}" style="fill:currentColor;flex:none" aria-hidden="true">` +
+    `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg>`;
 
   function ignoredPopup(g, blk, ev) {
     document.getElementById('jaf-popup')?.remove();
@@ -3385,13 +3394,10 @@
     return readRegistrations();
   }
   // Liste der zu scannenden Partys – je nach Seite
-  async function scanEventList() {
+  async function scanEventList(onProgress) {
     if (isRegistrationsPage()) {
-      const p = panel(); p.innerHTML = '<b>Opa-Scan Partys</b><br>';
-      log('Lade alle Eventanmeldungen (Seite wird dazu kurz gescrollt) …');
-      const list = await loadAllRegistrations((n) => log(`… ${n} Partys geladen`));
-      log(`${list.length} Partys gefunden.`);
-      return list;
+      if (onProgress) onProgress(readRegistrations().length);
+      return loadAllRegistrations(onProgress);
     }
     return readAppointments();
   }
@@ -3475,15 +3481,14 @@
     if (o.returnUrl && !isAppointmentsPage() && !isRegistrationsPage()) setTimeout(() => { location.href = o.returnUrl; }, 1500);
   }
 
+  // normaler Scan mit Seitenwechsel (Rückfall, wenn der Hintergrund-Scan nicht geht) – ohne Browser-Meldungen
   async function evStart() {
-    if (getOpa().running && !opaStale(getOpa())) { alert('Der Gruppen-Opa-Scan läuft gerade. Bitte erst diesen beenden.'); return; }
-    const other = lockedByOther();
-    if (other) { alert(lockNotice(other).replace(' – hier wird nur markiert.', '. Der Opa-Scan kann erst danach gestartet werden.')); return; }
-    if (!(await acquireLock('Opa-Scan Partys'))) { alert('Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.'); return; }
-    const list = await scanEventList();
-    if (!list.length) { alert('Keine Eventanmeldungen gefunden.'); return; }
-    if (!confirm(`Opa-Scan für ${list.length} Partys starten?\n\nFür jede Party: VIP-Gäste aus dem Veranstaltungstext auf die Whitelist, ` +
-      `Gästeliste „Alle“ lesen und Treffer ignorieren.${CONFIG.DRY_RUN ? '\n\n[Testmodus: es wird nichts ignoriert]' : ''}`)) return;
+    const p = panel(); p.innerHTML = '<b>Opa-Scan Partys</b><br>';
+    const why = scanBlockedReason();
+    if (why) { log(why); return; }
+    if (!(await acquireLock('Opa-Scan Partys'))) { log('Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.'); return; }
+    const list = await scanEventList((n) => log(`Lade alle Eventanmeldungen … ${n}`));
+    if (!list.length) { log('Keine Eventanmeldungen gefunden.'); return; }
     saveEventsFromList(list);
     const events = orderEvents(list).map((e) => ({ id: e.id, url: e.url, date: e.date, name: (getEvents()[e.id] || {}).name || e.slugName }));
     setEv({ running: true, phase: 'event', events, ei: 0, ownerTab: TAB_ID, returnUrl: location.href, stats: { events: 0, vip: 0, guests: 0, hits: 0 }, log: [] });
@@ -3871,6 +3876,7 @@
     const n = window.name || '';
     if (n === 'jaf-bg-ev') return bgEventFrame();
     if (n.startsWith('jaf-bg-act-')) return bgActFrame();
+    if (n.startsWith('jaf-bg-ms')) return msFrame();
     return bgFrameMain(); // Gästeliste m/p/alle
   }
 
@@ -3882,30 +3888,65 @@
     ov = document.createElement('div');
     ov.id = 'jaf-bg-popup';
     ov.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center';
-    ov.innerHTML = `<div style="background:#1e1e1e;color:#fff;font:14px/1.5 system-ui,sans-serif;padding:20px 22px;border-radius:12px;max-width:460px;width:calc(100% - 32px);box-shadow:0 8px 30px rgba(0,0,0,.5)">
-      <div style="display:flex;align-items:center;gap:10px;font-size:17px;font-weight:bold;margin-bottom:6px">
-        <svg viewBox="0 0 640 1280" width="14" height="24" style="fill:currentColor"><g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg>
-        Opa-Scan läuft im Hintergrund</div>
-      <div style="background:#ffb300;color:#000;border-radius:6px;padding:6px 10px;margin:8px 0 12px;font-weight:bold">
+    ov.innerHTML = `<div class="jaf-bg-box" role="dialog" aria-modal="true" style="${POPUP_BOX_CSS}">
+      <div style="display:flex;align-items:center;gap:10px;font-size:17px;font-weight:bold;margin-bottom:6px">${opaIconSvg(24)}<span class="jaf-bg-title">Opa-Scan</span></div>
+      <div class="jaf-bg-warn" style="display:none;background:#ffb300;color:#000;border-radius:6px;padding:6px 10px;margin:8px 0 12px;font-weight:bold">
         ⚠ Bitte diese Seite nicht verlassen und den Tab nicht schließen, sonst bricht der Scan ab.</div>
-      <div class="jaf-bg-party" style="font-weight:bold"></div>
+      <div class="jaf-bg-party" style="font-weight:bold;margin-top:8px"></div>
       <div class="jaf-bg-step" style="opacity:.9;min-height:1.5em"></div>
-      <div style="height:8px;background:#333;border-radius:4px;margin:10px 0;overflow:hidden"><div class="jaf-bg-bar" style="height:100%;width:0;background:#43a047;transition:width .3s"></div></div>
+      <div class="jaf-bg-barwrap" style="display:none;height:8px;background:#333;border-radius:4px;margin:10px 0;overflow:hidden"><div class="jaf-bg-bar" style="height:100%;width:0;background:#43a047;transition:width .3s"></div></div>
       <div class="jaf-bg-stats" style="font-size:12px;opacity:.8;white-space:pre-line"></div>
-      <div style="margin-top:14px;text-align:right"><button class="jaf-bg-cancel" style="padding:6px 14px;border:0;border-radius:6px;background:#c62828;color:#fff;cursor:pointer">Abbrechen</button></div>
+      <div class="jaf-bg-body"></div>
+      <div class="jaf-bg-btns" style="display:flex;flex-direction:column;gap:12px;margin-top:16px"></div>
     </div>`;
-    ov.querySelector('.jaf-bg-cancel').addEventListener('click', () => {
-      if (bgScan) { bgScan.stop = true; ov.querySelector('.jaf-bg-step').textContent = 'Wird nach dem aktuellen Schritt abgebrochen …'; }
-      else ov.remove();
-    });
+    const canClose = () => !(bgScan && bgScan.running);
+    ov.addEventListener('click', (e) => { if (e.target === ov && canClose()) closeBgPopup(); });
+    ov.__esc = (e) => { if (e.key === 'Escape' && canClose()) { e.preventDefault(); closeBgPopup(); } };
+    document.addEventListener('keydown', ov.__esc, true);
     document.body.appendChild(ov);
     return ov;
   }
+  function closeBgPopup() {
+    const ov = document.getElementById('jaf-bg-popup');
+    if (!ov) return;
+    document.removeEventListener('keydown', ov.__esc, true);
+    ov.remove();
+    if (bgScan && !bgScan.running) bgScan = null;
+  }
+  // Titel setzen; running = Warnhinweis „Seite nicht verlassen“ zeigen
+  function bgTitle(title, running) {
+    const ov = bgPopup();
+    ov.querySelector('.jaf-bg-title').textContent = title;
+    ov.querySelector('.jaf-bg-warn').style.display = running ? '' : 'none';
+  }
+  // freier Inhalt zwischen Statistik und Buttons (z. B. Einstellungen); null = leeren
+  function bgBody(node) {
+    const b = bgPopup().querySelector('.jaf-bg-body');
+    b.innerHTML = '';
+    if (node) b.appendChild(node);
+    return b;
+  }
+  // Buttons ersetzen: [{ label, fn, primary, focus, disabled }]
+  function bgButtons(defs) {
+    const box = bgPopup().querySelector('.jaf-bg-btns');
+    box.innerHTML = '';
+    let focusEl = null;
+    for (const d of defs) {
+      const b = popupButton(d.label, d.fn, d);
+      if (d.cls) b.classList.add(d.cls);
+      box.appendChild(b);
+      if (d.focus) focusEl = b;
+    }
+    if (focusEl) setTimeout(() => focusEl.focus(), 0);
+  }
+  const bgStopButton = () => ({ label: 'Abbrechen', focus: true, fn: () => {
+    if (bgScan) { bgScan.stop = true; bgPopup().querySelector('.jaf-bg-step').textContent = 'Wird nach dem aktuellen Schritt abgebrochen …'; }
+  } });
   function bgUi(party, step, frac, stats) {
     const ov = bgPopup();
     if (party != null) ov.querySelector('.jaf-bg-party').textContent = party;
     if (step != null) ov.querySelector('.jaf-bg-step').textContent = step;
-    if (frac != null) ov.querySelector('.jaf-bg-bar').style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + '%';
+    if (frac != null) { ov.querySelector('.jaf-bg-barwrap').style.display = ''; ov.querySelector('.jaf-bg-bar').style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(1) + '%'; }
     if (stats != null) ov.querySelector('.jaf-bg-stats').textContent = stats;
   }
   const beforeUnloadGuard = (e) => { e.preventDefault(); e.returnValue = 'Der Opa-Scan läuft noch.'; return e.returnValue; };
@@ -3942,21 +3983,49 @@
     return l.length;
   }
 
-  async function bgEvStart() {
-    if (bgScan) return;
-    if (getOpa().running && !opaStale(getOpa())) { alert('Der Gruppen-Opa-Scan läuft gerade. Bitte erst diesen beenden.'); return; }
+  // Grund, warum gerade kein Scan starten kann (anderer Scan / anderer Tab) – sonst ''
+  function scanBlockedReason() {
+    if (bgScan && bgScan.running) return 'Hier läuft bereits ein Opa-Scan.';
+    if (getOpa().running && !opaStale(getOpa())) return 'Der Gruppen-Opa-Scan läuft gerade. Bitte erst diesen beenden.';
     const other = lockedByOther();
-    if (other) { alert(lockNotice(other).replace(' – hier wird nur markiert.', '. Der Opa-Scan kann erst danach gestartet werden.')); return; }
-    bgScan = { stop: false, loading: true };
+    if (other) return lockNotice(other).replace(' – hier wird nur markiert.', '. Der Opa-Scan kann erst danach gestartet werden.');
+    return '';
+  }
+  // Klick auf „Opa-Scan starten“: Popup sofort öffnen, Partys sammeln, Start erst mit „Jetzt scannen …“
+  async function bgEvStart() {
+    if (bgScan) { bgPopup(); return; }
+    bgScan = { stop: false, running: false };
+    const startBtn = (fn) => ({ label: 'Jetzt scannen …', primary: true, focus: !!fn, disabled: !fn, fn });
+    const closeBtn = (focus) => ({ label: 'Schließen', fn: closeBgPopup, focus });
+    const blocked = (msg) => { bgTitle('Opa-Scan Partys', false); bgUi('Scan zurzeit nicht möglich', msg, null, ''); bgButtons([startBtn(null), closeBtn(true)]); };
+    bgTitle('Opa-Scan Partys', false);
+    bgUi('Suche Eventanmeldungen …', '', null, '');
+    bgButtons([startBtn(null), closeBtn(true)]);
+    const why = scanBlockedReason();
+    if (why) { blocked(why); bgScan = null; return; }
     let list;
-    try { list = await scanEventList(); } finally { bgScan = null; }
-    if (!list.length) { alert('Keine Eventanmeldungen gefunden.'); return; }
-    if (!confirm(`Opa-Scan für ${list.length} Partys im Hintergrund starten?\n\nDiese Seite muss dabei geöffnet bleiben.` +
-      `${CONFIG.DRY_RUN ? '\n\n[Testmodus: es wird nichts ignoriert]' : ''}`)) return;
-    if (!(await acquireLock('Opa-Scan Partys (Hintergrund)'))) { alert('Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.'); return; }
+    try { list = await scanEventList((n) => bgUi('Lade alle Eventanmeldungen …', `${n} Partys geladen (die Seite scrollt dazu kurz)`, null, null)); }
+    catch (e) { blocked(e.message || String(e)); bgScan = null; return; }
+    if (!document.getElementById('jaf-bg-popup')) { bgScan = null; return; } // inzwischen geschlossen
+    bgScan = null;
+    if (!list.length) { blocked('Keine Eventanmeldungen gefunden.'); return; }
+    bgUi(`${list.length} Partys gefunden`, 'Reihenfolge: am längsten nicht gescannte Party zuerst',
+      null, (CONFIG.DRY_RUN ? 'Testmodus: es wird nichts ignoriert.\n' : '') +
+      'Für jede Party: Veranstalter und VIP-Gäste auf die Whitelist, Gästeliste lesen, Treffer ignorieren. ' +
+      'Bereits gescannte Partys prüfen nur Neuanmeldungen.\nDiese Seite muss während des Scans geöffnet bleiben.');
+    bgButtons([startBtn(() => bgEvRun(list)), closeBtn(false)]);
+  }
+  async function bgEvRun(list) {
+    if (bgScan && bgScan.running) return;
+    const why = scanBlockedReason();
+    if (why) { bgUi('Scan zurzeit nicht möglich', why, null, ''); return; }
+    if (!(await acquireLock('Opa-Scan Partys (Hintergrund)'))) { bgUi('Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.', null, ''); return; }
+    bgTitle('Opa-Scan läuft im Hintergrund', true);
+    bgButtons([bgStopButton()]);
     saveEventsFromList(list);
     const events = orderEvents(list).map((e) => ({ id: e.id, url: e.url, date: e.date, name: (getEvents()[e.id] || {}).name || e.slugName }));
-    bgScan = { stop: false };
+    bgScan = { stop: false, running: true };
+    let fallback = false;
     window.__jafBgBusy = true;
     window.addEventListener('beforeunload', beforeUnloadGuard);
     const st = { done: 0, ignored: 0, skipped: 0, failed: 0, notes: 0, vip: 0, orgs: 0, unblocked: 0 };
@@ -4072,34 +4141,367 @@
         bgUi(null, `${party.name}: fertig`, (ei + 1) / events.length, stats());
         if (ei < events.length - 1) await sleep(rand(CONFIG.EVENT_DELAY_MIN_MS, CONFIG.EVENT_DELAY_MAX_MS));
       }
+      bgTitle(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', false);
       bgUi(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', bgScan.stop ? 'Abgebrochen.' : 'Alle Partys bearbeitet.', bgScan.stop ? null : 1, stats());
     } catch (err) {
+      bgTitle('Opa-Scan nicht möglich', false);
       bgUi('Opa-Scan nicht möglich', err.message, null, stats());
-      const ov = bgPopup();
-      const box = ov.querySelector('.jaf-bg-cancel').parentElement;
-      if (!box.querySelector('.jaf-bg-fallback')) {
-        const fb = document.createElement('button');
-        fb.className = 'jaf-bg-fallback'; fb.textContent = 'Normalen Scan (mit Seitenwechsel) starten';
-        fb.style.cssText = 'padding:6px 14px;border:0;border-radius:6px;background:#444;color:#fff;cursor:pointer;margin-right:8px';
-        fb.addEventListener('click', () => { ov.remove(); evStart(); });
-        box.prepend(fb);
-      }
+      fallback = true;
     } finally {
       window.removeEventListener('beforeunload', beforeUnloadGuard);
       window.__jafBgBusy = false;
       bgScan = null;
       releaseLock();
-      const ov = bgPopup();
-      const c = ov.querySelector('.jaf-bg-cancel');
-      c.textContent = 'Schließen'; c.style.background = '#444';
-      if (st.failed && !ov.querySelector('.jaf-bg-failexp')) {
-        const fx = document.createElement('button');
-        fx.className = 'jaf-bg-failexp'; fx.textContent = 'Fehlschläge exportieren (CSV)';
-        fx.style.cssText = 'padding:6px 14px;border:0;border-radius:6px;background:#444;color:#fff;cursor:pointer;margin-right:8px';
-        fx.addEventListener('click', () => exportEvFailures());
-        c.parentElement.prepend(fx);
-      }
+      const btns = [];
+      if (fallback) btns.push({ label: 'Normalen Scan (mit Seitenwechsel) starten', fn: () => { closeBgPopup(); evStart(true); } });
+      if (st.failed) btns.push({ label: 'Fehlschläge exportieren (CSV)', fn: () => exportEvFailures() });
+      btns.push({ label: 'Schließen', fn: closeBgPopup, focus: true });
+      bgButtons(btns);
       const ev = getEv(); ev.log = (ev.log || []).concat(logLines).slice(-300); GM_setValue(K_EVSCAN, ev);
+    }
+  }
+
+  // =====================================================================
+  // ---------- Mitgliedersuche: neuer Opa-Scan (eigener Button im Seitenkopf) ----------
+  // 1. „Mit aktuellen Sucheinstellungen filtern“: aktuelle Suche komplett laden, Treffer ignorieren
+  // 2. „Systematische Suche“: alle gewählten Umkreise (CONFIG.AREAS) per Deeplink, jedes Alter einzeln (70+ abwärts),
+  //    jede Einzelsuche wiederholen, bis keine neuen Profile mehr kommen (max. 20, bei 70+ max. 200 Durchläufe)
+  // Geladen wird in einem unsichtbaren Frame, ignoriert wie beim Party-Scan im Hintergrund.
+  // =====================================================================
+  const isMemberSearchPage = () => /^\/member(\/|$)/.test(location.pathname);
+  const K_MS_SET = 'jaf_ms_settings';       // gemerkte Einstellungen der systematischen Suche
+  const K_MS_LOG = 'jaf_ms_protocol';       // [{ ts, city, land, geoId, age, runs, found, fresh, limit, url, final }]
+  const K_MS_FAIL = 'jaf_ms_failures';      // [{ ts, search, name, url, msg }]
+  const K_MS_SINGLE = 'jaf_ms_single_age_couples'; // { path: { name, url, ages, ts, search } }
+  const MS_TYPES = [['f', 'Frauen', 'frau'], ['m', 'Männer', 'mann'], ['p', 'Paare', 'paar'], ['nb', 'Non-binary', 'nonbinary']];
+  const msAreaGroups = () => Object.entries(CONFIG.AREAS || {}).filter(([, l]) => l.length);
+  function msSettings() {
+    const d = { types: ['m', 'p', 'nb'], min: Math.min(70, CONFIG.MAX_AGE + 1), max: 70, lands: msAreaGroups().map(([n]) => n) };
+    const s = GM_getValue(K_MS_SET, null);
+    if (!s) return d;
+    return { types: Array.isArray(s.types) ? s.types : d.types, min: s.min || d.min, max: s.max || d.max,
+      lands: Array.isArray(s.lands) ? s.lands.filter((n) => (CONFIG.AREAS || {})[n]) : d.lands };
+  }
+  const msSlug = (t) => norm(t).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'ort';
+  function msUrl(area, types, age) {
+    const is = MS_TYPES.filter(([k]) => types.includes(k)).map(([, , slug]) => slug).join('_');
+    return `${location.origin}/member/${msSlug(area[0])}-x${area[4]}-r/is-${is}/?user_geo_distance=${CONFIG.AREA_RADIUS_KM}&user_age=${age}_${age}`;
+  }
+  // Icon „Opa mit Lupe“ (Variante B), 24er-Raster
+  function opaLupeSvg(size = 20) {
+    const id = 'jafml' + Math.random().toString(36).slice(2, 7);
+    const hs = 'x1="18.81" y1="18.31" x2="21.8" y2="21.6"';
+    return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" style="width:${size}px;height:${size}px;fill:currentColor;color:inherit" aria-hidden="true">` +
+      `<defs><mask id="${id}" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><rect width="24" height="24" fill="white"/>` +
+      `<circle cx="15.5" cy="15" r="6.6" fill="black"/><line ${hs} stroke="black" stroke-width="4.9" stroke-linecap="round"/></mask></defs>` +
+      `<g mask="url(#${id})"><svg x="0" y="0" width="12" height="24" viewBox="0 0 640 1280" preserveAspectRatio="xMidYMid meet">` +
+      `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg></g>` +
+      `<circle cx="15.5" cy="15" r="4.6" fill="none" stroke="currentColor" stroke-width="1.8"/><line ${hs} stroke="currentColor" stroke-width="2.7" stroke-linecap="round"/></svg>`;
+  }
+  function insertMsButton() {
+    if (!isMemberSearchPage() || document.querySelector('.jaf-ms-btn')) return;
+    const box = document.querySelector('.member_search_header_buttons');
+    if (!box) return;
+    const b = document.createElement('j-control-button');
+    b.className = 'jaf-ms-btn';
+    b.setAttribute('icon-only', 'true');
+    b.setAttribute('variant', 'transparent');
+    b.setAttribute('aria-label', 'Opa-Scan');
+    b.setAttribute('title', 'Opa-Scan');
+    b.setAttribute('role', '');
+    b.style.color = 'white';
+    b.innerHTML = `<span slot="icon-prepend" style="display:inline-flex;color:white">${opaLupeSvg(20)}</span>`;
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); msOpen(); });
+    const name = box.querySelector('[data-e2e="search-name-button"]');
+    if (name && name.parentElement === box) name.after(b); else box.appendChild(b);
+  }
+  setInterval(() => { try { insertMsButton(); } catch (e) { /* weiter */ } }, 1500);
+
+  // ---- Popup 1: Auswahl ----
+  function msOpen() {
+    if (bgScan && bgScan.running) { bgPopup(); return; }
+    closeBgPopup();
+    bgScan = null;
+    bgTitle('Opa-Scan Mitgliedersuche', false);
+    bgUi('', 'Wie soll gesucht werden?', null, '');
+    bgPopup().querySelector('.jaf-bg-barwrap').style.display = 'none';
+    bgBody(null);
+    bgButtons([
+      { label: 'Mit aktuellen Sucheinstellungen filtern', fn: () => msRun({ mode: 'current' }) },
+      { label: 'Systematische Suche starten', fn: () => { closeBgPopup(); msSetup(); } },
+      { label: 'Abbrechen', fn: closeBgPopup, focus: true },
+    ]);
+  }
+
+  // ---- Popup 2: Einstellungen der systematischen Suche ----
+  function msSetup() {
+    const set = msSettings();
+    bgTitle('Systematische Suche', false);
+    bgUi('', '', null, '');
+    const wrap = document.createElement('div');
+    const css = '.jaf-ms-chk{display:inline-flex;align-items:center;gap:8px;margin:0 16px 6px 0;cursor:pointer}' +
+      '.jaf-ms-chk input{width:18px;height:18px;accent-color:#c71b1b;margin:0;cursor:pointer}' +
+      '.jaf-ms-range{position:relative;height:24px;margin:6px 4px 4px}' +
+      '.jaf-ms-range input{position:absolute;left:0;top:0;width:100%;margin:0;background:none;pointer-events:none;-webkit-appearance:none;appearance:none;height:24px}' +
+      '.jaf-ms-range input::-webkit-slider-thumb{pointer-events:auto;-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#fff;border:0;cursor:pointer}' +
+      '.jaf-ms-range input::-moz-range-thumb{pointer-events:auto;width:18px;height:18px;border-radius:50%;background:#fff;border:0;cursor:pointer}' +
+      '.jaf-ms-range input::-webkit-slider-runnable-track{background:transparent}.jaf-ms-range input::-moz-range-track{background:transparent}' +
+      '.jaf-ms-land{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid #2e3236;cursor:pointer}' +
+      '.jaf-ms-land input{width:18px;height:18px;accent-color:#c71b1b;margin:0;cursor:pointer}' +
+      '.jaf-ms-link{cursor:pointer;text-decoration:underline;opacity:.85}';
+    wrap.innerHTML = `<style>${css}</style>
+      <div style="font-weight:bold;margin:2px 0 6px">Ich suche</div><div class="jaf-ms-types" style="margin-bottom:10px"></div>
+      <div style="font-weight:bold">Alter <span class="jaf-ms-agetxt" style="font-weight:normal;opacity:.85"></span></div>
+      <div class="jaf-ms-range"><div style="position:absolute;top:10px;left:0;right:0;height:4px;background:#4a4f53;border-radius:2px"></div>
+        <div class="jaf-ms-act" style="position:absolute;top:10px;height:4px;background:#c71b1b;border-radius:2px"></div>
+        <input type="range" class="jaf-ms-lo" min="18" max="70" step="1"><input type="range" class="jaf-ms-hi" min="18" max="70" step="1"></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;opacity:.6;margin:0 2px 12px"><span>18</span><span>70+</span></div>
+      <div style="display:flex;align-items:baseline;margin-bottom:4px"><span style="font-weight:bold;flex:1">Bundesländer</span>
+        <span style="font-size:12px"><span class="jaf-ms-link jaf-ms-all">alle</span> · <span class="jaf-ms-link jaf-ms-none">keine</span></span></div>
+      <div class="jaf-ms-lands"></div>
+      <div class="jaf-ms-sum" style="opacity:.75;font-size:12px;margin-top:10px"></div>`;
+    const types = wrap.querySelector('.jaf-ms-types');
+    for (const [k, label] of MS_TYPES) {
+      const l = document.createElement('label'); l.className = 'jaf-ms-chk';
+      l.innerHTML = `<input type="checkbox" value="${k}"${set.types.includes(k) ? ' checked' : ''}><span></span>`;
+      l.querySelector('span').textContent = label; types.appendChild(l);
+    }
+    const lands = wrap.querySelector('.jaf-ms-lands');
+    for (const [name, list] of msAreaGroups()) {
+      const l = document.createElement('label'); l.className = 'jaf-ms-land';
+      l.innerHTML = `<input type="checkbox"${set.lands.includes(name) ? ' checked' : ''}><span style="flex:1"></span><span style="opacity:.6;font-size:12px">${list.length} Umkreis${list.length === 1 ? '' : 'e'}</span>`;
+      l.querySelector('input').value = name; l.querySelector('span').textContent = name; lands.appendChild(l);
+    }
+    const lo = wrap.querySelector('.jaf-ms-lo'), hi = wrap.querySelector('.jaf-ms-hi');
+    lo.value = set.min; hi.value = set.max;
+    const read = () => {
+      let a = +lo.value, b = +hi.value;
+      if (a > b) [a, b] = [b, a];
+      return { types: [...types.querySelectorAll('input:checked')].map((i) => i.value), min: a, max: b,
+        lands: [...lands.querySelectorAll('input:checked')].map((i) => i.value) };
+    };
+    const ageText = (a, b) => (b >= 70 ? (a >= 70 ? '70 und älter' : `ab ${a} Jahre`) : (a === b ? `${a} Jahre` : `${a} – ${b} Jahre`));
+    const steps = (a, b) => b - a + 1;
+    const refresh = () => {
+      const r = read();
+      wrap.querySelector('.jaf-ms-agetxt').textContent = ageText(r.min, r.max);
+      const pct = (v) => ((v - 18) / 52) * 100;
+      const act = wrap.querySelector('.jaf-ms-act'); act.style.left = pct(r.min) + '%'; act.style.width = (pct(r.max) - pct(r.min)) + '%';
+      const nAreas = msAreaGroups().filter(([n]) => r.lands.includes(n)).reduce((s2, [, l]) => s2 + l.length, 0);
+      wrap.querySelector('.jaf-ms-sum').textContent = `${nAreas} Umkreise à ${CONFIG.AREA_RADIUS_KM} km · je ${steps(r.min, r.max)} Altersstufe${steps(r.min, r.max) === 1 ? '' : 'n'}` +
+        ` (${r.max >= 70 ? '70+' : r.max} bis ${r.min}) · Einstellungen werden gemerkt`;
+      GM_setValue(K_MS_SET, r);
+      const ok = r.types.length && nAreas;
+      bgButtons([
+        { label: 'Systematische Suche starten', primary: true, disabled: !ok, fn: () => msRun(Object.assign({ mode: 'system' }, read())) },
+        { label: 'Abbrechen', fn: closeBgPopup, focus: !wrap.__init },
+      ]);
+      wrap.__init = true;
+    };
+    wrap.addEventListener('change', refresh);
+    lo.addEventListener('input', refresh); hi.addEventListener('input', refresh);
+    wrap.querySelector('.jaf-ms-all').addEventListener('click', () => { lands.querySelectorAll('input').forEach((i) => { i.checked = true; }); refresh(); });
+    wrap.querySelector('.jaf-ms-none').addEventListener('click', () => { lands.querySelectorAll('input').forEach((i) => { i.checked = false; }); refresh(); });
+    bgBody(wrap);
+    bgPopup().querySelector('.jaf-bg-party').style.display = 'none';
+    bgPopup().querySelector('.jaf-bg-step').style.display = 'none';
+    refresh();
+  }
+
+  // ---- Frame: eine Suche laden und alle Ergebnisse nachladen ----
+  async function msFrame() {
+    try {
+      const first = await waitFor(() => (readCards().length || document.querySelector('.member_search_list') ? true : null), 30000);
+      if (!first) throw new Error('Suchseite lädt nicht');
+      await waitFor(() => (readCards().length ? true : null), 6000);
+      let n = readCards().length, idle = 0, rounds = 0;
+      while (idle < CONFIG.SCROLL_IDLE_ROUNDS && rounds < 400) {
+        rounds++;
+        await nudgeScroll();
+        let ok = await waitForGrowth(n, CONFIG.SCROLL_WAIT_MS);
+        if (!ok) {
+          const more = await waitFor(loadMoreButton, 2000);
+          if (more) { await realClick(more); ok = await waitForGrowth(n, 15000); }
+        }
+        n = readCards().length;
+        if (ok) { idle = 0; bgPost({ progress: n }); } else idle++;
+      }
+      const cards = readCards().map((c) => ({ path: c.path, url: c.url, name: c.name, ages: c.ages, type: c.type, gender: c.gender }));
+      bgPost({ cards, final: location.href });
+    } catch (e) { bgPost({ error: e.message || String(e) }); }
+  }
+  // gesehene Profile auch in der Konten-Liste / Vormerkliste festhalten
+  function msRecord(cards, search) {
+    try { recordAccounts(cards); updateWatch(cards, getLog(), getIgnored(), 'Suche'); } catch (e) { /* egal */ }
+    const single = GM_getValue(K_MS_SINGLE, {});
+    let ch = false;
+    for (const c of cards) {
+      if (isCoupleRuleType(c.type) && c.ages.length < 2 && !single[c.path]) { single[c.path] = { name: c.name, url: c.url, ages: c.ages, ts: Date.now(), search }; ch = true; }
+    }
+    if (ch) GM_setValue(K_MS_SINGLE, single);
+  }
+  // Karte einordnen: { kind: 'ignore'|'verify'|'skip', why, item }
+  function msClassify(c, ctx) {
+    const id = idOf(c.path);
+    if (!CONFIG.PROFILE_PATH_RE.test(c.path)) return { kind: 'skip', why: 'kein Mitgliederprofil' };
+    if (ctx.blocked.get(id)) return { kind: 'skip', why: 'bereits ignoriert' };
+    if (isWhiteMember(c, ctx.white)) return { kind: 'skip', why: 'Whitelist' };
+    const item = { path: c.path, url: c.url, name: c.name, ages: c.ages, type: c.type, source: 'Suche' };
+    if (isCoupleRuleType(c.type)) {
+      if (c.ages.length === 2) {
+        const why = coupleReason(c.ages);
+        return why ? { kind: 'ignore', why, item: Object.assign(item, { reason: why }) } : { kind: 'skip', why: 'Paar erfüllt die Kriterien nicht' };
+      }
+      return { kind: 'verify', why: 'Paar mit nur einer Altersangabe', item: Object.assign(item, { verify: true }) };
+    }
+    if (normType(c.type) === normType('Frau')) return { kind: 'skip', why: 'Frau' };
+    return shouldBlock(c, ctx.white) ? { kind: 'ignore', why: 'Alter', item } : { kind: 'skip', why: 'erfüllt die Kriterien nicht' };
+  }
+  function msAddFailure(f) { const l = GM_getValue(K_MS_FAIL, []); l.push(Object.assign({ ts: Date.now() }, f)); GM_setValue(K_MS_FAIL, l.slice(-3000)); }
+  function exportMsFailures() {
+    const l = GM_getValue(K_MS_FAIL, []);
+    downloadCsv('mitgliedersuche-fehlschlaege', ['Zeitpunkt', 'Suche', 'Name', 'Profil-Link', 'Meldung'], l.map((f) => [fmtTs(f.ts), f.search || '', f.name || '', f.url || '', f.msg || '']));
+    return l.length;
+  }
+  function exportMsProtocol() {
+    const l = GM_getValue(K_MS_LOG, []);
+    downloadCsv('mitgliedersuche-protokoll', ['Zeitpunkt', 'Stadt', 'Bundesland', 'Orts-ID', 'Alter', 'Durchläufe ohne neue Treffer', 'Profile gefunden', 'davon neu ignoriert', 'Obergrenze erreicht', 'Such-Link', 'Link nach dem Laden'],
+      l.map((e) => [fmtTs(e.ts), e.city || '', e.land || '', e.geoId ? 'x' + e.geoId : '', e.age >= 70 ? '70+' : e.age, e.runs, e.found, e.ignored, e.limit ? 'ja' : 'nein', e.url || '', e.final || '']));
+    return l.length;
+  }
+  function exportMsSingleCouples() {
+    const m = GM_getValue(K_MS_SINGLE, {});
+    downloadCsv('paare-mit-einer-altersangabe', ['Zeitpunkt', 'Name', 'Profil-Link', 'Alter', 'Suche'],
+      Object.values(m).map((e) => [fmtTs(e.ts), e.name || '', e.url || '', (e.ages || []).join('+'), e.search || '']));
+    return Object.keys(m).length;
+  }
+
+  // ---- Lauf (beide Modi) ----
+  async function msRun(opt) {
+    if (bgScan && bgScan.running) return;
+    const why = scanBlockedReason();
+    bgBody(null);
+    bgPopup().querySelector('.jaf-bg-party').style.display = '';
+    bgPopup().querySelector('.jaf-bg-step').style.display = '';
+    if (why) { bgTitle('Opa-Scan Mitgliedersuche', false); bgUi('Scan zurzeit nicht möglich', why, null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
+    if (!(await acquireLock('Opa-Scan Mitgliedersuche'))) { bgUi('Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten.', null, ''); return; }
+    bgScan = { stop: false, running: true };
+    window.__jafBgBusy = true;
+    window.addEventListener('beforeunload', beforeUnloadGuard);
+    bgTitle('Opa-Scan läuft im Hintergrund', true);
+    bgButtons([bgStopButton()]);
+    const t0 = Date.now();
+    const st = { seen: new Set(), ignored: 0, skipped: 0, failed: 0, single: 0, searches: 0 };
+    const stats = () => `Profile gesehen: ${st.seen.size.toLocaleString('de-DE')} · ignoriert: ${st.ignored} · übersprungen: ${st.skipped} · fehlgeschlagen: ${st.failed}\n` +
+      `Paare mit nur einer Altersangabe: ${st.single}${CONFIG.DRY_RUN ? '\nTestmodus: es wird nichts ignoriert' : ''}`;
+    let testLeft = CONFIG.DRY_RUN ? CONFIG.TEST_MAX_PROFILES : Infinity;
+    const singleSeen = new Set();
+    // eine Ergebnisliste laden (Frame)
+    const load = async (url, onN) => bgFrame(url, 'jaf-bg-ms' + Date.now().toString(36), onN, 15 * 60000);
+    // neue Karten verarbeiten: einordnen, Treffer im Hintergrund ignorieren
+    const process = async (cards, search, fracOf) => {
+      msRecord(cards, search);
+      const ctx = { white: whiteList(), blocked: blockedIdMap() };
+      const hits = [];
+      for (const c of cards) {
+        st.seen.add(idOf(c.path) || c.path);
+        if (isCoupleRuleType(c.type) && c.ages.length < 2 && !singleSeen.has(c.path)) { singleSeen.add(c.path); st.single++; }
+        const r = msClassify(c, ctx);
+        if (r.kind === 'skip') st.skipped++; else hits.push(r.item);
+      }
+      let done = 0;
+      for (let qi = 0; qi < hits.length && !bgScan.stop; qi++) {
+        if (testLeft <= 0) { st.skipped++; continue; }
+        const it = hits[qi];
+        bgUi(null, `${search.step} · ignoriere … ${qi + 1}/${hits.length} · ${it.name}`, fracOf(0.5 + 0.5 * qi / hits.length), stats());
+        const jobId = Date.now().toString(36) + qi;
+        GM_setValue('jaf_bg_job_' + jobId, { item: it, source: 'Suche' });
+        let r;
+        try { r = await bgFrame(location.origin + it.path, 'jaf-bg-act-' + jobId, null, 120000); }
+        catch (err) { r = { result: 'failed', msg: err.message }; }
+        GM_setValue('jaf_bg_job_' + jobId, null);
+        if (CONFIG.DRY_RUN) testLeft--;
+        if (r.result === 'ignored') { st.ignored++; done++; } else if (r.result === 'skipped' || r.result === 'note') st.skipped++;
+        else { st.failed++; msAddFailure({ search: search.label, name: it.name, url: it.url, msg: r.msg || r.result }); }
+        bgUi(null, null, null, stats());
+        if (qi < hits.length - 1) await sleep(rand(CONFIG.DELAY_MIN_MS, CONFIG.DELAY_MAX_MS));
+      }
+      return done;
+    };
+    let headline = '';
+    try {
+      if (opt.mode === 'current') {
+        const desc = 'Aktuelle Suche';
+        headline = desc;
+        bgUi(desc, 'Lade Ergebnisse …', 0, stats());
+        const data = await load(location.href, (n) => bgUi(null, `lade Ergebnisse … ${n}`, 0.25, null));
+        const cards = data.cards || [];
+        bgUi(null, `${cards.length} Profile geladen`, 0.5, stats());
+        await process(cards, { label: desc, step: `${cards.length} Profile` }, (f) => f);
+        st.searches = 1;
+      } else {
+        const groups = msAreaGroups().filter(([n]) => opt.lands.includes(n));
+        const areas = groups.flatMap(([land, list]) => list.map((a) => ({ a, land })));
+        const ages = []; for (let x = opt.max; x >= opt.min; x--) ages.push(x);
+        const w = (age) => (age >= 70 ? 10 : 1);
+        const wSum = ages.reduce((s2, x) => s2 + w(x), 0);
+        const proto = GM_getValue(K_MS_LOG, []);
+        for (let ai = 0; ai < areas.length && !bgScan.stop; ai++) {
+          const { a, land } = areas[ai];
+          const head = `Umkreis ${ai + 1}/${areas.length}: ${a[0]} (${land})`;
+          let wDone = 0;
+          for (const age of ages) {
+            if (bgScan.stop) break;
+            const url = msUrl(a, opt.types, age);
+            const ageLbl = age >= 70 ? '70+' : String(age);
+            const base = (ai + wDone / wSum) / areas.length, span = w(age) / wSum / areas.length;
+            const maxRuns = age >= 70 ? 200 : 20;
+            const seen = new Set();
+            let runs = 0, found = 0, ign = 0, limit = false, final = '';
+            while (runs < maxRuns && !bgScan.stop) {
+              runs++;
+              const step = `Alter ${ageLbl} · Durchlauf ${runs}/${maxRuns}`;
+              const fracOf = (f) => base + span * (runs === 1 ? f : 1);
+              bgUi(head, `${step} · lade Ergebnisse …`, fracOf(0), stats());
+              let data;
+              try { data = await load(url, (n) => bgUi(null, `${step} · lade Ergebnisse … ${n}`, fracOf(0.25), null)); }
+              catch (err) { st.failed++; msAddFailure({ search: `${a[0]} ${ageLbl}`, url, msg: 'Suche nicht ladbar: ' + err.message }); break; }
+              final = data.final || final;
+              const fresh = (data.cards || []).filter((c) => { const k = idOf(c.path) || c.path; if (seen.has(k)) return false; seen.add(k); return true; });
+              if (!fresh.length) break;
+              found += fresh.length;
+              ign += await process(fresh, { label: `${a[0]} (${land}), Alter ${ageLbl}`, step }, fracOf);
+              if (runs >= maxRuns) limit = true;
+              await sleep(rand(1500, 3000));
+            }
+            st.searches++;
+            proto.push({ ts: Date.now(), city: a[0], land, geoId: a[4], age, runs, found, ignored: ign, limit, url, final });
+            GM_setValue(K_MS_LOG, proto.slice(-20000));
+            wDone += w(age);
+            bgUi(null, null, base + span, stats());
+          }
+        }
+        headline = `${areas.length} Umkreise`;
+      }
+      const dur = Math.round((Date.now() - t0) / 60000);
+      const durTxt = dur >= 60 ? `${Math.floor(dur / 60)}:${pad2(dur % 60)} h` : `${dur} min`;
+      bgTitle(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', false);
+      bgUi(bgScan.stop ? 'Abgebrochen' : (opt.mode === 'current' ? 'Aktuelle Suche abgeschlossen' : 'Systematische Suche abgeschlossen'),
+        `${headline}${opt.mode === 'system' ? ` · ${st.searches.toLocaleString('de-DE')} Einzelsuchen` : ''} · Dauer ${durTxt}`, bgScan.stop ? null : 1, stats());
+    } catch (err) {
+      bgTitle('Opa-Scan nicht möglich', false);
+      bgUi('Opa-Scan nicht möglich', err.message || String(err), null, stats());
+    } finally {
+      window.removeEventListener('beforeunload', beforeUnloadGuard);
+      window.__jafBgBusy = false;
+      bgScan = null;
+      releaseLock();
+      const btns = [];
+      if (opt.mode === 'system') btns.push({ label: 'Protokoll exportieren (CSV)', fn: () => exportMsProtocol() });
+      if (st.single) btns.push({ label: 'Paare mit einer Altersangabe exportieren (CSV)', fn: () => exportMsSingleCouples() });
+      if (st.failed) btns.push({ label: 'Fehlschläge exportieren (CSV)', fn: () => exportMsFailures() });
+      btns.push({ label: 'Schließen', fn: closeBgPopup, focus: true });
+      bgButtons(btns);
     }
   }
 
@@ -4232,6 +4634,9 @@
     GM_registerMenuCommand('Alter-Filter: Whitelist exportieren (CSV)', () => exportWhitelist());
     GM_registerMenuCommand('Alter-Filter: Gruppen (zuletzt bearbeitet) exportieren (CSV)', () => exportGroups());
     GM_registerMenuCommand('Alter-Filter: Fehlschläge des Party-Scans exportieren (CSV)', () => exportEvFailures());
+    GM_registerMenuCommand('Alter-Filter: Protokoll der Mitgliedersuche exportieren (CSV)', () => exportMsProtocol());
+    GM_registerMenuCommand('Alter-Filter: Paare mit nur einer Altersangabe exportieren (CSV)', () => exportMsSingleCouples());
+    GM_registerMenuCommand('Alter-Filter: Fehlschläge der Mitgliedersuche exportieren (CSV)', () => exportMsFailures());
     GM_registerMenuCommand('Alter-Filter: Fehlschläge des Party-Scans löschen', () => { GM_setValue(K_EVFAIL, []); alert('Fehlschlag-Liste gelöscht.'); });
     GM_registerMenuCommand('Alter-Filter: Partys beim nächsten Scan vollständig prüfen', () => {
       const m = getEvents(); for (const e of Object.values(m)) { delete e.seen; delete e.seenRules; } GM_setValue(K_EVENTS, m);
