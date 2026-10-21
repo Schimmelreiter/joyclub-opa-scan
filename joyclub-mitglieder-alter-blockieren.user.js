@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.71
+// @version      1.72
 // @description  Opa-Scan für JOYclub: Gruppen, Partys und Mitgliedersuche nach Alter bzw. Altersunterschied durchsuchen und Treffer ignorieren; Whitelist, AWO-Faktor, Exporte.
 // @match        https://www.joyclub.de/*
+// @match        https://identity.joyclub.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=joyclub.de
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -16,6 +17,33 @@
 
 (function () {
   'use strict';
+  // ---------- Login-Seite (identity.joyclub.com): nur einloggen, wenn das Skript den Login angestoßen hat ----------
+  if (location.hostname === 'identity.joyclub.com') {
+    (async () => {
+      const K = 'jaf_login_pending';
+      const p = GM_getValue(K, null);
+      if (!p || !p.auto || p.tried || Date.now() - p.ts > 5 * 60000) return; // Login von Hand → nichts tun
+      const sl = (ms) => new Promise((r) => setTimeout(r, ms));
+      const q = (sel) => document.querySelector(sel);
+      let user = null, pw = null;
+      for (let i = 0; i < 40 && !(user && pw); i++) { user = q('[data-e2e="input-username"] input'); pw = q('[data-e2e="input-password"] input[type="password"]'); await sl(500); }
+      await sl(2500); // Passwort-Manager füllen lassen
+      const report = (msg) => GM_setValue('jaf_login_result', { token: p.token, ok: false, msg, ts: Date.now() });
+      if (!user || !pw) { report('Login-Formular nicht gefunden'); return; }
+      if (!user.value || !pw.value) { report('Benutzername/Passwort nicht ausgefüllt'); return; }
+      GM_setValue(K, Object.assign({}, p, { tried: Date.now() }));
+      const cb = q('[data-e2e="checkbox-autologin"] input[type="checkbox"]');
+      if (cb && !cb.checked) { cb.click(); await sl(300); }
+      // Cloudflare-Prüfung (Turnstile) abwarten, falls vorhanden
+      for (let i = 0; i < 40; i++) { const t = q('input[name="cf-turnstile-response"]'); if (!t || t.value) break; await sl(500); }
+      const btn = q('j-button[data-e2e="button-submit"]');
+      const inner = btn && btn.shadowRoot && btn.shadowRoot.querySelector('button');
+      if (inner) inner.click(); else if (btn) btn.click(); else { report('Login-Button nicht gefunden'); return; }
+      await sl(20000);
+      if (location.hostname === 'identity.joyclub.com') report('Login nicht abgeschlossen (z. B. Cloudflare-Prüfung oder falsche Daten)');
+    })();
+    return;
+  }
   // In Frames läuft das Skript nur als Hintergrund-Lader (unsichtbarer Frame für Gästelisten), sonst gar nicht.
   const IN_FRAME = window.top !== window;
   const BG_FRAME = IN_FRAME && /^jaf-bg-/.test(window.name || '');
@@ -297,6 +325,8 @@
     ORGANIZER_REASON: 'Veranstalter',
     ORGANIZER_NOTE_TEXT: 'Whitelist: Veranstalter von "{party}"',
     PARTY_REASON: 'Party',
+    SEARCH_NOTE_TEXT: 'Whitelist: Suche am {datum}',  // „Nicht mehr ignorieren“ in der Mitgliedersuche
+    SEARCH_REASON: 'Suche',
     // neue Reiter der Gästeliste (statt „Männer“), nach Anmelde-Alter
     GUEST_TABS: [
       { key: 'jung', label: 'Jungschwänze' },   // bis WARN_AGE
@@ -555,9 +585,29 @@
   // bereits ignoriert = vom Skript ignoriert (nicht entblockt) ODER auf der echten Ignorierliste
   const isBlocked = (path, log_ = getLog(), ign = getIgnored()) => !!((log_[path] && !log_[path].unblocked) || ign[path]);
   const addGroup = (arr, g) => { arr = Array.isArray(arr) ? arr.slice() : []; if (g && !arr.includes(g)) arr.push(g); return arr; };
+  // Rangfolge der Quellen: höher stehende ersetzt niedrigere (Besucher > Party > Gruppen > Suche > Sync)
+  const SOURCE_RANK = ['Besucher', 'Party', 'Gruppen', 'Suche', 'Sync'];
+  const srcRank = (s) => { const i = SOURCE_RANK.indexOf(s || ''); return i < 0 ? 99 : i; };
+  const betterSource = (a, b) => (srcRank(b) < srcRank(a) ? b : (a || b || ''));
+  // gesehene Mitglieder (path/id), die vom Skript gesperrt sind: Quelle ggf. auf die höhere anheben
+  function upgradeSources(members, source) {
+    if (!source || !members || !members.length) return 0;
+    const l = getLog();
+    const byId = {};
+    for (const k of Object.keys(l)) { const id = idOf(k); if (id) byId[id] = k; }
+    let n = 0;
+    for (const m of members) {
+      const k = (m.path && l[m.path] ? m.path : null) || byId[m.id || idOf(m.path || m.url)];
+      const e = k && l[k];
+      if (!e || e.unblocked || srcRank(source) >= srcRank(e.source)) continue;
+      e.prevSource = e.source || ''; e.source = source; e.sourceTs = Date.now(); n++;
+    }
+    if (n) GM_setValue(K_LOG, l);
+    return n;
+  }
   const addDone = (p, info = {}, method = '') => {
     const l = getLog();
-    if (l[p] && l[p].ts && !l[p].unblocked) return;
+    if (l[p] && l[p].ts && !l[p].unblocked) { if (info.source) upgradeSources([{ path: p }], info.source); return; }
     l[p] = {
       name: info.name || '', url: info.url || location.origin + p, ages: info.ages || [], type: info.type || '',
       source: info.source || getState().source || '', method, ts: Date.now(),
@@ -1611,7 +1661,7 @@
         const prev = w[c.path];
         const online = (prev && prev.online) || (acc[c.path] || {}).online;
         const rec = { name: c.name, url: c.url || location.origin + c.path, type: c.type, ages: c.ages, persons, added: (prev && prev.added) || today,
-          source: (prev && prev.source) || source || 'Suche' };
+          source: betterSource(prev && prev.source, source || 'Suche') };
         if (online) rec.online = online;
         if (JSON.stringify(rec) !== JSON.stringify(prev)) { w[c.path] = rec; changed = true; }
       } else if (w[c.path] && (isBlocked(c.path, log_, ign) || white.includes(norm(c.name)) || !typeOkFor(c.type) || isCoupleRuleType(c.type))) {
@@ -2114,6 +2164,7 @@
         }
         const members = res.members;
         recordAccounts(members);
+        upgradeSources(members, sourceOf('Gruppen-Mitgliederliste') || 'Gruppen');
         updateWatch(members, getLog(), getIgnored(), sourceOf('Gruppen-Mitgliederliste') || 'Gruppen');
         const white = whiteList(), log_ = getLog(), ign = getIgnored();
         let hits = members.filter((m) => shouldBlock(m, white) && !isBlocked(m.path, log_, ign))
@@ -2464,11 +2515,14 @@
     const r = await bgUnignore(info.id);
     if (!r.ok) { if (w) w.close(); console.warn('[Alter-Filter]', `${info.name}: ${r.msg}`); return false; }
     const logPath = Object.keys(getLog()).find((p) => idOf(p) === String(info.id)) || info.path;
-    markUnblocked(logPath, info, `Whitelist: ${CONFIG.PARTY_REASON}`);
-    addWhiteEntry(info, CONFIG.PARTY_REASON, party);
+    const reason = party.search ? CONFIG.SEARCH_REASON : CONFIG.PARTY_REASON;
+    markUnblocked(logPath, info, `Whitelist: ${reason}`);
+    addWhiteEntry(info, reason, party.search ? null : party);
     removeWhitelistedFromWatch();
     const jobs = GM_getValue(K_NOTEJOBS, {});
-    jobs[info.id] = { line: CONFIG.PARTY_NOTE_TEXT.replace('{party}', party.name).replace('{datum}', party.date), name: info.name, created: Date.now() };
+    const line = party.search ? CONFIG.SEARCH_NOTE_TEXT.replace('{datum}', party.date)
+      : CONFIG.PARTY_NOTE_TEXT.replace('{party}', party.name).replace('{datum}', party.date);
+    jobs[info.id] = { line, name: info.name, created: Date.now() };
     GM_setValue(K_NOTEJOBS, jobs);
     if (w) w.location.href = info.url; else location.href = info.url;
     return true;
@@ -2692,7 +2746,7 @@
     bs.appendChild(popupButton('Trotzdem öffnen', () => { window.open(g.url, '_blank', 'noopener'); close(); }));
     bs.appendChild(popupButton('Nicht mehr ignorieren', async () => {
       msg('Wird entsperrt …');
-      const ok = await unblockAndWhitelist(info, { name: ev.name || 'Party', date: ev.date || fmtDay(Date.now()) });
+      const ok = await unblockAndWhitelist(info, { name: ev.name || 'Party', date: ev.date || fmtDay(Date.now()), search: !!ev.search });
       if (ok) { close(); decorateGuests(); } else msg('Entsperren fehlgeschlagen.');
     }));
     const cancel = popupButton('Abbrechen', close);
@@ -3438,7 +3492,10 @@
     b.innerHTML = `<svg viewBox="0 0 640 1280" width="9" height="16" style="fill:currentColor;vertical-align:-2px" aria-hidden="true">` +
       `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg> <span class="btn-text">Opa-Scan starten</span>`;
     b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); bgEvStart(); });
-    past.parentElement.insertBefore(b, past);
+    // vor die Button-Gruppe setzen (eigener Button mit Abstand, nicht angeklebt)
+    const grp = past.closest('.btn-group') || past;
+    b.style.marginRight = '8px';
+    grp.parentElement.insertBefore(b, grp);
     return true;
   }
 
@@ -3597,6 +3654,7 @@
     // 3. auswerten (Punkte 11–13)
     await syncIgnoreList(true);
     const guests = [...pane.querySelectorAll('li.date_card')].map(parseGuest);
+    upgradeSources(guests.filter((g) => g.id), 'Party');
     const ctx = { white: whiteList(), blocked: blockedIdMap(), acc: getAccounts() };
     const cnt = { anon: 0, extern: 0, white: 0, blocked: 0, coupleHit: 0, coupleSkip: 0, verify: 0, knownSkip: 0, checked: 0 };
     const seen = new Set();
@@ -3780,7 +3838,7 @@
     try {
       if (isProfilePage()) relabelProfile();
       if (isEventPage() || isGroupMembersPage()) relabelMenCards();
-      if (currentListPage()) relabelSearchCards();
+      if (currentListPage() || isMemberSearchPage()) relabelSearchCards();
     } catch (e) { /* weiter */ }
   }, 2000);
 
@@ -3819,6 +3877,9 @@
     if (!b && !html) return null;
     if (b && (b.getAttribute('data-session-user-id') || '').trim()) return null;
     if (doc.querySelector('.navigation_user_box')) return null;
+    // Gast-Seite („Erst einloggen, dann loslegen – Fehler 401“) bzw. abgemeldet
+    if ((b && b.classList.contains('guest')) || doc.querySelector('li.login_link, .login_link[data-linkmsq]') ||
+      /\/webauth\/login\//.test(html) || (doc.querySelector('.error_page_container') && /401|einloggen/i.test(doc.body ? doc.body.textContent : ''))) return { type: 'login' };
     const hasPw = !!doc.querySelector('input[type="password"]') || /type\s*=\s*["']?password/i.test(html) ||
       (doc === document && deepAll().some((e) => e.tagName === 'INPUT' && e.type === 'password'));
     if (hasPw) return { type: 'login' };
@@ -3836,7 +3897,10 @@
   async function gateWaitStored() {
     const g = GM_getValue(K_GATE, null);
     if (!g || !g.until || g.until <= Date.now()) return;
-    const head = `JOYclub ist vorübergehend nicht erreichbar${g.text && /bis/i.test(g.text) ? '' : ''}`;
+    const head = 'JOYclub ist vorübergehend nicht erreichbar';
+    const pop = document.getElementById('jaf-bg-popup');
+    const oldTitle = pop && pop.querySelector('.jaf-bg-title').textContent;
+    if (pop) bgTitle('Opa-Scan pausiert', true);
     while (Date.now() < g.until) {
       if (bgScan && bgScan.stop) throw new Error('abgebrochen');
       const left = Math.ceil((g.until - Date.now()) / 60000);
@@ -3845,6 +3909,7 @@
       const g2 = GM_getValue(K_GATE, null);
       if (!g2 || g2.until !== g.until) break; // anderer Tab hat neu entschieden
     }
+    if (pop && document.getElementById('jaf-bg-popup')) bgTitle(oldTitle || 'Opa-Scan läuft im Hintergrund', true);
   }
   // Seite war Wartung/Login: warten bzw. einloggen. Wirft bei Abbruch oder gescheitertem Login.
   async function handleGate(g, url) {
@@ -3861,16 +3926,48 @@
       const pl = GM_getValue(K_PAUSES, []); if (pl.length) { pl[pl.length - 1].end = Date.now(); GM_setValue(K_PAUSES, pl); }
       return;
     }
-    // abgemeldet
-    const last = GM_getValue(K_LOGIN_TRY, 0);
-    if (Date.now() - last < LOGIN_RETRY_MS) throw Object.assign(new Error('Abgemeldet – bitte bei JOYclub anmelden (automatischer Login erst wieder ab ' + fmtHM(last + LOGIN_RETRY_MS) + ' möglich).'), { fatal: true });
-    GM_setValue(K_LOGIN_TRY, Date.now());
-    gateNotice('Abgemeldet – versuche, mit den gespeicherten Zugangsdaten einzuloggen …');
-    let r;
-    try { r = await bgFrame(url || location.origin + '/', 'jaf-bg-login', null, 60000, true); } catch (e) { r = { loggedIn: false, msg: e.message }; }
-    if (!r || !r.loggedIn) throw Object.assign(new Error('Abgemeldet – bitte bei JOYclub anmelden. ' + ((r && r.msg) || '')), { fatal: true });
-    gateNotice('Wieder eingeloggt – weiter geht es.');
+    // abgemeldet → Login im kleinen Fenster (automatisch höchstens 1× in 30 min), dann warten, bis wieder angemeldet
+    await loginViaWindow();
   }
+  const K_LOGIN_PENDING = 'jaf_login_pending'; // { token, auto, ts, tried }
+  const K_LOGIN_RESULT = 'jaf_login_result';   // { token, ok, msg, ts }
+  const loginUrlFor = (back) => `${location.origin}/webauth/login/?origin_url=${encodeURIComponent(back)}`;
+  async function stillGuest() {
+    try { const r = await fetch(location.origin + '/', { credentials: 'include' }); const h = await r.text(); return !/data-session-user-id="\d+"/.test(h); } catch (e) { return true; }
+  }
+  async function loginViaWindow() {
+    const token = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const last = GM_getValue(K_LOGIN_TRY, 0);
+    const auto = Date.now() - last >= LOGIN_RETRY_MS;
+    if (auto) GM_setValue(K_LOGIN_TRY, Date.now());
+    GM_setValue(K_LOGIN_PENDING, { token, auto, ts: Date.now() });
+    const back = `${location.origin}/my_joy/feed/friends/?jaf_login=${token}`;
+    const w = window.open(loginUrlFor(back), 'jaf-login', 'width=520,height=760');
+    const manual = `bitte im geöffneten Fenster bei JOYclub anmelden – danach geht es automatisch weiter.`;
+    let msg = !w ? 'Abgemeldet – das Login-Fenster wurde vom Browser blockiert. Bitte Popups für joyclub.de erlauben oder in einem anderen Tab anmelden – danach geht es automatisch weiter.'
+      : auto ? 'Abgemeldet – melde im kleinen Fenster mit den gespeicherten Zugangsdaten an …'
+        : `Abgemeldet – automatischer Login erst wieder ab ${fmtHM(last + LOGIN_RETRY_MS)}; ${manual}`;
+    if (document.getElementById('jaf-bg-popup')) bgTitle('Opa-Scan pausiert', true);
+    gateNotice(msg);
+    const t0 = Date.now();
+    let lastCheck = Date.now();
+    for (;;) {
+      if (bgScan && bgScan.stop) { try { if (w) w.close(); } catch (e) { /* egal */ } throw new Error('abgebrochen'); }
+      const r = GM_getValue(K_LOGIN_RESULT, null);
+      if (r && r.token === token) {
+        if (r.ok) break;
+        if (!r.shown) { GM_setValue(K_LOGIN_RESULT, Object.assign({}, r, { shown: true })); gateNotice(`Automatischer Login nicht möglich (${r.msg}) – ${manual}`); }
+      }
+      if (Date.now() - lastCheck > 60000) { lastCheck = Date.now(); if (!(await stillGuest())) break; }
+      if (auto && Date.now() - t0 > 90000 && msg.startsWith('Abgemeldet – melde')) { msg = 'Automatischer Login nicht abgeschlossen – ' + manual; gateNotice(msg); }
+      await sleep(3000);
+    }
+    try { if (w && !w.closed) w.close(); } catch (e) { /* egal */ }
+    GM_setValue(K_LOGIN_PENDING, null);
+    if (document.getElementById('jaf-bg-popup')) bgTitle('Opa-Scan läuft im Hintergrund', true);
+    gateNotice('Wieder angemeldet – weiter geht es.');
+  }
+
   // fetch mit Wartungs-/Login-Erkennung: liefert { ok, status, url, html, doc }
   async function jfetch(url, opt = {}) {
     for (let i = 0; i < 50; i++) {
@@ -3898,43 +3995,17 @@
     }
     throw new Error('JOYclub bleibt nicht erreichbar');
   }
-  // IM Frame „jaf-bg-login“: Login-Seite – ausgefüllte Felder abschicken (einmal), danach Ergebnis melden
-  const loginFrame = () => loginFlow(bgPost);
-  async function loginFlow(bgPost) {
-    const KEY = 'jaf_login_submitted';
-    await sleep(1500);
-    const g = pageGate(document);
-    if (!g) { sessionStorage.removeItem(KEY); bgPost({ loggedIn: true }); return; }
-    if (sessionStorage.getItem(KEY)) { bgPost({ loggedIn: false, msg: 'Login nicht erfolgreich.' }); return; }
-    if (g.type !== 'login') { bgPost({ loggedIn: false, msg: 'Keine Login-Seite (Wartung?).' }); return; }
-    const all = deepAll();
-    const pw = all.find((e) => e.tagName === 'INPUT' && e.type === 'password');
-    const form = pw && (pw.form || pw.closest('form'));
-    const scope = form ? [...form.querySelectorAll('*')] : all;
-    const user = scope.find((e) => e.tagName === 'INPUT' && /^(text|email)$/i.test(e.type || 'text') && e !== pw && reallyVisible(e)) ||
-      all.find((e) => e.tagName === 'INPUT' && /^(text|email)$/i.test(e.type || 'text') && /user|nick|name|mail|login/i.test(e.name + ' ' + e.id));
-    if (!pw || !pw.value || !user || !user.value) { bgPost({ loggedIn: false, msg: 'Benutzername/Passwort nicht ausgefüllt (der Browser gibt gespeicherte Passwörter evtl. erst nach einem Klick frei).' }); return; }
-    // „Angemeldet bleiben“ anhaken
-    const stay = all.find((e) => /angemeldet bleiben/i.test((e.getAttribute && (e.getAttribute('label') || e.getAttribute('aria-label'))) || '') ||
-      (e.tagName === 'LABEL' && /angemeldet bleiben/i.test(e.textContent || '')));
-    if (stay) {
-      const cb = stay.tagName === 'LABEL' ? (stay.control || stay.querySelector('input[type=checkbox]')) : (stay.shadowRoot && stay.shadowRoot.querySelector('input[type=checkbox]')) || stay;
-      const checked = cb && (cb.checked === true || cb.getAttribute('checked') !== null || cb.getAttribute('aria-checked') === 'true');
-      if (!checked) await realClick(cb || stay);
-    }
-    const btn = all.find((e) => /^(BUTTON|J-BUTTON|INPUT)$/.test(e.tagName) && /^\s*(log\s*-?\s*in|einloggen|anmelden)\s*$/i.test(e.tagName === 'INPUT' ? e.value || '' : e.textContent || '') && reallyVisible(e));
-    sessionStorage.setItem(KEY, '1');
-    if (btn) await realClick(btn); else if (form) (form.requestSubmit ? form.requestSubmit() : form.submit());
-    else { bgPost({ loggedIn: false, msg: 'Login-Button nicht gefunden.' }); return; }
-    // Seite lädt neu → Frame-Skript startet erneut und meldet das Ergebnis; falls nicht (AJAX-Login):
-    await sleep(8000);
-    bgPost({ loggedIn: !pageGate(document), msg: 'nach dem Absenden' });
-  }
   // oberste Seite ist Wartung/Login, während ein Scan mit Seitenwechsel läuft → warten bzw. einloggen. true = behandelt
   async function topGate() {
     const g = pageGate(document);
-    if (!g) { sessionStorage.removeItem('jaf_login_submitted'); return false; }
-    if (!scanActive() && !sessionStorage.getItem('jaf_login_submitted')) return false;
+    if (!g) {
+      // Rückkehr aus dem Login-Fenster: Erfolg melden und Fenster schließen
+      const tok = new URLSearchParams(location.search).get('jaf_login');
+      if (tok) { GM_setValue(K_LOGIN_RESULT, { token: tok, ok: true, ts: Date.now() }); if (window.name === 'jaf-login') setTimeout(() => window.close(), 500); }
+      return false;
+    }
+    if (!scanActive()) return false;
+    if (/^\/webauth\//.test(location.pathname)) return true; // Login-Weiterleitung läuft gerade
     const p = panel(); p.innerHTML = '<b>Alter-Filter</b><br>';
     if (g.type === 'maint') {
       const prev = GM_getValue(K_GATE, null);
@@ -3944,12 +4015,13 @@
       setTimeout(() => location.reload(), until - Date.now());
       return true;
     }
-    if (sessionStorage.getItem('jaf_login_submitted')) { sessionStorage.removeItem('jaf_login_submitted'); log('Automatischer Login nicht erfolgreich – bitte bei JOYclub anmelden.'); return true; }
+    // abgemeldet während eines Scans mit Seitenwechsel: über die Login-Seite zurück auf diese Seite (automatisch max. 1× in 30 min)
     const last = GM_getValue(K_LOGIN_TRY, 0);
-    if (Date.now() - last < LOGIN_RETRY_MS) { log(`Abgemeldet – bitte bei JOYclub anmelden (automatischer Login erst wieder ab ${fmtHM(last + LOGIN_RETRY_MS)}).`); return true; }
+    if (Date.now() - last < LOGIN_RETRY_MS) { log(`Abgemeldet – bitte bei JOYclub anmelden (automatischer Login erst wieder ab ${fmtHM(last + LOGIN_RETRY_MS)}). Danach geht der Scan weiter.`); return true; }
     GM_setValue(K_LOGIN_TRY, Date.now());
-    log('Abgemeldet – versuche, mit den gespeicherten Zugangsdaten einzuloggen …');
-    await loginFlow((r) => { if (!r.loggedIn) log('Automatischer Login nicht möglich: ' + (r.msg || '') + ' Bitte bei JOYclub anmelden.'); });
+    GM_setValue(K_LOGIN_PENDING, { token: 'top', auto: true, ts: Date.now() });
+    log('Abgemeldet – melde mit den gespeicherten Zugangsdaten an …');
+    setTimeout(() => { location.href = loginUrlFor(location.href); }, 1500);
     return true;
   }
 
@@ -4006,17 +4078,31 @@
     const job = GM_getValue(key, null);
     if (!job) { bgPost({ error: 'kein Auftrag' }); return; }
     const cur = job.item;
-    const res = (r, msg) => bgPost({ result: r, msg });
+    let pt = '', pa = [];
+    const res = (r, msg) => bgPost({ result: r, msg, type: pt, ages: pa });
     try {
       const ptype = await waitFor(profileType, 15000);
       await sleep(1500);
       const ages = profileAges();
+      pt = ptype || ''; pa = ages;
       if (!ptype) {
         const nk = nonMemberKind(document, location.pathname);
         if (nk) { setNonProfile(idOf(cur.path), cur.name, nk); if (cur.path) clearFailed(cur.path); return res('skipped', `kein Mitgliederprofil (${nk})`); }
         if (cur.path) setFailed(cur.path, 'Profil nicht lesbar'); return res('failed', 'Profil nicht lesbar');
       }
       if (ages.length) { setChecked(idOf(location.pathname), { name: cur.name, type: ptype, ages }); recordAccounts([{ path: cleanPath(location.pathname), name: cur.name, ages, type: ptype, online: profileOnline() }]); }
+      // Sync: eigene Notizzeile durch die Zeile laut Skript-Speicher ersetzen, danach (wieder) sperren
+      if (cur.action === 'sync') {
+        const kind = cur.kind || ((cur.reason === 'Altersunterschied' || cur.reason === 'Geronto-Paar') ? cur.reason
+          : (isCoupleRuleType(ptype) && ages.length === 2 ? (coupleReason(ages) || false) : false));
+        const line = noteText(cur.source || 'Sync', kind, cur.ts || Date.now());
+        const n = await writeWhitelistNote(line, true);
+        if (!n.ok) return res('failed', n.msg);
+        if (!cur.block) return res('note', n.msg);
+        await sleep(800);
+        const r = await blockOnProfile();
+        return res(r.ok ? 'ignored' : 'failed', `${n.msg}; ${r.msg}`);
+      }
       if (cur.action === 'note' || cur.action === 'clean') {
         const r = cur.action === 'note' ? await writeWhitelistNote(cur.line, true) : await cleanOwnNote();
         return res(r.ok ? 'note' : 'failed', r.msg);
@@ -4039,7 +4125,6 @@
 
   async function bgFrameDispatch() {
     const n = window.name || '';
-    if (n === 'jaf-bg-login') return loginFrame();
     const gate = pageGate(document);
     if (gate) { bgPost({ gate, url: location.href }); return; }
     if (n === 'jaf-bg-ev') return bgEventFrame();
@@ -4062,7 +4147,10 @@
         ⚠ Bitte diese Seite nicht verlassen und den Tab nicht schließen, sonst bricht der Scan ab.</div>
       <div class="jaf-bg-party" style="font-weight:bold;margin-top:8px"></div>
       <div class="jaf-bg-step" style="opacity:.9;min-height:1.5em"></div>
-      <div class="jaf-bg-barwrap" style="display:none;height:8px;background:#333;border-radius:4px;margin:10px 0;overflow:hidden"><div class="jaf-bg-bar" style="height:100%;width:0;background:#43a047;transition:width .3s"></div></div>
+      <div class="jaf-bg-barlbl" style="display:none;font-size:12px;opacity:.8;margin-top:8px"></div>
+      <div class="jaf-bg-barwrap" style="display:none;height:8px;background:#333;border-radius:4px;margin:4px 0 8px;overflow:hidden"><div class="jaf-bg-bar" style="height:100%;width:0;background:#43a047;transition:width .3s"></div></div>
+      <div class="jaf-bg-bar2lbl" style="display:none;font-size:12px;opacity:.8"></div>
+      <div class="jaf-bg-bar2wrap" style="display:none;height:8px;background:#333;border-radius:4px;margin:4px 0 8px;overflow:hidden"><div class="jaf-bg-bar2" style="height:100%;width:0;background:#43a047;transition:width .3s"></div></div>
       <div class="jaf-bg-stats" style="font-size:12px;opacity:.8;white-space:pre-line"></div>
       <div class="jaf-bg-body"></div>
       <div class="jaf-bg-btns" style="display:flex;flex-direction:column;gap:12px;margin-top:16px"></div>
@@ -4080,6 +4168,17 @@
     document.removeEventListener('keydown', ov.__esc, true);
     ov.remove();
     if (bgScan && !bgScan.running) bgScan = null;
+  }
+  // zweiter Fortschrittsbalken (z. B. aktuelle Altersklasse); frac = null → ausblenden
+  function bgBar2(frac, label) {
+    const ov = bgPopup();
+    const show = frac != null;
+    ov.querySelector('.jaf-bg-bar2wrap').style.display = show ? '' : 'none';
+    ov.querySelector('.jaf-bg-bar2lbl').style.display = show ? '' : 'none';
+    if (!show) { ov.querySelector('.jaf-bg-barlbl').style.display = 'none'; return; }
+    const f = Math.max(0, Math.min(1, frac));
+    ov.querySelector('.jaf-bg-bar2').style.width = (f * 100).toFixed(1) + '%';
+    ov.querySelector('.jaf-bg-bar2lbl').textContent = `${label}: ${Math.round(f * 100)} %`;
   }
   // Titel setzen; running = Warnhinweis „Seite nicht verlassen“ zeigen
   function bgTitle(title, running) {
@@ -4114,7 +4213,12 @@
     const ov = bgPopup();
     if (party != null) ov.querySelector('.jaf-bg-party').textContent = party;
     if (step != null) ov.querySelector('.jaf-bg-step').textContent = step;
-    if (frac != null) { ov.querySelector('.jaf-bg-barwrap').style.display = ''; ov.querySelector('.jaf-bg-bar').style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(1) + '%'; }
+    if (frac != null) {
+      const f = Math.max(0, Math.min(1, frac));
+      ov.querySelector('.jaf-bg-barwrap').style.display = ''; ov.querySelector('.jaf-bg-bar').style.width = (f * 100).toFixed(1) + '%';
+      const lbl = ov.querySelector('.jaf-bg-barlbl');
+      if (ov.querySelector('.jaf-bg-bar2wrap').style.display !== 'none') { lbl.style.display = ''; lbl.textContent = `Gesamt: ${(f * 100).toFixed(1).replace('.', ',')} %`; }
+    }
     if (stats != null) ov.querySelector('.jaf-bg-stats').textContent = stats;
   }
   const beforeUnloadGuard = (e) => { e.preventDefault(); e.returnValue = 'Der Opa-Scan läuft noch.'; return e.returnValue; };
@@ -4255,6 +4359,7 @@
           }
           updateEventBadges();
         }
+        upgradeSources(guests.filter((g) => g.id), 'Party');
         const ctx = { white: whiteList(), blocked: blockedIdMap(), acc: getAccounts() };
         const known = seenGuests(e.id);
         const seen = new Set(); const items = [];
@@ -4385,7 +4490,48 @@
     const name = box.querySelector('[data-e2e="search-name-button"]');
     if (name && name.parentElement === box) name.after(b); else box.appendChild(b);
   }
-  setInterval(() => { try { insertMsButton(); } catch (e) { /* weiter */ } }, 1500);
+  setInterval(() => { try { insertMsButton(); if (!CONFIG.MEMBER_SEARCH) decorateMemberCards(); } catch (e) { /* weiter */ } }, 1500);
+
+  // Ergebnis-Karten markieren wie Gästelisten auf Partys (Farbe nach Alter, rotes X bei Ignorierten, Popup per Klick)
+  function decorateMemberCards() {
+    if (!isMemberSearchPage()) return;
+    const cards = readCards();
+    if (!cards.length) return;
+    const ctx = { white: whiteList(), acc: getAccounts(), blocked: blockedIdMap() };
+    for (const c of cards) {
+      const g = Object.assign({ id: idOf(c.path) }, c);
+      const st = guestStyle(g, ctx);
+      const a = c.a;
+      const blk = g.id && ctx.blocked.get(g.id);
+      const sig = [st.color, st.dashed, st.txt, !!blk, g.ages.join('+')].join('|');
+      if (a.__jafSig !== sig) {
+        a.__jafSig = sig;
+        a.style.outline = `${st.dashed ? 2 : 3}px ${st.dashed ? 'dashed' : 'solid'} ${st.color}`;
+        a.style.outlineOffset = '-1px';
+        if (getComputedStyle(a).position === 'static') a.style.position = 'relative';
+        if (getComputedStyle(a).display === 'inline') a.style.display = 'block';
+        let b = a.querySelector('.jaf-badge');
+        if (!b) { b = document.createElement('div'); b.className = 'jaf-badge'; a.appendChild(b); }
+        const extra = [g.ages.join('+') || '?', st.color === COLORS.red ? st.txt : ''].filter(Boolean).join(' · ');
+        b.textContent = extra + (blk ? ' · ignoriert' : '');
+        b.style.cssText = 'position:absolute;top:6px;left:6px;z-index:5;font:bold 11px system-ui;padding:2px 6px;border-radius:3px;pointer-events:none;' +
+          `background:${st.color};color:${st.fg || (st.color === COLORS.white ? '#000' : '#fff')}`;
+        const x = a.querySelector('.jaf-x');
+        if (blk && !x) a.insertAdjacentHTML('beforeend', `<div class="jaf-x" style="position:absolute;inset:0;z-index:4;pointer-events:none">${X_SVG}</div>`);
+        if (!blk && x) x.remove();
+      }
+      if (!a.__jafBound) {
+        a.__jafBound = true;
+        a.addEventListener('click', (ev) => {
+          const now = blockedIdMap().get(idOf(c.path));
+          if (!now) return; // nicht (mehr) ignoriert → normaler Link
+          ev.preventDefault(); ev.stopPropagation();
+          ignoredPopup(g, now, { name: 'Suche', date: fmtDay(Date.now()), search: true });
+          setTimeout(() => { a.__jafSig = ''; }, 3000);
+        }, true);
+      }
+    }
+  }
 
   // ---- Popup 1: Auswahl ----
   function msOpen() {
@@ -4506,7 +4652,7 @@
   }
   // gesehene Profile auch in der Konten-Liste / Vormerkliste festhalten
   function msRecord(cards, search) {
-    try { recordAccounts(cards); updateWatch(cards, getLog(), getIgnored(), 'Suche'); } catch (e) { /* egal */ }
+    try { recordAccounts(cards); updateWatch(cards, getLog(), getIgnored(), 'Suche'); upgradeSources(cards, 'Suche'); } catch (e) { /* egal */ }
     const single = GM_getValue(K_MS_SINGLE, {});
     let ch = false;
     for (const c of cards) {
@@ -4585,6 +4731,9 @@
         const r = msClassify(c, ctx);
         if (r.kind === 'skip') st.skipped++; else hits.push(r.item);
       }
+      return ignoreHits(hits, search, fracOf);
+    };
+    const ignoreHits = async (hits, search, fracOf) => {
       let done = 0;
       for (let qi = 0; qi < hits.length && !bgScan.stop; qi++) {
         if (testLeft <= 0) { st.skipped++; continue; }
@@ -4606,6 +4755,12 @@
     };
     let headline = '';
     try {
+      // fällige Vorgemerkte (inzwischen über MAX_AGE) zuerst
+      const due = dueFromWatch();
+      if (due.length && !bgScan.stop) {
+        bgUi('Vorgemerkte', `${due.length} vorgemerkte Mitglieder haben die Altersgrenze überschritten`, 0, stats());
+        await ignoreHits(due.map((d) => Object.assign({}, d, { source: d.source || 'Suche' })), { label: 'Vorgemerkte', step: 'Vorgemerkte' }, () => 0);
+      }
       if (opt.mode === 'current') {
         const desc = 'Aktuelle Suche';
         headline = desc;
@@ -4625,7 +4780,6 @@
         const optSave = { types: opt.types, min: opt.min, max: opt.max, lands: opt.lands };
         for (let ai = opt.startAi || 0; ai < areas.length && !bgScan.stop; ai++) {
           const { a, land } = areas[ai];
-          const head = `Umkreis ${ai + 1}/${areas.length}: ${a[0]} (${land})`;
           let wDone = 0;
           for (let gi = 0; gi < ages.length; gi++) {
             const age = ages[gi];
@@ -4634,14 +4788,15 @@
             GM_setValue(K_MS_RESUME, { opt: optSave, ai, ageIdx: gi, nAreas: areas.length, city: a[0], age, ts: Date.now() });
             const url = msUrl(a, opt.types, age);
             const ageLbl = age >= 70 ? '70+' : String(age);
+            const head = `Alter ${ageLbl} · Umkreis ${ai + 1}/${areas.length}: ${a[0]} (${land})`;
             const base = (ai + wDone / wSum) / areas.length, span = w(age) / wSum / areas.length;
             const maxRuns = age >= 70 ? 200 : 20;
             const seen = new Set();
             let runs = 0, found = 0, ign = 0, limit = false, final = '';
             while (runs < maxRuns && !bgScan.stop) {
               runs++;
-              const step = `Alter ${ageLbl} · Durchlauf ${runs}/${maxRuns}`;
-              const fracOf = (f) => base + span * (runs === 1 ? f : 1);
+              const step = `Durchlauf ${runs}/${maxRuns}`;
+              const fracOf = (f) => { bgBar2(f, `Altersklasse ${ageLbl} in ${a[0]} · Durchlauf ${runs}`); return base + span * (runs === 1 ? f : 1); };
               bgUi(head, `${step} · lade Ergebnisse …`, fracOf(0), stats());
               let data;
               try { data = await load(url, (n) => bgUi(null, `${step} · lade Ergebnisse … ${n}`, fracOf(0.25), null)); }
@@ -4669,6 +4824,7 @@
       }
       const dur = Math.round((Date.now() - t0) / 60000);
       const durTxt = dur >= 60 ? `${Math.floor(dur / 60)}:${pad2(dur % 60)} h` : `${dur} min`;
+      bgBar2(null);
       bgTitle(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', false);
       bgUi(bgScan.stop ? (bgScan.stopMsg || 'Abgebrochen') : (opt.mode === 'current' ? 'Aktuelle Suche abgeschlossen' : 'Systematische Suche abgeschlossen'),
         `${headline}${opt.mode === 'system' ? ` · ${st.searches.toLocaleString('de-DE')} Einzelsuchen` : ''} · Dauer ${durTxt}`, bgScan.stop ? null : 1, stats());
@@ -4687,6 +4843,280 @@
       btns.push({ label: 'Schließen', fn: closeBgPopup, focus: true });
       bgButtons(btns);
     }
+  }
+
+  // =====================================================================
+  // ---------- Ignorierliste synchronisieren (Seite /ignore/) ----------
+  // „JOYclub hat Vorrang“: Sperren von JOYclub ins Skript übernehmen (optional Quelle/Datum aus den Notizen)
+  // „Script hat Vorrang“: JOYclub an das Skript angleichen (entsperren, nachsperren, optional Notizen angleichen)
+  // =====================================================================
+  const K_SYNC_LAST = 'jaf_sync_last';
+  const K_SYNC_NOTES = 'jaf_sync_notes';
+  const SYNC_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;vertical-align:-3px">' +
+    '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 3v5h5"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 21v-5h-5"/></svg>';
+  const KIND_NAMES = { false: 'Alter Sack', Altersunterschied: 'Sugar Daddy', 'Geronto-Paar': 'Geronto-Paar' };
+  const kindArg = (name) => (name === 'Sugar Daddy' ? 'Altersunterschied' : name === 'Geronto-Paar' ? 'Geronto-Paar' : false);
+  // eigene Notizzeile zerlegen: { kind, source, ts }
+  function parseOwnLine(text) {
+    const lines = String(text || '').split(/\r?\n|\s·\s/).map((l) => l.trim()).filter((l) => CONFIG.OWN_NOTE_RE.test(l));
+    if (!lines.length) return null;
+    const m = lines[lines.length - 1].match(/^(Alter Sack|Sugar Daddy|Geronto-Paar)(?:\s*\(([^)]*)\))?\s+\S+\s+am\s+(\d{1,2})\.(\d{1,2})\.(\d{4})\s+um\s+(\d{1,2}):(\d{2})/i);
+    if (!m) return null;
+    const kind = /sugar/i.test(m[1]) ? 'Sugar Daddy' : /geronto/i.test(m[1]) ? 'Geronto-Paar' : 'Alter Sack';
+    return { kind, source: (m[2] || '').trim(), ts: new Date(+m[5], +m[4] - 1, +m[3], +m[6], +m[7]).getTime() };
+  }
+  // Art laut Skript: aus Grund bzw. Paar-Regeln
+  function kindOfEntry(e, type, ages) {
+    if (e && e.reason === 'Altersunterschied') return 'Sugar Daddy';
+    if (e && e.reason === 'Geronto-Paar') return 'Geronto-Paar';
+    const t = type || (e && e.type) || '', a = (ages && ages.length ? ages : (e && e.ages)) || [];
+    if (isCoupleRuleType(t) && a.length === 2) return KIND_NAMES[coupleReason(a) || false] || 'Alter Sack';
+    return t ? 'Alter Sack' : null; // ohne Typ unbekannt
+  }
+  // ganze Profilnotiz aus einer abgerufenen Profilseite
+  function noteFromDoc(doc) {
+    const host = [...doc.querySelectorAll('j-setting-textarea')].find((e) => /profilnotiz/.test(norm(e.getAttribute('label') || '')));
+    if (!host) return '';
+    const ta = host.querySelector('textarea');
+    return (host.getAttribute('value') || (ta && (ta.value || ta.textContent)) || host.textContent || '').trim();
+  }
+  function insertSyncButton() {
+    if (!isIgnorePage() || document.querySelector('.jaf-sync-wrap')) return;
+    const form = document.getElementById('user_ignore');
+    const sperr = form && form.querySelector('j-button.ignore_user, j-button');
+    if (!form || !sperr) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'jaf-sync-wrap';
+    wrap.style.cssText = 'margin:8px 0 4px';
+    const b = document.createElement('j-button');
+    b.className = 'jaf-sync-btn';
+    b.setAttribute('variant', 'secondary');
+    b.setAttribute('role', '');
+    b.setAttribute('type', 'button');
+    b.innerHTML = `${SYNC_SVG} Synchronisieren`;
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); syncOpen(); });
+    const status = document.createElement('div');
+    status.className = 'jaf-sync-status';
+    status.style.cssText = 'font-size:12px;opacity:.85;margin-top:6px';
+    wrap.appendChild(b); wrap.appendChild(status);
+    form.after(wrap);
+    const align = () => { try { wrap.style.paddingLeft = Math.max(0, sperr.getBoundingClientRect().left - form.getBoundingClientRect().left) + 'px'; } catch (e) { /* egal */ } };
+    align(); setTimeout(align, 800); window.addEventListener('resize', align);
+    syncStatus();
+  }
+  function syncStatus() {
+    const el = document.querySelector('.jaf-sync-status');
+    if (!el) return;
+    const l = GM_getValue(K_SYNC_LAST, null);
+    el.textContent = l ? `Zuletzt synchronisiert: ${fmtTs(l.ts)} (${l.mode}${l.notes ? ', mit Notizen' : ''}) · ${l.n} auf der Ignorierliste${l.summary ? ' · ' + l.summary : ''}` : 'Noch nicht synchronisiert.';
+  }
+  function syncOpen() {
+    if (bgScan && bgScan.running) { bgPopup(); return; }
+    closeBgPopup();
+    bgTitle('Ignorierliste synchronisieren', false);
+    bgUi('Welche Seite hat Vorrang?', '', null,
+      'JOYclub hat Vorrang: Sperren von JOYclub ins Skript übernehmen (z. B. nach Verlust der Skript-Daten).\n' +
+      'Script hat Vorrang: JOYclub an das Skript angleichen – entsperren, nachsperren, Notizen korrigieren.' +
+      (CONFIG.DRY_RUN ? '\nTestmodus: auf JOYclub wird nichts verändert, nur gezählt.' : ''));
+    const lab = document.createElement('label');
+    lab.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer';
+    lab.innerHTML = '<input type="checkbox" style="width:18px;height:18px;accent-color:#c71b1b;margin:0"> <span>Notizen abgleichen</span>';
+    const cb = lab.querySelector('input');
+    cb.checked = !!GM_getValue(K_SYNC_NOTES, false);
+    cb.addEventListener('change', () => GM_setValue(K_SYNC_NOTES, cb.checked));
+    bgBody(lab);
+    bgButtons([
+      { label: 'JOYclub hat Vorrang', fn: () => runSync('joyclub', cb.checked) },
+      { label: 'Script hat Vorrang', fn: () => runSync('script', cb.checked) },
+      { label: 'Abbrechen', fn: closeBgPopup, focus: true },
+    ]);
+  }
+  async function runSync(mode, notes) {
+    if (bgScan && bgScan.running) return;
+    bgBody(null);
+    const why = scanBlockedReason();
+    if (why) { bgUi('Synchronisieren zurzeit nicht möglich', why, null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
+    if (!(await acquireLock('Ignorierliste synchronisieren'))) { bgUi('Synchronisieren zurzeit nicht möglich', 'Ein anderer Tab arbeitet gerade.', null, ''); return; }
+    const modeName = mode === 'joyclub' ? 'JOYclub hat Vorrang' : 'Script hat Vorrang';
+    bgScan = { stop: false, running: true };
+    window.__jafBgBusy = true;
+    window.addEventListener('beforeunload', beforeUnloadGuard);
+    bgTitle(`Synchronisiere (${modeName})`, true);
+    bgButtons([bgStopButton()]);
+    const t0 = Date.now();
+    const st = { n: 0, notesRead: 0, added: 0, srcSet: 0, markedUnblocked: 0, unblocked: 0, reblocked: 0, noteFixed: 0, cleaned: 0, failed: 0, whiteBlocked: [], plannedOnly: 0 };
+    const stats = () => [
+      `Eingelesen: ${st.n} Einträge${notes ? `, ${st.notesRead} Notizen` : ''}`,
+      mode === 'joyclub'
+        ? `Im Skript ergänzt: ${st.added} · Quelle übernommen: ${st.srcSet} · im Skript entsperrt: ${st.markedUnblocked}`
+        : `Entsperrt: ${st.unblocked} · nachgesperrt: ${st.reblocked} · Notizen angeglichen: ${st.noteFixed} · eigene Zeilen entfernt: ${st.cleaned}`,
+      `fehlgeschlagen: ${st.failed}${CONFIG.DRY_RUN ? ` · Testmodus: ${st.plannedOnly} Änderungen nur gezählt` : ''}`,
+    ].join('\n');
+    let shown = 0;
+    const show = (f) => { shown = Math.max(shown, Math.min(1, f)); return shown; };
+    try {
+      // 1. Einlesen: Ignorierliste (+ Profilnotizen)
+      bgUi('Einlesen', 'Lade die Ignorierliste …', show(0.01), stats());
+      const doc = await fetchDoc(ignoreUrl());
+      const jc = parseIgnoreList(doc);
+      saveIgnored(jc);
+      const jcList = Object.entries(jc);
+      st.n = jcList.length;
+      const readUnits = 1 + (notes ? jcList.length : 0);
+      const info = {}; // path → { note, own, type, ages }
+      if (notes) {
+        for (let i = 0; i < jcList.length && !bgScan.stop; i++) {
+          const [path, e] = jcList[i];
+          bgUi(null, `Lese Profilnotizen … ${i + 1}/${jcList.length}: ${e.name}`, show(0.5 * (1 + i) / readUnits), null);
+          try {
+            const d = await fetchDoc(e.url || location.origin + path);
+            const note = noteFromDoc(d);
+            const pi = parseProfileDoc(d);
+            info[path] = { note, own: parseOwnLine(note), type: pi ? pi.type : '', ages: pi ? pi.ages : [] };
+            if (pi) recordAccounts([{ path, name: e.name, ages: pi.ages, type: pi.type }]);
+            st.notesRead++;
+          } catch (err) { if (err.fatal) throw err; st.failed++; }
+          bgUi(null, null, null, stats());
+          await sleep(rand(300, 800));
+        }
+      }
+      if (bgScan.stop) throw Object.assign(new Error('Abgebrochen.'), { stopped: true });
+      const l = getLog();
+      const byId = {}; for (const k of Object.keys(l)) { const id = idOf(k); if (id) byId[id] = k; }
+      const jcIds = new Set(jcList.map(([p, e]) => String(e.id || idOf(p))));
+      const white = whiteList();
+      const changes = [];
+      if (mode === 'joyclub') {
+        // im Skript gesperrt, auf JOYclub nicht → im Skript entsperren
+        for (const [k, e] of Object.entries(l)) {
+          if (e.unblocked || jcIds.has(String(idOf(k)))) continue;
+          e.unblocked = { ts: Date.now(), reason: 'nicht auf der JOYclub-Ignorierliste (Sync)' }; st.markedUnblocked++;
+        }
+        for (const [path, e] of jcList) {
+          const k = (l[path] && path) || byId[e.id || idOf(path)];
+          const own = info[path] && info[path].own;
+          const pi = info[path] || {};
+          if (isWhiteMember({ name: e.name, path }, white)) st.whiteBlocked.push(e.name);
+          if (!k || l[k].unblocked) {
+            const old = (k && l[k]) || {};
+            const x = Object.assign({}, old, { name: e.name || old.name, url: e.url || old.url, ages: (pi.ages && pi.ages.length ? pi.ages : old.ages) || [],
+              type: pi.type || old.type || '', source: (own && own.source) || old.source || '', method: 'JOYclub-Ignorierliste (Sync)',
+              ts: (own && own.ts) || Date.now() });
+            delete x.unblocked;
+            if (own && own.kind !== 'Alter Sack') x.reason = kindArg(own.kind);
+            l[k || path] = x;
+            st.added++;
+          } else {
+            const x = l[k];
+            if (own && own.source && own.source !== x.source) { x.source = own.source; st.srcSet++; }
+            if (own && !x.ts) x.ts = own.ts;
+            if (!x.type && pi.type) x.type = pi.type;
+            if ((!x.ages || !x.ages.length) && pi.ages && pi.ages.length) x.ages = pi.ages;
+          }
+        }
+        GM_setValue(K_LOG, l);
+        show(1);
+      } else {
+        // a) auf JOYclub gesperrt, aber dem Skript nicht als gesperrt bekannt oder auf der Whitelist → entsperren
+        for (const [path, e] of jcList) {
+          const k = (l[path] && path) || byId[e.id || idOf(path)];
+          const known = k && !l[k].unblocked;
+          const wl = isWhiteMember({ name: e.name, path }, white);
+          const pi = info[path] || {};
+          if (!known || wl) {
+            changes.push({ op: 'unblock', path, e, k, wl, clean: notes && (wl || (pi.own != null)) });
+          } else if (notes) {
+            // c) Notiz abgleichen (Art + Quelle, Datum egal)
+            const x = l[k];
+            const kind = kindOfEntry(x, pi.type, pi.ages);
+            const source = x.source || (pi.own && pi.own.source) || 'Sync';
+            const ts = x.ts || (pi.own && pi.own.ts) || Date.now();
+            if (!x.source) x.source = source;
+            if (!x.ts) x.ts = ts;
+            if (!x.type && pi.type) x.type = pi.type;
+            if ((!x.ages || !x.ages.length) && pi.ages && pi.ages.length) x.ages = pi.ages;
+            if (!pi.own || !kind || pi.own.kind !== kind || pi.own.source !== source) changes.push({ op: 'fix', path, e, k, kind, source, ts });
+          }
+        }
+        // b) im Skript gesperrt, auf JOYclub nicht → nachsperren (Whitelist geht vor: dann im Skript entsperren)
+        for (const [k, x] of Object.entries(l)) {
+          if (x.unblocked || jcIds.has(String(idOf(k)))) continue;
+          if (isWhiteMember({ name: x.name, path: k }, white)) { x.unblocked = { ts: Date.now(), reason: 'Whitelist (Sync)' }; continue; }
+          if (!CONFIG.PROFILE_PATH_RE.test(k)) continue;
+          changes.push({ op: 'reblock', path: k, e: { name: x.name, url: x.url || location.origin + k, id: idOf(k) }, k,
+            kind: kindOfEntry(x), source: x.source || 'Sync', ts: x.ts || Date.now() });
+        }
+        GM_setValue(K_LOG, l);
+        // 2. Änderungen
+        const base = show(readUnits / (readUnits + 3 * changes.length));
+        for (let ci = 0; ci < changes.length && !bgScan.stop; ci++) {
+          const c = changes[ci];
+          const label = c.op === 'unblock' ? `Entsperren${c.clean ? ' + Notiz bereinigen' : ''}` : c.op === 'fix' ? `Notiz angleichen (entsperren, „${c.kind || '…'} (${c.source})“, wieder sperren)` : `Nachsperren mit Notiz „${c.kind || '…'} (${c.source})“`;
+          bgUi(`Änderungen ${ci + 1}/${changes.length}`, `${label}: ${c.e.name}`, show(base + (1 - base) * ci / Math.max(1, changes.length)), stats());
+          if (CONFIG.DRY_RUN) { st.plannedOnly++; continue; }
+          try {
+            if (c.op === 'unblock' || c.op === 'fix') {
+              const r = await bgUnignore(c.e.id || idOf(c.path));
+              if (!r.ok) { st.failed++; continue; }
+              if (c.op === 'unblock') {
+                st.unblocked++;
+                if (c.k && !getLog()[c.k].unblocked) markUnblocked(c.k, c.e, c.wl ? 'Whitelist (Sync)' : 'unbekannt (Sync)');
+                if (c.clean) {
+                  const item = c.wl ? { path: c.path, url: c.e.url, name: c.e.name, action: 'note', line: `Whitelist: ${whiteReason(c.e.name) || 'Whitelist'}` }
+                    : { path: c.path, url: c.e.url, name: c.e.name, action: 'clean' };
+                  const r2 = await syncAct(item);
+                  if (r2.result === 'note') st.cleaned++; else st.failed++;
+                }
+                continue;
+              }
+            }
+            // fix / reblock: Notiz ersetzen und sperren
+            const item = { path: c.path, url: c.e.url, name: c.e.name, action: 'sync', block: true, source: c.source, ts: c.ts,
+              kind: c.kind ? kindArg(c.kind) : null };
+            if (item.kind === null) delete item.kind;
+            const r3 = await syncAct(item);
+            if (r3.result === 'ignored') {
+              if (c.op === 'fix') st.noteFixed++; else st.reblocked++;
+              const L = getLog(); const x = L[c.k];
+              if (x) {
+                if (r3.type && !x.type) x.type = r3.type;
+                if (r3.ages && r3.ages.length && (!x.ages || !x.ages.length)) x.ages = r3.ages;
+                if (!x.reason && isCoupleRuleType(r3.type) && r3.ages && r3.ages.length === 2) { const cr = coupleReason(r3.ages); if (cr) x.reason = cr; }
+                delete x.unblocked; GM_setValue(K_LOG, L);
+              }
+            } else st.failed++;
+          } catch (err) { if (err.fatal) throw err; st.failed++; }
+          bgUi(null, null, null, stats());
+          await sleep(rand(1500, 3000));
+        }
+      }
+      const dur = Math.max(1, Math.round((Date.now() - t0) / 60000));
+      const summary = mode === 'joyclub' ? `ergänzt ${st.added}, Quelle ${st.srcSet}, entsperrt ${st.markedUnblocked}`
+        : `entsperrt ${st.unblocked}, nachgesperrt ${st.reblocked}, Notizen ${st.noteFixed}`;
+      if (!bgScan.stop) GM_setValue(K_SYNC_LAST, { ts: Date.now(), mode: modeName, notes, n: st.n, summary });
+      bgTitle(bgScan.stop ? 'Synchronisierung abgebrochen' : 'Synchronisierung fertig', false);
+      bgUi(`${modeName}${notes ? ' · mit Notizen' : ''}`, `${st.n} auf der Ignorierliste · Dauer ${dur} min` +
+        (st.whiteBlocked.length ? `\nAuf der Whitelist, aber gesperrt (bleiben gesperrt): ${st.whiteBlocked.slice(0, 15).join(', ')}${st.whiteBlocked.length > 15 ? ' …' : ''}` : ''),
+      bgScan.stop ? null : show(1), stats());
+    } catch (err) {
+      bgTitle(err.stopped ? 'Synchronisierung abgebrochen' : 'Synchronisierung nicht möglich', false);
+      bgUi(err.stopped ? 'Abgebrochen' : 'Fehler', err.message || String(err), null, stats());
+    } finally {
+      window.removeEventListener('beforeunload', beforeUnloadGuard);
+      window.__jafBgBusy = false;
+      bgScan = null;
+      releaseLock();
+      bgButtons([{ label: 'Schließen', fn: () => { closeBgPopup(); syncStatus(); }, focus: true }]);
+      syncStatus();
+    }
+  }
+  // ein Profil im Hintergrund bearbeiten (Notiz/Sperren) – wie im Party-Scan
+  async function syncAct(item) {
+    const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    GM_setValue('jaf_bg_job_' + jobId, { item, source: item.source || 'Sync' });
+    try { return await bgFrameG(location.origin + item.path, 'jaf-bg-act-' + jobId, null, 120000); }
+    catch (err) { if (err.fatal) throw err; return { result: 'failed', msg: err.message }; }
+    finally { GM_setValue('jaf_bg_job_' + jobId, null); }
   }
 
   function setAutoMode(on) {
@@ -4747,6 +5177,8 @@
       p.appendChild(btn('Export (CSV)', () => log(`${exportList()} Einträge exportiert.`)));
       p.appendChild(btn('Alle Konten (CSV)', () => log(`${exportAccounts()} Konten exportiert.`)));
       log(`${Object.keys(list).length} Mitglieder auf der Ignorierliste, ${getDone().length} vom Skript ignoriert.`);
+      insertSyncButton();
+      if (!window.__jafSyncTimer) window.__jafSyncTimer = setInterval(() => { if (isIgnorePage()) insertSyncButton(); }, 2000);
       return;
     }
     if (!currentListPage()) { const el = document.getElementById('jaf-panel'); if (el) el.remove(); return; }
@@ -4807,7 +5239,7 @@
   if (BG_FRAME) { bgFrameDispatch(); return; }
 
   try {
-    GM_registerMenuCommand('Alter-Filter: Automatik an/aus', () => {
+    if (CONFIG.MEMBER_SEARCH) GM_registerMenuCommand('Alter-Filter: Automatik an/aus (alte Suche)', () => {
       setAutoMode(!autoMode());
       alert(`Automatik ist jetzt ${autoMode() ? 'AN' : 'AUS'}. Seite wird neu geladen.`);
       location.reload();
@@ -4826,6 +5258,18 @@
     GM_registerMenuCommand('Alter-Filter: Partys beim nächsten Scan vollständig prüfen', () => {
       const m = getEvents(); for (const e of Object.values(m)) { delete e.seen; delete e.seenRules; } GM_setValue(K_EVENTS, m);
       alert('Gemerkte Anmeldungen gelöscht – der nächste Party-Scan prüft wieder alle Gäste.');
+    });
+    GM_registerMenuCommand('Alter-Filter: Erledigt-Liste leeren', () => {
+      if (!confirm('Liste der vom Skript ignorierten Mitglieder (inkl. Datum/Uhrzeit, Quelle) wirklich löschen?\nVorher über „Liste exportieren“ sichern!')) return;
+      GM_setValue(K_LOG, {}); GM_setValue(K_DONE, []); GM_setValue(K_FAILED, {}); alert('Erledigt-Liste geleert.');
+    });
+    GM_registerMenuCommand('Alter-Filter: Fehlschläge leeren', () => {
+      if (!confirm('Alle gespeicherten Fehlschläge (Profile, Party-Scan, Mitgliedersuche) löschen?')) return;
+      GM_setValue(K_FAILED, {}); GM_setValue(K_EVFAIL, []); GM_setValue(K_MS_FAIL, []); alert('Fehlschläge geleert.');
+    });
+    GM_registerMenuCommand('Alter-Filter: Typen-Info leeren', () => {
+      if (!confirm('Gesammelte Infos zu anderen Profiltypen löschen?')) return;
+      GM_setValue(K_TYPES, {}); alert('Typen-Info geleert.');
     });
     GM_registerMenuCommand('Alter-Filter: Lauf zurücksetzen', () => { resetAll(); alert('Alle laufenden Vorgänge und die Tab-Sperre wurden zurückgesetzt. Seite wird neu geladen.'); location.reload(); });
   } catch (e) { /* ältere Tampermonkey-Version */ }

@@ -1,6 +1,16 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.72 (21.10.2026)
+- Abmeldung: Gast-Seite (Fehler 401) erkennen, Login im kleinen Fenster über identity.joyclub.com (automatisch max. 1× in 30 min)
+- Ignorierliste: Button „Synchronisieren“ (JOYclub/Script hat Vorrang, optional Notizen abgleichen)
+- Mitgliedersuche: Ergebnisse markieren wie auf Partys (Farben, rotes X, Popup, Umbenennung)
+- Mitgliedersuche: zwei Fortschrittsbalken, fällige Vorgemerkte zuerst
+- Quellen-Rangfolge Besucher > Party > Gruppen > Suche > Sync
+- Menü: Erledigt-Liste/Fehlschläge/Typen-Info leeren; Automatik nur noch mit alter Suche
+- „Dates & Events“: Opa-Scan-Button mit Abstand zu „Vergangene Events“
+- README mit Bildern
+
 1.71 (21.10.2026)
 - Wartungsseiten erkennen: bis zur angegebenen Uhrzeit + 5–10 min nicht auf JOYclub zugreifen, dann weitermachen
 - Abmeldung erkennen: einmaliger automatischer Login mit ausgefüllten Zugangsdaten (max. 1× in 30 min), sonst Scan anhalten

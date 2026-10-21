@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach festen Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – in Gruppen, auf Partys und in der Mitgliedersuche.
 
-Stand: Version 1.71 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 1.72 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -71,11 +71,13 @@ Auf der Gruppenübersicht `/groups/` steht der Button **„Opa-Scan starten“**
 Zwei Übersichtsseiten der eigenen Eventanmeldungen haben einen Button **„Opa-Scan starten“**:
 
 - `/profile/appointments/<eigene ID>…html` – neben der Überschrift „Eventanmeldungen“
-- `/dates_partys/events/registrations/` („Dates & Events“) – links neben „Vergangene Events“; das Skript lädt vorher alle per Scrollen nachladbaren Partys
+- `/dates_partys/events/registrations/` („Dates & Events“) – links neben „Vergangene Events“ (mit etwas Abstand); das Skript lädt vorher alle per Scrollen nachladbaren Partys
 
 ### Ablauf (im Hintergrund)
 
 Ein Klick auf „Opa-Scan starten“ öffnet sofort das Scan-Popup (keine Browser-Meldungen): Es sammelt die Partys, nennt ihre Zahl bzw. den Grund, warum gerade kein Scan möglich ist, und startet erst mit **„Jetzt scannen …“**. Danach wird daraus „Abbrechen“.
+
+<img src="docs/party-start.png" width="400" alt="Party-Scan vor dem Start">
 
 Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, das Popup zeigt Fortschritt und Statistik. Für jede Party:
 
@@ -108,14 +110,18 @@ Angezeigt wird er auf der Event-Seite (rechts in der Reiterleiste), als Badge au
 
 - Die Gästeliste wird im Hintergrund in zusätzliche Reiter aufgeteilt: **Männer → Jungschwänze / Schwänze / Opas**, **Paare → Paare / Geronto-Paare**. Die Originalliste bleibt sichtbar, bis die Reiter fertig sind.
 - Gäste werden nach Anmeldealter eingefärbt; ignorierte Mitglieder bekommen ein rotes X.
-- Klick auf ein ignoriertes Mitglied öffnet ein Popup *„Du ignorierst …“* mit Grund (Profilnotiz) und den Buttons **Trotzdem öffnen**, **Nicht mehr ignorieren** (entsperrt und setzt auf die Whitelist) und **Abbrechen**.
+- Klick auf ein ignoriertes Mitglied öffnet ein Popup *„Du ignorierst …“* mit Grund (Profilnotiz) und den Buttons **Trotzdem öffnen**, **Nicht mehr ignorieren** (entsperrt und setzt auf die Whitelist) und **Abbrechen**:
+
+  <img src="docs/popup-ignoriert.png" width="400" alt="Popup für ein ignoriertes Mitglied">
 - Reiter **„Opa-Liste“** (zwischen „Dates“ und „Kommentare“): Testlauf des Scans für diese Party; listet alphabetisch alle bereits ignorierten bzw. die Kriterien erfüllenden Gäste mit Profil-Links und der Wahl *Ignorieren / Whitelist*, dann „Anwenden“.
 
 ---
 
 ## Mitgliedersuche
 
-Im Seitenkopf der Suche `/member/` steht rechts neben der Lupe (Namenssuche) ein eigener Button mit **Opa-mit-Lupe-Icon**. Er öffnet ein Popup mit drei Möglichkeiten:
+Im Seitenkopf der Suche `/member/` steht rechts neben der Lupe (Namenssuche) ein eigener Button mit **Opa-mit-Lupe-Icon** <img src="docs/icon-opa-lupe.png" width="28" alt="Icon">. Er öffnet ein Popup mit den Möglichkeiten (ggf. auch „fortsetzen“):
+
+<img src="docs/suche-auswahl.png" width="400" alt="Auswahl-Popup der Mitgliedersuche">
 
 ### Mit aktuellen Sucheinstellungen filtern
 
@@ -125,21 +131,27 @@ Lädt die gerade eingestellte Suche in einem unsichtbaren Frame komplett nach, b
 
 Ein zweites Popup spiegelt die JOYclub-Filter **Ich suche** (Frauen, Männer, Paare, Non-binary) und **Alter** (18 bis 70+) und listet alle Bundesländer aus `CONFIG.AREAS` mit Checkbox und Zahl der Umkreise (Hamburg und Bremen laufen unter „Niedersachsen / Hamburg / Bremen“). Die Auswahl wird gemerkt.
 
+<img src="docs/suche-systematisch.png" width="400" alt="Einstellungen der systematischen Suche">
+
 Ablauf:
 - Für jeden Umkreis (50 km um eine Stadt) und jedes Alter einzeln – rückwärts von 70+ bis zur Untergrenze – wird die Suche per Deeplink aufgerufen:
   `/member/<ort>-x<GeoNames-ID>-r/is-<typen>/?user_geo_distance=50&user_age=<alter>_<alter>`
   (JOYclub nutzt GeoNames-IDs als Orts-ID; `70_70` bedeutet „70 und älter“, Werte über 70 kennt die Suche nicht.)
 - Jede Einzelsuche wird wiederholt, bis ein Durchlauf keine neuen Profile mehr bringt (höchstens 20, bei 70+ höchstens 200 Durchläufe); Treffer werden nach jedem Durchlauf ignoriert.
 - Paare werden anhand ihrer zwei Altersangaben entschieden; Paare mit nur einer Altersangabe werden auf dem Profil geprüft und gesondert gemerkt.
-- Fortschritt: jeder Umkreis zählt gleich viel; innerhalb eines Umkreises zählt 70+ zehnfach, jedes weitere Alter einfach.
+- Zu Beginn jedes Such-Scans werden fällige Vorgemerkte (inzwischen über `MAX_AGE`) ignoriert.
+- Fortschritt: zwei Balken – **Gesamt** (jeder Umkreis zählt gleich viel; innerhalb eines Umkreises zählt 70+ zehnfach, jedes weitere Alter einfach) und **aktuelle Altersklasse**; die Kopfzeile zeigt Alter und Umkreis als „x/Gesamt“:
+
+  <img src="docs/suche-laeuft.png" width="400" alt="Systematische Suche läuft">
 - Protokoll je Einzelsuche: Stadt, Bundesland, Orts-ID, Alter, Zahl der Durchläufe bis ohne neue Treffer, gefundene und ignorierte Profile, ob die Obergrenze erreicht wurde.
 
 ### Sonstiges
 
 - Das Popup während des Scans entspricht dem des Party-Scans (Warnhinweis, Fortschrittsbalken, Statistik, Abbrechen); am Ende gibt es Export-Buttons für Protokoll, Paare mit einer Altersangabe und Fehlschläge.
 - Header-Badge mit der Zahl der vom Skript blockierten Opas.
+- **Markierung der Ergebnisse** (bei normalem Aufruf, nicht in den Scan-Frames): Karten werden wie Gästelisten auf Partys eingefärbt, ignorierte Mitglieder bleiben sichtbar und bekommen ein rotes X; ein Klick darauf öffnet das Popup *„Du ignorierst …“* („Nicht mehr ignorieren“ schreibt hier `Whitelist: Suche am …`). „Mann“ wird zu Jungschwanz / Schwanz / Opa.
 - Eine unterbrochene systematische Suche (Abbrechen, Abmeldung) lässt sich im Auswahl-Popup an derselben Stelle fortsetzen.
-- Die alte Behandlung der Suche (Einfärben, Badges, Automatik, Ignorieren im Tab, Umbenennung „Mann“) ist mit `MEMBER_SEARCH: false` abgeschaltet, der Code bleibt im Skript.
+- Die alte Behandlung der Suche (Panel, Automatik, Ignorieren im Tab) ist mit `MEMBER_SEARCH: false` abgeschaltet, der Code bleibt im Skript.
 
 ---
 
@@ -150,10 +162,35 @@ Alle Scans (Party, Mitgliedersuche, Gruppen, Profilprüfungen im Hintergrund) er
 | Seite | Erkennung | Reaktion |
 |---|---|---|
 | angemeldet | `body[data-session-user-id]` | normal weiter |
-| Login-Seite | nicht angemeldet, Passwortfeld vorhanden | sind Benutzername und Passwort (z. B. vom Browser) ausgefüllt: „Angemeldet bleiben“ anhaken, „Login“ klicken und weitermachen – höchstens einmal pro Abmeldung und einmal in 30 Minuten; sonst hält der Scan an mit „Bitte bei JOYclub anmelden“ |
+| abgemeldet | Gast-Seite („Erst einloggen, dann loslegen – Fehler 401“, `body.guest`, Login-Link) | Login in einem kleinen Fenster über `www.joyclub.de/webauth/login/` → `identity.joyclub.com`: sind Benutzername und Passwort (vom Browser) ausgefüllt, hakt das Skript „Angemeldet bleiben“ an und klickt „Login“ – höchstens einmal pro Abmeldung und einmal in 30 Minuten. Klappt das nicht (leere Felder, Cloudflare-Prüfung), pausiert der Scan, bis man sich im Fenster selbst angemeldet hat, und läuft dann weiter |
 | Wartungsseite | weder angemeldet noch Login-Feld | Uhrzeit aus dem Hinweis lesen („bis voraussichtlich 17 Uhr“) und bis dahin plus zufällig 5–10 Minuten **gar nicht** auf JOYclub zugreifen (ohne Uhrzeit: 30 Minuten plus 5–10); danach den unterbrochenen Schritt wiederholen |
 
-Pausen zählen nicht als Fehlschlag, gelten für alle Tabs und stehen im Protokoll-Export der Mitgliedersuche.
+Pausen zählen nicht als Fehlschlag, gelten für alle Tabs und stehen im Protokoll-Export der Mitgliedersuche. Während einer Pause heißt das Popup „Opa-Scan pausiert“.
+
+Auf `identity.joyclub.com` wird das Skript nur aktiv, wenn es den Login selbst angestoßen hat – ein Login von Hand bleibt unberührt.
+
+---
+
+## Ignorierliste synchronisieren
+
+Auf `/ignore/` steht unter „Mitglied sperren“ der Button **Synchronisieren** (mit Kreispfeil) und darunter der Stand des letzten Abgleichs. Ein Klick öffnet:
+
+<img src="docs/sync-auswahl.png" width="400" alt="Sync-Modus wählen">
+
+| Modus | Ohne „Notizen abgleichen“ | Mit „Notizen abgleichen“ |
+|---|---|---|
+| **JOYclub hat Vorrang** (z. B. nach Verlust der Skript-Daten) | auf JOYclub Gesperrte werden im Skript als gesperrt vermerkt; im Skript Gesperrte, die nicht mehr auf der Liste stehen, gelten als entsperrt; Whitelist-Mitglieder, die gesperrt sind, bleiben gesperrt und werden aufgelistet | zusätzlich Art, Quelle sowie Datum/Uhrzeit aus der Profilnotiz übernehmen |
+| **Script hat Vorrang** | auf JOYclub entsperren, wer dem Skript nicht als gesperrt bekannt ist oder auf der Whitelist steht; im Skript Gesperrte, die auf JOYclub fehlen, mit Notiz wieder sperren | weicht die Notiz in Art („Alter Sack“ / „Sugar Daddy“ / „Geronto-Paar“) oder Quelle ab (auch: leer), wird entsperrt, die Notiz angeglichen und wieder gesperrt; bei Entsperrten werden die eigenen Notizzeilen entfernt (Whitelist-Mitglieder bekommen ihre Whitelist-Zeile) |
+
+Fehlen dem Skript Angaben, ergänzt es sie beim ohnehin nötigen Profilaufruf (Typ, Alter); ist keine Quelle bekannt, gilt „Sync“. Das Popup zeigt den Fortschritt aus Einlesen und Änderungen (deren Umfang erst nach dem Einlesen feststeht) und warnt, die Seite nicht zu verlassen:
+
+<img src="docs/sync-fertig.png" width="400" alt="Synchronisierung fertig">
+
+---
+
+## Quellen und ihre Rangfolge
+
+Jede Sperre merkt sich ihre Quelle. Rangfolge: **Besucher** (geplant) > **Party** > **Gruppen** > **Suche** > **Sync**. Begegnet ein Scan einem schon gesperrten Mitglied in einer höheren Quelle, wird die gespeicherte Quelle ersetzt (z. B. „Suche“ → „Party“). Die Profilnotiz auf JOYclub gleicht der nächste Sync „Script hat Vorrang“ mit Notizen an. Dieselbe Rangfolge gilt für die Quelle der Vorgemerkten.
 
 ---
 
@@ -170,7 +207,7 @@ Im Tampermonkey-Menü (alle Exporte als CSV mit `;`, Excel-tauglich):
 
 | Menüeintrag | Inhalt |
 |---|---|
-| Automatik an/aus | Automatik-Modus der alten Mitgliedersuche (nur mit `MEMBER_SEARCH: true`) |
+| Automatik an/aus (alte Suche) | nur sichtbar mit `MEMBER_SEARCH: true` |
 | Liste exportieren | alle vom Skript ignorierten Mitglieder mit Quelle, Grund, Zeitpunkt |
 | alle Konten mit Geburtsjahr exportieren | alle gesehenen Konten mit Geburtsjahr-Spannen |
 | Vorgemerkte exportieren | Mitglieder, die genau `MAX_AGE` alt sind (Vormerkliste) |
@@ -182,6 +219,9 @@ Im Tampermonkey-Menü (alle Exporte als CSV mit `;`, Excel-tauglich):
 | Paare mit nur einer Altersangabe exportieren | in der Suche gefundene Paare mit nur einem Alter |
 | Fehlschläge der Mitgliedersuche exportieren | gespeicherte Fehlschläge der Mitgliedersuche |
 | Partys beim nächsten Scan vollständig prüfen | vergisst die bereits geprüften Anmeldungen |
+| Erledigt-Liste leeren | löscht das Protokoll der vom Skript Ignorierten (mit Rückfrage) |
+| Fehlschläge leeren | löscht alle gespeicherten Fehlschläge (mit Rückfrage) |
+| Typen-Info leeren | löscht die gesammelten Infos zu anderen Profiltypen (mit Rückfrage) |
 | Lauf zurücksetzen | Notfall: beendet alle laufenden Vorgänge und gibt die Tab-Sperre frei |
 
 ---
