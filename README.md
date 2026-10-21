@@ -1,2 +1,166 @@
 # joyclub-opa-scan
-Implementiert einen Schutz vor sabbernden alten Opas in Joyclub
+
+Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
+
+Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach festen Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – in Gruppen, auf Partys und (in Planung) in der Mitgliedersuche.
+
+Stand: Version 1.69
+
+---
+
+## Installation und Updates
+
+1. [Tampermonkey](https://www.tampermonkey.net/) im Browser installieren.
+2. Diesen Link öffnen und auf „Installieren“ klicken:
+   https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
+3. Updates holt Tampermonkey automatisch (`@updateURL`), standardmäßig einmal täglich – sofort über *Dashboard → Nach Updates suchen*.
+
+Alle gespeicherten Daten (Protokoll, Whitelist, Scan-Stände …) liegen im Tampermonkey-Speicher und bleiben bei Updates erhalten.
+
+---
+
+## Regeln: Wer wird ignoriert?
+
+| Regel | Einstellung | Standard |
+|---|---|---|
+| Männer und ähnliche Profiltypen über einem Höchstalter | `MAX_AGE`, `ONLY_TYPES` | über 49; Mann, Transmann, Non-binary, Transvestit, Männer-Paar |
+| Gemischte Paare mit großem Altersunterschied („Sugar Daddy“) | `COUPLE_AGE_GAP` | ab 18 Jahren Unterschied |
+| Gemischte Paare, bei denen beide alt sind („Geronto-Paar“) | `COUPLE_BOTH_MIN_AGE` | beide ab 60 |
+| Frauen | – | werden nie ignoriert |
+| Whitelist | `WHITELIST` + gelernte Einträge | werden nie ignoriert |
+
+Vor dem Ignorieren schreibt das Skript eine Profilnotiz, z. B.
+`Alter Sack (Party) geblockt am 21.10.2026 um 12:00`, `Sugar Daddy (Gruppen) ignoriert am …` oder `Geronto-Paar (Party) ignoriert am …`.
+Die Quelle in Klammern sagt, wo das Mitglied gefunden wurde.
+
+Ignoriert wird über das Profil (Notiz speichern → *Profiloptionen → Profil ignorieren → Ignorieren*) bzw. im Hintergrund über die Ignorierliste `/ignore/`.
+
+`DRY_RUN: true` schaltet einen Testmodus ein, in dem nichts verändert wird.
+
+---
+
+## Whitelist
+
+- **Feste Einträge** in `CONFIG.WHITELIST`, gruppiert nach Grund (Veranstalter, DJ, Party, Freundeslisten, manuell).
+- **Automatisch ergänzt:**
+  - Moderatoren der gescannten Gruppen (fallen bei Verlust des Moderatorenstatus wieder heraus),
+  - Veranstalter gescannter Partys (dauerhaft, werden ggf. entsperrt),
+  - VIP-Gäste, die im Veranstaltungstext verlinkt sind,
+  - Mitglieder, die über „Nicht mehr ignorieren“ entsperrt wurden.
+- Whitelist-Einträge bekommen eine eigene Profilnotiz, z. B. `Whitelist: Party "…" am …` oder `Whitelist: Veranstalter von "…"`.
+- Profil-Links der Whitelist-Mitglieder werden gelernt, sobald sie irgendwo auftauchen.
+
+---
+
+## Gruppen: Opa-Scan
+
+Auf der Gruppenübersicht `/groups/` steht der Button **„Opa-Scan starten“** neben dem Regionen-Filter.
+
+- Liest die Mitgliederlisten aller eigenen Gruppen im Hintergrund (mit Geschlechterfilter und allen Seiten).
+- Ignoriert Treffer nach den Regeln, Moderatoren kommen auf die Whitelist.
+- Reihenfolge: am längsten nicht bearbeitete Gruppe zuerst.
+- Jede Gruppenkarte zeigt ein Badge mit dem Datum des letzten vollständigen Scans.
+- In Mitgliederlisten wird „Mann“ je nach Alter zu **Jungschwanz / Schwanz / Opa** (mit Opa-Icon).
+
+---
+
+## Partys: Opa-Scan
+
+### Start
+
+Zwei Übersichtsseiten der eigenen Eventanmeldungen haben einen Button **„Opa-Scan starten“**:
+
+- `/profile/appointments/<eigene ID>…html` – neben der Überschrift „Eventanmeldungen“
+- `/dates_partys/events/registrations/` („Dates & Events“) – links neben „Vergangene Events“; das Skript lädt vorher alle per Scrollen nachladbaren Partys
+
+### Ablauf (im Hintergrund)
+
+Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, ein Popup zeigt Fortschritt, Statistik und „Abbrechen“. Für jede Party:
+
+1. Veranstalter dauerhaft auf die Whitelist (und ggf. entsperren).
+2. VIP-Gäste aus dem Veranstaltungstext auf die Whitelist.
+3. Gästeliste „Alle“ vollständig lesen.
+4. Jede Anmeldung einordnen:
+   - Paare werden direkt anhand der beiden Altersangaben entschieden,
+   - Männer etc. werden nur auf dem Profil geprüft, wenn schon das Anmeldealter über `MAX_AGE` liegt,
+   - Frauen, externe und anonyme Anmeldungen, Shops sowie Club-/Veranstalter-Profile (`business_profile`) werden übersprungen.
+5. Profile im Hintergrund prüfen (Ergebnis wird 1 Jahr zwischengespeichert) und Treffer ignorieren.
+
+**Effizienz:**
+- Erneute Scans prüfen nur Neuanmeldungen seit dem letzten Scan; ändern sich die Regeln, wird automatisch wieder vollständig gescannt.
+- Reihenfolge: am längsten nicht gescannte Party zuerst – die nächste anstehende Party wird vorgezogen, wenn alle schon einmal gescannt wurden und der älteste Scan jünger ist als die Zeit bis zu dieser Party.
+- Fehlschläge werden mit Party, Profil-Link, Schritt und Meldung gespeichert und sind exportierbar.
+
+### AWO-Faktor
+
+Ein Maß für den Opa-Anteil einer Party:
+
+- **Männer:** Opas ÷ erwartete Männer, mit erwartet = ⌈Jungschwänze/3⌉ + ⌈Schwänze·2/3⌉ + Opas
+- **Paare:** Geronto-Paare (beide ab 60, Einzelalter ab 60 oder Sugar Daddy) ÷ alle Paare
+- **AWO = ⅔ · Männer + ⅓ · Paare** (fehlt eine Gruppe, zählt nur die andere)
+- Farben: unter 10 % hellgrün, unter 25 % grün, unter 35 % orange, ab 35 % rot
+
+Angezeigt wird er auf der Event-Seite (rechts in der Reiterleiste), als Badge auf den Karten der Eventanmeldungen und auf „Dates & Events“ hinter „… Personen angemeldet.“ samt Zeitpunkt des letzten Scans.
+
+### Event-Seite
+
+- Die Gästeliste wird im Hintergrund in zusätzliche Reiter aufgeteilt: **Männer → Jungschwänze / Schwänze / Opas**, **Paare → Paare / Geronto-Paare**. Die Originalliste bleibt sichtbar, bis die Reiter fertig sind.
+- Gäste werden nach Anmeldealter eingefärbt; ignorierte Mitglieder bekommen ein rotes X.
+- Klick auf ein ignoriertes Mitglied öffnet ein Popup *„Du ignorierst …“* mit Grund (Profilnotiz) und den Buttons **Trotzdem öffnen**, **Nicht mehr ignorieren** (entsperrt und setzt auf die Whitelist) und **Abbrechen**.
+- Reiter **„Opa-Liste“** (zwischen „Dates“ und „Kommentare“): Testlauf des Scans für diese Party; listet alphabetisch alle bereits ignorierten bzw. die Kriterien erfüllenden Gäste mit Profil-Links und der Wahl *Ignorieren / Whitelist*, dann „Anwenden“.
+
+---
+
+## Mitgliedersuche
+
+Bisherige Behandlung der Suche `/member/` (wird demnächst abgeschaltet und neu implementiert, siehe „In Planung“):
+
+- Ergebnisse vollständig nachladen (Scrollen, dann „Mehr Ergebnisse“), Treffer einfärben und mit Badges (Alter, Grund) versehen.
+- Treffer nacheinander über das Profil ignorieren; optional im Automatik-Modus.
+- Bereits ignorierte Mitglieder ausblenden; Mitglieder, die genau `MAX_AGE` alt sind, kommen auf die Vormerkliste und werden nach ihrem Geburtstag erneut geprüft.
+- Header-Badge mit der Zahl der blockierten Opas.
+
+---
+
+## Profilseiten
+
+- „Mann“ wird im Profilkopf zu Jungschwanz / Schwanz / Opa (mit Opa-Icon).
+- Alter, Typ und „zuletzt online“ werden mitgeschrieben; daraus berechnet das Skript Geburtsjahr-Spannen (bei Paaren für beide Personen).
+
+---
+
+## Exporte und Menü
+
+Im Tampermonkey-Menü (alle Exporte als CSV mit `;`, Excel-tauglich):
+
+| Menüeintrag | Inhalt |
+|---|---|
+| Automatik an/aus | Automatik-Modus der (alten) Mitgliedersuche |
+| Liste exportieren | alle vom Skript ignorierten Mitglieder mit Quelle, Grund, Zeitpunkt |
+| alle Konten mit Geburtsjahr exportieren | alle gesehenen Konten mit Geburtsjahr-Spannen |
+| Vorgemerkte exportieren | Mitglieder, die genau `MAX_AGE` alt sind (Vormerkliste) |
+| Online-Angaben exportieren | vorkommende „zuletzt online“-Texte |
+| Whitelist exportieren | feste und gelernte Whitelist mit Grund |
+| Gruppen (zuletzt bearbeitet) exportieren | Gruppen mit Datum des letzten Scans |
+| Fehlschläge des Party-Scans exportieren / löschen | gespeicherte Fehlschläge |
+| Partys beim nächsten Scan vollständig prüfen | vergisst die bereits geprüften Anmeldungen |
+| Lauf zurücksetzen | Notfall: beendet alle laufenden Vorgänge und gibt die Tab-Sperre frei |
+
+---
+
+## Technisches
+
+- **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
+- **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
+- **Fehleranzeige:** Startfehler erscheinen in einem Panel mit „Alles zurücksetzen“.
+- **Umkreise:** `CONFIG.AREAS` enthält 90 Städte, deren 50-km-Umkreise ganz Deutschland abdecken – gruppiert nach Bundesland (NRW zuerst und vollständig, dann absteigend). Grundlage für die geplante systematische Suche.
+
+---
+
+## In Planung
+
+- **Mitgliedersuche neu:** eigener Opa-Lupen-Button im Seitenkopf
+  - „Mit aktuellen Sucheinstellungen filtern“: alle Ergebnisse nachladen, Treffer bestimmen und im Hintergrund ignorieren
+  - „Systematische Suche“: per Deeplink alle gewählten Umkreise und jedes Alter einzeln (70+ bis Untergrenze) abarbeiten, jede Suche wiederholen, bis keine neuen Profile mehr erscheinen; Einstellungen werden gemerkt, Protokoll exportierbar
+- **Party-Scan:** Start ohne Browser-Meldungen direkt im Scan-Popup („Jetzt scannen …“)
+- **Einheitliche Popups** mit großen Buttons im JOYclub-Stil
