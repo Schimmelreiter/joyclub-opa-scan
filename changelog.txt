@@ -1,6 +1,11 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.71 (21.10.2026)
+- Wartungsseiten erkennen: bis zur angegebenen Uhrzeit + 5–10 min nicht auf JOYclub zugreifen, dann weitermachen
+- Abmeldung erkennen: einmaliger automatischer Login mit ausgefüllten Zugangsdaten (max. 1× in 30 min), sonst Scan anhalten
+- Systematische Suche lässt sich nach Unterbrechung fortsetzen
+
 1.70 (21.10.2026)
 - Mitgliedersuche neu: Opa-Lupen-Button im Seitenkopf, „Mit aktuellen Sucheinstellungen filtern“ und „Systematische Suche“ (Umkreise × Alter per Deeplink, Wiederholungen, Protokoll, Exporte)
 - Alte Behandlung der Mitgliedersuche abgeschaltet (MEMBER_SEARCH: false)

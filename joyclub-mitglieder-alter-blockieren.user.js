@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.70
+// @version      1.71
 // @description  Opa-Scan für JOYclub: Gruppen, Partys und Mitgliedersuche nach Alter bzw. Altersunterschied durchsuchen und Treffer ignorieren; Whitelist, AWO-Faktor, Exporte.
 // @match        https://www.joyclub.de/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=joyclub.de
@@ -1359,8 +1359,8 @@
   async function syncIgnoreList(force = false) {
     if (!force && Date.now() - GM_getValue(K_IGNORED_TS, 0) < CONFIG.IGNORE_SYNC_MIN * 60000) return getIgnored();
     try {
-      const r = await fetch(location.origin + CONFIG.IGNORE_PAGE_PATH + '/', { credentials: 'include' });
-      const html = await r.text();
+      const r = await jfetch(location.origin + CONFIG.IGNORE_PAGE_PATH + '/');
+      const html = r.html;
       const list = parseIgnoreList(new DOMParser().parseFromString(html, 'text/html'));
       if (Object.keys(list).length || /user_ignore_name/.test(html)) saveIgnored(list);
       return list;
@@ -1916,9 +1916,9 @@
 
   // ---- Gruppen-Startseite (im Hintergrund geladen) ----
   async function fetchDoc(url) {
-    const r = await fetch(url, { credentials: 'include' });
+    const r = await jfetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return new DOMParser().parseFromString(await r.text(), 'text/html');
+    return r.doc || new DOMParser().parseFromString(r.html, 'text/html');
   }
   function parseGroupStart(doc, g) {
     const nameEl = doc.querySelector('[data-group-name]');
@@ -2791,9 +2791,9 @@
         if (stop()) break;
         try {
           await sleep(rand(600, 1300));
-          const r = await fetch(g.url, { credentials: 'include' });
+          const r = await jfetch(g.url);
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+          const doc = r.doc || new DOMParser().parseFromString(r.html, 'text/html');
           const info = parseProfileDoc(doc);
           fetched++;
           let finalPath = ''; try { finalPath = new URL(r.url).pathname; } catch (e) { /* egal */ }
@@ -2804,7 +2804,7 @@
             recordAccounts([{ path: g.path, name: info.name || g.name, ages: info.ages, type: info.type }]);
             d = cachedDecision(g, wl);
           } else failed++;
-        } catch (e) { failed++; }
+        } catch (e) { failed++; if (e.fatal && bgScan) { bgScan.stop = true; bgScan.stopMsg = bgScan.stopMsg || e.message; } }
       }
       if (d && d.r === 'block') {
         x.c = { kind: 'ignore', why: `Profil: ${d.type}, ${d.ages.join('+')}`, verified: true,
@@ -3789,6 +3789,170 @@
   // Die Seite „Eventanmeldungen“ bleibt offen; Event-Seiten und Profile werden in unsichtbaren Frames geöffnet.
   // Fortschritt + Abbrechen in einem Popup in der Bildschirmmitte. Die Seite darf währenddessen nicht verlassen werden.
   // =====================================================================
+
+  // =====================================================================
+  // ---------- Wartung / Abmeldung erkennen ----------
+  // angemeldet  = <body data-session-user-id="…">
+  // Login-Seite = nicht angemeldet, aber Passwortfeld vorhanden → einmal automatisch einloggen (max. 1× in 30 min)
+  // Wartung     = weder angemeldet noch Login-Feld → bis zur angegebenen Uhrzeit + 5–10 min gar nicht zugreifen
+  // =====================================================================
+  const K_GATE = 'jaf_gate';            // { type:'maint', until, text, since } – gilt für alle Tabs
+  const K_LOGIN_TRY = 'jaf_login_try';  // Zeitpunkt des letzten automatischen Login-Versuchs
+  const K_PAUSES = 'jaf_pauses';        // [{ since, until, end, text }]
+  const LOGIN_RETRY_MS = 30 * 60000;
+  // Uhrzeit aus dem Wartungstext („bis voraussichtlich 17 Uhr“, „17:30 Uhr“, „until approximately 5 pm“) → Zeitstempel oder null
+  function parseUntil(txt) {
+    const now = new Date();
+    let h = null, m = 0;
+    let mm = (txt || '').match(/bis\s+(?:voraussichtlich\s+|ca\.\s*|etwa\s+|circa\s+)*(\d{1,2})(?:[:.](\d{2}))?\s*Uhr/i);
+    if (mm) { h = +mm[1]; m = +(mm[2] || 0); }
+    else if ((mm = (txt || '').match(/until\s+(?:approximately\s+|about\s+|approx\.\s*)*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i))) {
+      h = (+mm[1] % 12) + (/pm/i.test(mm[3]) ? 12 : 0); m = +(mm[2] || 0);
+    }
+    if (h == null || h > 23 || m > 59) return null;
+    const t = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m).getTime();
+    return t > Date.now() ? t : null; // schon vorbei → unbekannt
+  }
+  // Zustand einer (geladenen oder abgerufenen) Seite: null = angemeldet, sonst { type:'login'|'maint', text, until }
+  function pageGate(doc = document, html = '') {
+    const b = doc && doc.body;
+    if (!b && !html) return null;
+    if (b && (b.getAttribute('data-session-user-id') || '').trim()) return null;
+    if (doc.querySelector('.navigation_user_box')) return null;
+    const hasPw = !!doc.querySelector('input[type="password"]') || /type\s*=\s*["']?password/i.test(html) ||
+      (doc === document && deepAll().some((e) => e.tagName === 'INPUT' && e.type === 'password'));
+    if (hasPw) return { type: 'login' };
+    const text = ((b && (b.innerText || b.textContent)) || '').replace(/\s+/g, ' ').trim();
+    const main = (doc.querySelector('#custom_msg_container, h1') || {}).textContent || '';
+    return { type: 'maint', text: (main.trim() || text).slice(0, 240), until: parseUntil(text) };
+  }
+  const scanActive = () => !!(window.__jafBgBusy || (bgScan && bgScan.running) || getState().running || getOpa().running || getEv().running);
+  const fmtHM = (t) => { const d = new Date(t); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+  function gateNotice(msg) {
+    if (document.getElementById('jaf-bg-popup')) bgUi(null, msg, null, null);
+    else { try { panel(); log(msg); } catch (e) { /* egal */ } }
+  }
+  // gespeicherte Wartungspause (auch aus anderem Tab) abwarten
+  async function gateWaitStored() {
+    const g = GM_getValue(K_GATE, null);
+    if (!g || !g.until || g.until <= Date.now()) return;
+    const head = `JOYclub ist vorübergehend nicht erreichbar${g.text && /bis/i.test(g.text) ? '' : ''}`;
+    while (Date.now() < g.until) {
+      if (bgScan && bgScan.stop) throw new Error('abgebrochen');
+      const left = Math.ceil((g.until - Date.now()) / 60000);
+      gateNotice(`${head} – nächster Versuch um ${fmtHM(g.until)} (noch ${left} min). Bis dahin kein Zugriff auf JOYclub.`);
+      await sleep(Math.min(15000, Math.max(500, g.until - Date.now())));
+      const g2 = GM_getValue(K_GATE, null);
+      if (!g2 || g2.until !== g.until) break; // anderer Tab hat neu entschieden
+    }
+  }
+  // Seite war Wartung/Login: warten bzw. einloggen. Wirft bei Abbruch oder gescheitertem Login.
+  async function handleGate(g, url) {
+    if (g.type === 'maint') {
+      const base = g.until || (Date.now() + 30 * 60000);
+      const until = base + rand(5 * 60000, 10 * 60000);
+      const prev = GM_getValue(K_GATE, null);
+      if (!prev || !prev.until || prev.until < until) GM_setValue(K_GATE, { type: 'maint', until, text: g.text || '', since: Date.now() });
+      const pauses = GM_getValue(K_PAUSES, []);
+      pauses.push({ since: Date.now(), until, text: g.text || '' });
+      GM_setValue(K_PAUSES, pauses.slice(-500));
+      console.log('[Alter-Filter] Wartungsseite erkannt – Pause bis', fmtTs(until), g.text);
+      await gateWaitStored();
+      const pl = GM_getValue(K_PAUSES, []); if (pl.length) { pl[pl.length - 1].end = Date.now(); GM_setValue(K_PAUSES, pl); }
+      return;
+    }
+    // abgemeldet
+    const last = GM_getValue(K_LOGIN_TRY, 0);
+    if (Date.now() - last < LOGIN_RETRY_MS) throw Object.assign(new Error('Abgemeldet – bitte bei JOYclub anmelden (automatischer Login erst wieder ab ' + fmtHM(last + LOGIN_RETRY_MS) + ' möglich).'), { fatal: true });
+    GM_setValue(K_LOGIN_TRY, Date.now());
+    gateNotice('Abgemeldet – versuche, mit den gespeicherten Zugangsdaten einzuloggen …');
+    let r;
+    try { r = await bgFrame(url || location.origin + '/', 'jaf-bg-login', null, 60000, true); } catch (e) { r = { loggedIn: false, msg: e.message }; }
+    if (!r || !r.loggedIn) throw Object.assign(new Error('Abgemeldet – bitte bei JOYclub anmelden. ' + ((r && r.msg) || '')), { fatal: true });
+    gateNotice('Wieder eingeloggt – weiter geht es.');
+  }
+  // fetch mit Wartungs-/Login-Erkennung: liefert { ok, status, url, html, doc }
+  async function jfetch(url, opt = {}) {
+    for (let i = 0; i < 50; i++) {
+      await gateWaitStored();
+      const r = await fetch(url, Object.assign({ credentials: 'include' }, opt));
+      const ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
+      const html = await r.text();
+      if (!/html/i.test(ct) && !/^\s*</.test(html)) return { ok: r.ok, status: r.status, url: r.url, html, doc: null };
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const g = pageGate(doc, html);
+      if (!g) return { ok: r.ok, status: r.status, url: r.url, html, doc };
+      if (!scanActive()) throw Object.assign(new Error(g.type === 'login' ? 'Abgemeldet' : 'JOYclub ist vorübergehend nicht erreichbar'), { gate: g });
+      await handleGate(g, r.url);
+    }
+    throw new Error('JOYclub bleibt nicht erreichbar');
+  }
+  // Hintergrund-Frame mit Wartungs-/Login-Behandlung (für Scans)
+  async function bgFrameG(url, name, onProgress, timeoutMs) {
+    for (let i = 0; i < 50; i++) {
+      await gateWaitStored();
+      try { return await bgFrame(url, name, onProgress, timeoutMs); } catch (e) {
+        if (!e.gate) throw e;
+        await handleGate(e.gate, e.gateUrl || url);
+      }
+    }
+    throw new Error('JOYclub bleibt nicht erreichbar');
+  }
+  // IM Frame „jaf-bg-login“: Login-Seite – ausgefüllte Felder abschicken (einmal), danach Ergebnis melden
+  const loginFrame = () => loginFlow(bgPost);
+  async function loginFlow(bgPost) {
+    const KEY = 'jaf_login_submitted';
+    await sleep(1500);
+    const g = pageGate(document);
+    if (!g) { sessionStorage.removeItem(KEY); bgPost({ loggedIn: true }); return; }
+    if (sessionStorage.getItem(KEY)) { bgPost({ loggedIn: false, msg: 'Login nicht erfolgreich.' }); return; }
+    if (g.type !== 'login') { bgPost({ loggedIn: false, msg: 'Keine Login-Seite (Wartung?).' }); return; }
+    const all = deepAll();
+    const pw = all.find((e) => e.tagName === 'INPUT' && e.type === 'password');
+    const form = pw && (pw.form || pw.closest('form'));
+    const scope = form ? [...form.querySelectorAll('*')] : all;
+    const user = scope.find((e) => e.tagName === 'INPUT' && /^(text|email)$/i.test(e.type || 'text') && e !== pw && reallyVisible(e)) ||
+      all.find((e) => e.tagName === 'INPUT' && /^(text|email)$/i.test(e.type || 'text') && /user|nick|name|mail|login/i.test(e.name + ' ' + e.id));
+    if (!pw || !pw.value || !user || !user.value) { bgPost({ loggedIn: false, msg: 'Benutzername/Passwort nicht ausgefüllt (der Browser gibt gespeicherte Passwörter evtl. erst nach einem Klick frei).' }); return; }
+    // „Angemeldet bleiben“ anhaken
+    const stay = all.find((e) => /angemeldet bleiben/i.test((e.getAttribute && (e.getAttribute('label') || e.getAttribute('aria-label'))) || '') ||
+      (e.tagName === 'LABEL' && /angemeldet bleiben/i.test(e.textContent || '')));
+    if (stay) {
+      const cb = stay.tagName === 'LABEL' ? (stay.control || stay.querySelector('input[type=checkbox]')) : (stay.shadowRoot && stay.shadowRoot.querySelector('input[type=checkbox]')) || stay;
+      const checked = cb && (cb.checked === true || cb.getAttribute('checked') !== null || cb.getAttribute('aria-checked') === 'true');
+      if (!checked) await realClick(cb || stay);
+    }
+    const btn = all.find((e) => /^(BUTTON|J-BUTTON|INPUT)$/.test(e.tagName) && /^\s*(log\s*-?\s*in|einloggen|anmelden)\s*$/i.test(e.tagName === 'INPUT' ? e.value || '' : e.textContent || '') && reallyVisible(e));
+    sessionStorage.setItem(KEY, '1');
+    if (btn) await realClick(btn); else if (form) (form.requestSubmit ? form.requestSubmit() : form.submit());
+    else { bgPost({ loggedIn: false, msg: 'Login-Button nicht gefunden.' }); return; }
+    // Seite lädt neu → Frame-Skript startet erneut und meldet das Ergebnis; falls nicht (AJAX-Login):
+    await sleep(8000);
+    bgPost({ loggedIn: !pageGate(document), msg: 'nach dem Absenden' });
+  }
+  // oberste Seite ist Wartung/Login, während ein Scan mit Seitenwechsel läuft → warten bzw. einloggen. true = behandelt
+  async function topGate() {
+    const g = pageGate(document);
+    if (!g) { sessionStorage.removeItem('jaf_login_submitted'); return false; }
+    if (!scanActive() && !sessionStorage.getItem('jaf_login_submitted')) return false;
+    const p = panel(); p.innerHTML = '<b>Alter-Filter</b><br>';
+    if (g.type === 'maint') {
+      const prev = GM_getValue(K_GATE, null);
+      let until = prev && prev.until > Date.now() ? prev.until : 0;
+      if (!until) { until = (g.until || Date.now() + 30 * 60000) + rand(5 * 60000, 10 * 60000); GM_setValue(K_GATE, { type: 'maint', until, text: g.text || '', since: Date.now() }); }
+      log(`JOYclub ist vorübergehend nicht erreichbar. Der laufende Scan pausiert – nächster Versuch um ${fmtHM(until)} (Seite lädt dann neu).`);
+      setTimeout(() => location.reload(), until - Date.now());
+      return true;
+    }
+    if (sessionStorage.getItem('jaf_login_submitted')) { sessionStorage.removeItem('jaf_login_submitted'); log('Automatischer Login nicht erfolgreich – bitte bei JOYclub anmelden.'); return true; }
+    const last = GM_getValue(K_LOGIN_TRY, 0);
+    if (Date.now() - last < LOGIN_RETRY_MS) { log(`Abgemeldet – bitte bei JOYclub anmelden (automatischer Login erst wieder ab ${fmtHM(last + LOGIN_RETRY_MS)}).`); return true; }
+    GM_setValue(K_LOGIN_TRY, Date.now());
+    log('Abgemeldet – versuche, mit den gespeicherten Zugangsdaten einzuloggen …');
+    await loginFlow((r) => { if (!r.loggedIn) log('Automatischer Login nicht möglich: ' + (r.msg || '') + ' Bitte bei JOYclub anmelden.'); });
+    return true;
+  }
+
   // allgemeiner Hintergrund-Frame: lädt url mit Frame-Namen name, wartet auf die Antwort (postMessage jaf:'bg')
   function bgFrame(url, name, onProgress, timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -3801,7 +3965,8 @@
       const onMsg = (ev) => {
         if (ev.source !== f.contentWindow || !ev.data || ev.data.jaf !== 'bg') return;
         if (ev.data.progress != null) { if (onProgress) onProgress(ev.data.progress); return; }
-        if (ev.data.error) done(reject, new Error(ev.data.error)); else done(resolve, ev.data);
+        if (ev.data.gate) done(reject, Object.assign(new Error(ev.data.gate.type === 'login' ? 'Abgemeldet' : 'JOYclub ist vorübergehend nicht erreichbar'), { gate: ev.data.gate, gateUrl: ev.data.url }));
+        else if (ev.data.error) done(reject, new Error(ev.data.error)); else done(resolve, ev.data);
       };
       const t = setTimeout(() => done(reject, new Error('Zeitüberschreitung')), timeoutMs);
       window.addEventListener('message', onMsg);
@@ -3874,6 +4039,9 @@
 
   async function bgFrameDispatch() {
     const n = window.name || '';
+    if (n === 'jaf-bg-login') return loginFrame();
+    const gate = pageGate(document);
+    if (gate) { bgPost({ gate, url: location.href }); return; }
     if (n === 'jaf-bg-ev') return bgEventFrame();
     if (n.startsWith('jaf-bg-act-')) return bgActFrame();
     if (n.startsWith('jaf-bg-ms')) return msFrame();
@@ -4042,9 +4210,10 @@
         bgUi(head, 'Lade Event-Seite und Gästeliste …', frac0, stats());
         let data;
         try {
-          data = await bgFrame(e.url, 'jaf-bg-ev', (n) => bgUi(null, `Lade Gästeliste … ${n} Anmeldungen`, null, null), 240000);
+          data = await bgFrameG(e.url, 'jaf-bg-ev', (n) => bgUi(null, `Lade Gästeliste … ${n} Anmeldungen`, null, null), 240000);
           firstFrameOk = true;
         } catch (err) {
+          if (err.fatal || bgScan.stop) { bgScan.stop = true; bgScan.stopMsg = bgScan.stopMsg || (err.fatal ? err.message : ''); break; }
           note(`${e.name}: Event-Seite nicht ladbar (${err.message})`);
           addEvFailure({ party: e.name, partyDate: e.date, partyUrl: e.url, step: 'Event-Seite laden', msg: err.message });
           if (!firstFrameOk && ei === 0) throw new Error('Event-Seiten lassen sich im Hintergrund nicht laden.');
@@ -4115,8 +4284,8 @@
           const jobId = Date.now().toString(36) + qi;
           GM_setValue('jaf_bg_job_' + jobId, { item: it, source: 'Party' });
           let r;
-          try { r = await bgFrame(location.origin + it.path, 'jaf-bg-act-' + jobId, null, 120000); }
-          catch (err) { r = { result: 'failed', msg: err.message }; }
+          try { r = await bgFrameG(location.origin + it.path, 'jaf-bg-act-' + jobId, null, 120000); }
+          catch (err) { r = { result: 'failed', msg: err.message }; if (err.fatal || bgScan.stop) { bgScan.stop = true; bgScan.stopMsg = bgScan.stopMsg || (err.fatal ? err.message : ''); } }
           GM_setValue('jaf_bg_job_' + jobId, null);
           if (r.result === 'ignored') st.ignored++; else if (r.result === 'note') st.notes++; else if (r.result === 'skipped') st.skipped++;
           else {
@@ -4142,7 +4311,7 @@
         if (ei < events.length - 1) await sleep(rand(CONFIG.EVENT_DELAY_MIN_MS, CONFIG.EVENT_DELAY_MAX_MS));
       }
       bgTitle(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', false);
-      bgUi(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', bgScan.stop ? 'Abgebrochen.' : 'Alle Partys bearbeitet.', bgScan.stop ? null : 1, stats());
+      bgUi(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', bgScan.stop ? (bgScan.stopMsg || 'Abgebrochen.') : 'Alle Partys bearbeitet.', bgScan.stop ? null : 1, stats());
     } catch (err) {
       bgTitle('Opa-Scan nicht möglich', false);
       bgUi('Opa-Scan nicht möglich', err.message, null, stats());
@@ -4173,6 +4342,7 @@
   const K_MS_LOG = 'jaf_ms_protocol';       // [{ ts, city, land, geoId, age, runs, found, fresh, limit, url, final }]
   const K_MS_FAIL = 'jaf_ms_failures';      // [{ ts, search, name, url, msg }]
   const K_MS_SINGLE = 'jaf_ms_single_age_couples'; // { path: { name, url, ages, ts, search } }
+  const K_MS_RESUME = 'jaf_ms_resume';      // unterbrochene systematische Suche: { opt, ai, ageIdx, nAreas, city, age, ts }
   const MS_TYPES = [['f', 'Frauen', 'frau'], ['m', 'Männer', 'mann'], ['p', 'Paare', 'paar'], ['nb', 'Non-binary', 'nonbinary']];
   const msAreaGroups = () => Object.entries(CONFIG.AREAS || {}).filter(([, l]) => l.length);
   function msSettings() {
@@ -4226,11 +4396,15 @@
     bgUi('', 'Wie soll gesucht werden?', null, '');
     bgPopup().querySelector('.jaf-bg-barwrap').style.display = 'none';
     bgBody(null);
-    bgButtons([
+    const res = GM_getValue(K_MS_RESUME, null);
+    const btns = [
       { label: 'Mit aktuellen Sucheinstellungen filtern', fn: () => msRun({ mode: 'current' }) },
       { label: 'Systematische Suche starten', fn: () => { closeBgPopup(); msSetup(); } },
-      { label: 'Abbrechen', fn: closeBgPopup, focus: true },
-    ]);
+    ];
+    if (res && res.opt) btns.push({ label: `Systematische Suche fortsetzen (Umkreis ${res.ai + 1}/${res.nAreas} ${res.city}, Alter ${res.age >= 70 ? '70+' : res.age})`,
+      fn: () => msRun(Object.assign({}, res.opt, { mode: 'system', startAi: res.ai, startAgeIdx: res.ageIdx })) });
+    btns.push({ label: 'Abbrechen', fn: closeBgPopup, focus: true });
+    bgButtons(btns);
   }
 
   // ---- Popup 2: Einstellungen der systematischen Suche ----
@@ -4366,7 +4540,9 @@
   function exportMsProtocol() {
     const l = GM_getValue(K_MS_LOG, []);
     downloadCsv('mitgliedersuche-protokoll', ['Zeitpunkt', 'Stadt', 'Bundesland', 'Orts-ID', 'Alter', 'Durchläufe ohne neue Treffer', 'Profile gefunden', 'davon neu ignoriert', 'Obergrenze erreicht', 'Such-Link', 'Link nach dem Laden'],
-      l.map((e) => [fmtTs(e.ts), e.city || '', e.land || '', e.geoId ? 'x' + e.geoId : '', e.age >= 70 ? '70+' : e.age, e.runs, e.found, e.ignored, e.limit ? 'ja' : 'nein', e.url || '', e.final || '']));
+      l.map((e) => [fmtTs(e.ts), e.city || '', e.land || '', e.geoId ? 'x' + e.geoId : '', e.age >= 70 ? '70+' : e.age, e.runs, e.found, e.ignored, e.limit ? 'ja' : 'nein', e.url || '', e.final || ''])
+        .concat(GM_getValue(K_PAUSES, []).map((pz) => [fmtTs(pz.since), 'PAUSE (JOYclub nicht erreichbar)', '', '', '', '', '', '', '',
+          `bis ${fmtTs(pz.until)}${pz.end ? ', weiter um ' + fmtTs(pz.end) : ''}`, pz.text || ''])));
     return l.length;
   }
   function exportMsSingleCouples() {
@@ -4397,7 +4573,7 @@
     let testLeft = CONFIG.DRY_RUN ? CONFIG.TEST_MAX_PROFILES : Infinity;
     const singleSeen = new Set();
     // eine Ergebnisliste laden (Frame)
-    const load = async (url, onN) => bgFrame(url, 'jaf-bg-ms' + Date.now().toString(36), onN, 15 * 60000);
+    const load = async (url, onN) => bgFrameG(url, 'jaf-bg-ms' + Date.now().toString(36), onN, 15 * 60000);
     // neue Karten verarbeiten: einordnen, Treffer im Hintergrund ignorieren
     const process = async (cards, search, fracOf) => {
       msRecord(cards, search);
@@ -4417,8 +4593,8 @@
         const jobId = Date.now().toString(36) + qi;
         GM_setValue('jaf_bg_job_' + jobId, { item: it, source: 'Suche' });
         let r;
-        try { r = await bgFrame(location.origin + it.path, 'jaf-bg-act-' + jobId, null, 120000); }
-        catch (err) { r = { result: 'failed', msg: err.message }; }
+        try { r = await bgFrameG(location.origin + it.path, 'jaf-bg-act-' + jobId, null, 120000); }
+        catch (err) { r = { result: 'failed', msg: err.message }; if (err.fatal || bgScan.stop) { bgScan.stop = true; bgScan.stopMsg = bgScan.stopMsg || (err.fatal ? err.message : ''); } }
         GM_setValue('jaf_bg_job_' + jobId, null);
         if (CONFIG.DRY_RUN) testLeft--;
         if (r.result === 'ignored') { st.ignored++; done++; } else if (r.result === 'skipped' || r.result === 'note') st.skipped++;
@@ -4446,12 +4622,16 @@
         const w = (age) => (age >= 70 ? 10 : 1);
         const wSum = ages.reduce((s2, x) => s2 + w(x), 0);
         const proto = GM_getValue(K_MS_LOG, []);
-        for (let ai = 0; ai < areas.length && !bgScan.stop; ai++) {
+        const optSave = { types: opt.types, min: opt.min, max: opt.max, lands: opt.lands };
+        for (let ai = opt.startAi || 0; ai < areas.length && !bgScan.stop; ai++) {
           const { a, land } = areas[ai];
           const head = `Umkreis ${ai + 1}/${areas.length}: ${a[0]} (${land})`;
           let wDone = 0;
-          for (const age of ages) {
+          for (let gi = 0; gi < ages.length; gi++) {
+            const age = ages[gi];
+            if (ai === opt.startAi && gi < (opt.startAgeIdx || 0)) { wDone += w(age); continue; } // beim Fortsetzen überspringen
             if (bgScan.stop) break;
+            GM_setValue(K_MS_RESUME, { opt: optSave, ai, ageIdx: gi, nAreas: areas.length, city: a[0], age, ts: Date.now() });
             const url = msUrl(a, opt.types, age);
             const ageLbl = age >= 70 ? '70+' : String(age);
             const base = (ai + wDone / wSum) / areas.length, span = w(age) / wSum / areas.length;
@@ -4465,7 +4645,10 @@
               bgUi(head, `${step} · lade Ergebnisse …`, fracOf(0), stats());
               let data;
               try { data = await load(url, (n) => bgUi(null, `${step} · lade Ergebnisse … ${n}`, fracOf(0.25), null)); }
-              catch (err) { st.failed++; msAddFailure({ search: `${a[0]} ${ageLbl}`, url, msg: 'Suche nicht ladbar: ' + err.message }); break; }
+              catch (err) {
+                if (err.fatal || bgScan.stop) { bgScan.stop = true; bgScan.stopMsg = bgScan.stopMsg || (err.fatal ? err.message : ''); break; }
+                st.failed++; msAddFailure({ search: `${a[0]} ${ageLbl}`, url, msg: 'Suche nicht ladbar: ' + err.message }); break;
+              }
               final = data.final || final;
               const fresh = (data.cards || []).filter((c) => { const k = idOf(c.path) || c.path; if (seen.has(k)) return false; seen.add(k); return true; });
               if (!fresh.length) break;
@@ -4482,11 +4665,12 @@
           }
         }
         headline = `${areas.length} Umkreise`;
+        if (!bgScan.stop) GM_setValue(K_MS_RESUME, null);
       }
       const dur = Math.round((Date.now() - t0) / 60000);
       const durTxt = dur >= 60 ? `${Math.floor(dur / 60)}:${pad2(dur % 60)} h` : `${dur} min`;
       bgTitle(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', false);
-      bgUi(bgScan.stop ? 'Abgebrochen' : (opt.mode === 'current' ? 'Aktuelle Suche abgeschlossen' : 'Systematische Suche abgeschlossen'),
+      bgUi(bgScan.stop ? (bgScan.stopMsg || 'Abgebrochen') : (opt.mode === 'current' ? 'Aktuelle Suche abgeschlossen' : 'Systematische Suche abgeschlossen'),
         `${headline}${opt.mode === 'system' ? ` · ${st.searches.toLocaleString('de-DE')} Einzelsuchen` : ''} · Dauer ${durTxt}`, bgScan.stop ? null : 1, stats());
     } catch (err) {
       bgTitle('Opa-Scan nicht möglich', false);
@@ -4512,6 +4696,7 @@
 
   // ---------- Start ----------
   async function init() {
+    if (await topGate()) return;
     await peekInit();
     if (await noteJobInit()) return;
     if (await opaInit()) return;

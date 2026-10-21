@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach festen Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – in Gruppen, auf Partys und in der Mitgliedersuche.
 
-Stand: Version 1.70 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 1.71 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -138,7 +138,22 @@ Ablauf:
 
 - Das Popup während des Scans entspricht dem des Party-Scans (Warnhinweis, Fortschrittsbalken, Statistik, Abbrechen); am Ende gibt es Export-Buttons für Protokoll, Paare mit einer Altersangabe und Fehlschläge.
 - Header-Badge mit der Zahl der vom Skript blockierten Opas.
+- Eine unterbrochene systematische Suche (Abbrechen, Abmeldung) lässt sich im Auswahl-Popup an derselben Stelle fortsetzen.
 - Die alte Behandlung der Suche (Einfärben, Badges, Automatik, Ignorieren im Tab, Umbenennung „Mann“) ist mit `MEMBER_SEARCH: false` abgeschaltet, der Code bleibt im Skript.
+
+---
+
+## Wartung und Abmeldung
+
+Alle Scans (Party, Mitgliedersuche, Gruppen, Profilprüfungen im Hintergrund) erkennen, wenn JOYclub statt der gewünschten Seite etwas anderes liefert:
+
+| Seite | Erkennung | Reaktion |
+|---|---|---|
+| angemeldet | `body[data-session-user-id]` | normal weiter |
+| Login-Seite | nicht angemeldet, Passwortfeld vorhanden | sind Benutzername und Passwort (z. B. vom Browser) ausgefüllt: „Angemeldet bleiben“ anhaken, „Login“ klicken und weitermachen – höchstens einmal pro Abmeldung und einmal in 30 Minuten; sonst hält der Scan an mit „Bitte bei JOYclub anmelden“ |
+| Wartungsseite | weder angemeldet noch Login-Feld | Uhrzeit aus dem Hinweis lesen („bis voraussichtlich 17 Uhr“) und bis dahin plus zufällig 5–10 Minuten **gar nicht** auf JOYclub zugreifen (ohne Uhrzeit: 30 Minuten plus 5–10); danach den unterbrochenen Schritt wiederholen |
+
+Pausen zählen nicht als Fehlschlag, gelten für alle Tabs und stehen im Protokoll-Export der Mitgliedersuche.
 
 ---
 
