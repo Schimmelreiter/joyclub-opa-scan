@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.74
+// @version      1.75
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -12,6 +12,7 @@
 // @grant        GM_listValues
 // @grant        GM_deleteValue
 // @grant        GM_addValueChangeListener
+// @grant        GM_setClipboard
 // @run-at       document-idle
 // @homepageURL  https://github.com/Schimmelreiter/joyclub-opa-scan
 // @updateURL    https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
@@ -3509,53 +3510,100 @@
       guestAll = false; window.__jafSplits = 'done'; renderAwo(); return;
     }
     guestAll = items.map(parseGuest);
-    // Original-Reiter je Gruppe (ohne eigenen Reiter: hinter „Alle“)
+    // Herkunft (Original-Reiter von JOYclub) und Ziel jeder Anmeldung
     const allLink = document.querySelector('#guest_list a[href="#guest_alle"]');
-    for (const grp of GROUP_KEYS) {
-      if (!CONFIG.GROUPS[grp].visual) continue;
-      const oLink = document.querySelector(`#guest_list a[href="#guest_${GUEST_PANE[grp]}"]`);
-      const anchor = oLink || allLink;
-      if (!anchor) continue;
-      const oLi = anchor.closest('li');
-      const content = (document.getElementById('guest_' + GUEST_PANE[grp]) || document.getElementById('guest_alle') || {}).parentElement;
-      if (!content) continue;
-      const tabs = groupTabs(grp);
-      const buckets = {};
-      tabs.forEach((t) => { buckets[t.key] = []; });
-      items.forEach((li, i) => {
-        const g = guestAll[i];
-        if (g.extern || guestGroup(g) !== grp) return;
-        const st = guestStage(g, grp);
-        const t = tabs.find((x) => x.stages.includes(st)) || tabs[tabs.length - 1];
-        buckets[t.key].push(li.cloneNode(true));
-      });
-      if (!tabs.some((t) => buckets[t.key].length) && !oLink) continue;
-      let after = oLi;
-      for (const t of tabs) {
-        const id = `jaf_guest_${t.key}`;
-        const pane = document.createElement('div');
-        pane.id = id; pane.className = 'tab-pane cards user_cards ov_h mb5'; pane.setAttribute('role', 'tabpanel');
-        const ul = document.createElement('ul');
-        ul.className = 'date_list ov_h'; ul.setAttribute('data-max-columns', '4');
-        buckets[t.key].forEach((li) => ul.appendChild(li));
-        pane.appendChild(ul);
-        content.appendChild(pane);
-        const tli = document.createElement('li');
-        tli.className = 'jaf-guest-tab'; tli.setAttribute('role', 'presentation'); tli.title = `${GROUP_LABELS[grp]}: ${t.label}`;
-        tli.innerHTML = `<a href="#${id}" data-toggle="tab" aria-controls="${id}">${escHtml(t.label)} <span>(${buckets[t.key].length})</span></a>`;
-        tli.querySelector('a').addEventListener('click', (e) => {
-          e.preventDefault();
-          oLi.parentElement.querySelectorAll(':scope > li').forEach((x) => x.classList.remove('active'));
-          tli.classList.add('active');
-          content.querySelectorAll(':scope > .tab-pane').forEach((x) => x.classList.remove('active', 'in'));
-          pane.classList.add('active', 'in');
-        });
-        after.after(tli); after = tli;
+    const contentOf = () => (document.getElementById('guest_alle') || document.querySelector('#guest_list .tab-pane') || {}).parentElement;
+    const origGroup = (g) => (isCoupleType(g.type) || g.num === '3' ? 'p' : g.num === '2' || /frau/i.test(g.type || '') ? 'f' : 'm');
+    const splitOn = (grp) => !!CONFIG.GROUPS[grp].visual;
+    const tabClick = (tli, pane, content, ul) => (e) => {
+      e.preventDefault();
+      ul.querySelectorAll(':scope > li').forEach((x) => x.classList.remove('active'));
+      tli.classList.add('active');
+      content.querySelectorAll(':scope > .tab-pane').forEach((x) => x.classList.remove('active', 'in'));
+      pane.classList.add('active', 'in');
+    };
+    const mkTab = (id, label, title, n, after, content) => {
+      const pane = document.createElement('div');
+      pane.id = id; pane.className = 'tab-pane cards user_cards ov_h mb5'; pane.setAttribute('role', 'tabpanel');
+      const ulc = document.createElement('ul');
+      ulc.className = 'date_list ov_h'; ulc.setAttribute('data-max-columns', '4');
+      pane.appendChild(ulc);
+      content.appendChild(pane);
+      const tli = document.createElement('li');
+      tli.className = 'jaf-guest-tab'; tli.setAttribute('role', 'presentation'); tli.title = title;
+      tli.innerHTML = `<a href="#${id}" data-toggle="tab" aria-controls="${id}">${escHtml(label)} <span>(${n})</span></a>`;
+      tli.querySelector('a').addEventListener('click', tabClick(tli, pane, content, after.parentElement));
+      after.after(tli);
+      return { tli, pane, ul: ulc };
+    };
+    // Zahl in einem Original-Reiter anpassen („Frauen (25)“)
+    const bumpCount = (link, d) => {
+      const walk = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
+      while (walk.nextNode()) {
+        const n = walk.currentNode;
+        if (/\(\d+\)/.test(n.nodeValue)) { n.nodeValue = n.nodeValue.replace(/\((\d+)\)/, (m0, x) => `(${+x + d})`); return; }
       }
-      if (oLink) {
+    };
+    const content = contentOf();
+    const buckets = {}; // Gruppe → Reiter-Schlüssel → [li]
+    const moved = {};   // Ziel-Gruppe (ohne Aufteilung) → [li] aus aufgeteilten Gruppen
+    const hasNew = {}, srcCount = {};
+    items.forEach((li, i) => {
+      const g = guestAll[i];
+      if (g.extern) return;
+      const tgt = guestGroup(g) || origGroup(g);
+      const src = origGroup(g);
+      srcCount[src] = (srcCount[src] || 0) + 1;
+      if (splitOn(tgt)) {
+        const tabs = groupTabs(tgt);
+        const st = guestStage(g, tgt);
+        const t = tabs.find((x) => x.stages.includes(st)) || tabs[tabs.length - 1];
+        ((buckets[tgt] = buckets[tgt] || {})[t.key] = buckets[tgt][t.key] || []).push(li.cloneNode(true));
+        hasNew[tgt] = true;
+      } else if (splitOn(src) && tgt !== src) {
+        (moved[tgt] = moved[tgt] || []).push(li.cloneNode(true));
+      }
+    });
+    if (content) {
+      // 1. neue Reiter je aufgeteilter Gruppe – nur nicht leere
+      for (const grp of GROUP_KEYS) {
+        if (!splitOn(grp) || !hasNew[grp]) continue;
+        const oLink = document.querySelector(`#guest_list a[href="#guest_${GUEST_PANE[grp]}"]`);
+        const anchor = oLink || allLink;
+        if (!anchor) continue;
+        const oLi = anchor.closest('li');
+        let after = oLi;
+        for (const t of groupTabs(grp)) {
+          const list = (buckets[grp] || {})[t.key] || [];
+          if (!list.length) continue;
+          const tab = mkTab(`jaf_guest_${t.key}`, t.label, `${GROUP_LABELS[grp]}: ${t.label}`, list.length, after, content);
+          list.forEach((li) => tab.ul.appendChild(li));
+          after = tab.tli;
+        }
+      }
+      // 2. Anmeldungen ohne neuen Reiter in den Original-Reiter ihrer Gruppe (fehlt er: anlegen)
+      for (const [grp, list] of Object.entries(moved)) {
+        let oLink = document.querySelector(`#guest_list a[href="#guest_${GUEST_PANE[grp]}"]`);
+        let pane = document.getElementById('guest_' + GUEST_PANE[grp]);
+        let ulc = pane && pane.querySelector('ul.date_list');
+        if (!oLink || !ulc) {
+          const ref = document.querySelector('#guest_list ul.nav-pills > li:last-of-type:not(.jaf-awo)') || (allLink && allLink.closest('li'));
+          if (!ref) continue;
+          const tab = mkTab(`jaf_guest_orig_${grp}`, GROUP_LABELS[grp], GROUP_LABELS[grp], 0, ref, content);
+          oLink = tab.tli.querySelector('a'); ulc = tab.ul;
+        }
+        list.forEach((li) => ulc.appendChild(li));
+        bumpCount(oLink, list.length);
+      }
+      // 3. Original-Reiter aufgeteilter Gruppen ausblenden (alle ihre Anmeldungen sind umgezogen); leere Gruppe: Original bleibt
+      for (const grp of GROUP_KEYS) {
+        if (!splitOn(grp) || !srcCount[grp]) continue;
+        const oLink = document.querySelector(`#guest_list a[href="#guest_${GUEST_PANE[grp]}"]`);
+        if (!oLink) continue;
+        const oLi = oLink.closest('li');
         const wasActive = oLi.classList.contains('active');
         oLi.style.display = 'none';
-        if (wasActive) oLi.nextElementSibling.querySelector('a').click();
+        if (wasActive) { const nx = oLi.parentElement.querySelector(':scope > li.jaf-guest-tab a'); if (nx) nx.click(); }
       }
       decorateGuests();
     }
@@ -3703,44 +3751,58 @@
     }
     gmSet(K_EVENTS, m);
   }
+  // Scan-Datum + AWO-Faktor auf einer Party-Karte (a.profile-wide-content-card); placeholder = auch ungescannt anzeigen
+  function eventCardBadges(a, id, placeholder) {
+    const m = getEvents();
+    const ev = m[id] || {};
+    const d = ev.doneTs, awo = ev.awo;
+    const scanned = !!d || awo != null;
+    if (!scanned && !placeholder) { a.querySelectorAll('.jaf-event-badge, .jaf-awo-badge').forEach((x) => x.remove()); return; }
+    let b = a.querySelector('.jaf-event-badge');
+    if (!b) {
+      b = document.createElement('div');
+      b.className = 'jaf-event-badge';
+      b.style.cssText = 'position:absolute;top:6px;right:6px;z-index:5;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.75);color:#fff;' +
+        'font:bold 11px system-ui;padding:2px 6px;border-radius:10px;pointer-events:none';
+      a.style.position = 'relative';
+      a.appendChild(b);
+    }
+    const txt = d ? fmtDay(d) : '--.--.----';
+    if (b.dataset.txt !== txt) {
+      b.dataset.txt = txt;
+      b.innerHTML = `<svg viewBox="0 0 640 1280" width="10" height="12" style="fill:currentColor">${nickG()}</svg><span></span>`;
+      b.querySelector('span').textContent = txt;
+      b.title = d ? opaT(`Opa-Scan zuletzt komplett: ${fmtTs(d)}`) : opaT('Opa-Scan: noch nie komplett bearbeitet');
+    }
+    // zweiter Badge darunter: gespeicherter AWO-Faktor
+    let w = a.querySelector('.jaf-awo-badge');
+    if (!w) {
+      w = document.createElement('div');
+      w.className = 'jaf-awo-badge';
+      w.style.cssText = 'position:absolute;top:28px;right:6px;z-index:5;background:rgba(0,0,0,.75);color:#fff;' +
+        'font:bold 11px system-ui;padding:2px 6px;border-radius:10px;pointer-events:none';
+      a.appendChild(w);
+    }
+    const wt = `AWO ${awo == null ? '–' : String(awo).replace('.', ',') + ' %'}`;
+    const wc = awoColor(awo == null ? null : awo);
+    w.style.background = wc.bg; w.style.color = wc.fg;
+    if (w.textContent !== wt) {
+      w.textContent = wt;
+      w.title = awo == null ? 'AWO-Faktor noch nicht berechnet' : `AWO-Faktor, berechnet am ${fmtTs(ev.awoTs || 0)}`;
+    }
+  }
   function updateEventBadges() {
     if (isRegistrationsPage()) updateRegAwo();
-    const m = getEvents();
-    for (const e of readAppointments()) {
-      const d = m[e.id] && m[e.id].doneTs;
-      let b = e.a.querySelector('.jaf-event-badge');
-      if (!b) {
-        b = document.createElement('div');
-        b.className = 'jaf-event-badge';
-        b.style.cssText = 'position:absolute;top:6px;right:6px;z-index:5;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.75);color:#fff;' +
-          'font:bold 11px system-ui;padding:2px 6px;border-radius:10px;pointer-events:none';
-        e.a.style.position = 'relative';
-        e.a.appendChild(b);
-      }
-      const txt = d ? fmtDay(d) : '--.--.----';
-      if (b.dataset.txt !== txt) {
-        b.dataset.txt = txt;
-        b.innerHTML = `<svg viewBox="0 0 640 1280" width="10" height="12" style="fill:currentColor">${nickG()}</svg><span></span>`;
-        b.querySelector('span').textContent = txt;
-        b.title = d ? opaT(`Opa-Scan zuletzt komplett: ${fmtTs(d)}`) : opaT('Opa-Scan: noch nie komplett bearbeitet');
-      }
-      // zweiter Badge darunter: gespeicherter AWO-Faktor
-      const awo = m[e.id] && m[e.id].awo;
-      let w = e.a.querySelector('.jaf-awo-badge');
-      if (!w) {
-        w = document.createElement('div');
-        w.className = 'jaf-awo-badge';
-        w.style.cssText = 'position:absolute;top:28px;right:6px;z-index:5;background:rgba(0,0,0,.75);color:#fff;' +
-          'font:bold 11px system-ui;padding:2px 6px;border-radius:10px;pointer-events:none';
-        e.a.appendChild(w);
-      }
-      const wt = `AWO ${awo == null ? '–' : String(awo).replace('.', ',') + ' %'}`;
-      const wc = awoColor(awo == null ? null : awo);
-      w.style.background = wc.bg; w.style.color = wc.fg;
-      if (w.textContent !== wt) {
-        w.textContent = wt;
-        w.title = awo == null ? 'AWO-Faktor noch nicht berechnet' : `AWO-Faktor, berechnet am ${fmtTs(m[e.id].awoTs || 0)}`;
-      }
+    for (const e of readAppointments()) eventCardBadges(e.a, e.id, true);
+  }
+  // Profilseiten: Slider „Dates & Events“ – eigenes Profil mit Platzhaltern, fremde nur gescannte Partys
+  const isOwnProfile = () => isProfilePage() && idOf(location.pathname) === (document.body.getAttribute('data-session-user-id') || ownProfileId());
+  function updateProfileSliderBadges() {
+    const own = isOwnProfile();
+    for (const a of document.querySelectorAll('.profile-appointment-slider a.profile-wide-content-card[href*="/event/"]')) {
+      let id = '';
+      try { id = eventIdOf(new URL(a.getAttribute('href'), location.origin).pathname); } catch (e) { /* egal */ }
+      if (id) eventCardBadges(a, id, own);
     }
   }
   function insertEventOpaButton() {
@@ -3780,7 +3842,7 @@
       seen.set(id, {
         id, url: url.origin + url.pathname, a, date: dm ? dm[0] : '', dayTs: dm ? new Date(+dm[3], +dm[2] - 1, +dm[1]).getTime() : 0,
         location: loc ? loc.textContent.trim() : undefined, name: hl ? hl.textContent.replace(/\s+/g, ' ').trim() : '',
-        slugName: slug.replace(/_/g, ' '),
+        slugName: slug.replace(/_/g, ' '), status: regStatusOf(document, id),
       });
     }
     return [...seen.values()];
@@ -3830,18 +3892,17 @@
       const targets = a.querySelectorAll('.mivi_attending_persons');
       for (const t of (targets.length ? targets : [a])) {
         let w = t.querySelector('.jaf-reg-awo');
-        if (awo == null) { if (w) w.remove(); continue; }
         if (!w) {
           w = document.createElement('span');
           w.className = 'jaf-reg-awo';
           w.style.cssText = 'display:inline-block;margin-left:6px;padding:0 6px;border-radius:8px;font-weight:bold;white-space:nowrap';
           t.appendChild(w);
         }
-        const ts = ev.awoTs || ev.doneTs;
-        const txt = `AWO ${String(awo).replace('.', ',')} %${ts ? ` (${fmtTs(ts)})` : ''}`;
-        const c = awoColor(awo);
+        const ts = ev && (ev.awoTs || ev.doneTs);
+        const txt = awo == null ? 'AWO – (--.--.----)' : `AWO ${String(awo).replace('.', ',')} %${ts ? ` (${fmtTs(ts)})` : ''}`;
+        const c = awoColor(awo == null ? null : awo);
         w.style.background = c.bg; w.style.color = c.fg;
-        if (w.textContent !== txt) { w.textContent = txt; w.title = ts ? `AWO-Faktor, berechnet am ${fmtTs(ts)}` : 'AWO-Faktor'; }
+        if (w.textContent !== txt) { w.textContent = txt; w.title = awo == null ? 'AWO-Faktor noch nicht berechnet' : ts ? `AWO-Faktor, berechnet am ${fmtTs(ts)}` : 'AWO-Faktor'; }
       }
     }
   }
@@ -3860,6 +3921,418 @@
     const grp = past.closest('.btn-group') || past;
     b.style.marginRight = '8px';
     grp.parentElement.insertBefore(b, grp);
+    return true;
+  }
+
+  // =====================================================================
+  // ---------- Partys synchronisieren (Export/Import zwischen zwei Konten) ----------
+  // Export: kommende Partys aus „Dates & Events“ (Angemeldet inkl. Warteliste / Vorgemerkt) als JSON in die Zwischenablage.
+  // Import: Liste einfügen, dann merken / an- und abmelden nach Option 1–5.
+  // =====================================================================
+  const PS_FORMAT = 'opa-scan-partys';
+  const PS_GENDER = { m: 'Mann', w: 'Frau', p: 'Paar' };
+  const PS_ST = { A: 'Angemeldet', M: 'Vorgemerkt' };
+  // Status einer Karte auf „Dates & Events“: A (angemeldet/Warteliste) | M (gemerkt) | ''
+  function regStatusOf(root, id) {
+    let st = '';
+    for (const it of root.querySelectorAll(`.card-list-ui-list-item[data-element-id="${id}"]`)) {
+      const box = it.querySelector('.card-ui-detail-btn-container') || it;
+      const bm = box.querySelector('.event_bookmark_btn');
+      if (bm && /gemerkt/i.test(bm.textContent || '')) st = st || 'M';
+      for (const b of box.querySelectorAll('j-button')) { const t = norm(b.textContent); if (t === 'angemeldet' || /warteliste/.test(t)) st = 'A'; }
+    }
+    return st;
+  }
+  function ownAccount() {
+    const a = document.querySelector('.navigation_user_box a.user_link');
+    const name = a ? ((a.childNodes[0] && a.childNodes[0].nodeValue) || a.textContent).trim() : '';
+    return { id: document.body.getAttribute('data-session-user-id') || ownProfileId(), name };
+  }
+  const todayStart = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  // eigene kommende Partys mit Status (aus „Dates & Events“, notfalls im Hintergrund geladen)
+  async function psLoadOwn(onN) {
+    let list;
+    if (isRegistrationsPage()) list = (await loadAllRegistrations(onN)).map((e) => Object.assign({}, e, { status: regStatusOf(document, e.id) }));
+    else {
+      const data = await bgFrameG(location.origin + '/dates_partys/events/registrations/', 'jaf-bg-reg', onN, 10 * 60000);
+      if (data.error) throw new Error(data.error);
+      list = data.list || [];
+    }
+    const t0 = todayStart();
+    return list.filter((e) => !e.dayTs || e.dayTs >= t0).map((e) => ({ id: e.id, url: e.url, name: e.name || e.slugName || '', date: e.date, location: e.location || '', status: e.status || '' }));
+  }
+  async function copyText(t) {
+    try { if (typeof GM_setClipboard === 'function') { GM_setClipboard(t, 'text'); return true; } } catch (e) { /* weiter */ }
+    try { await navigator.clipboard.writeText(t); return true; } catch (e) { /* weiter */ }
+    try { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch (e) { return false; }
+  }
+  // Zustand einer Event-Seite: st A (angemeldet) | W (Warteliste) | M (gemerkt) | N (nichts) | ? ; offered: buchbare Typen; err: Fehlerleiste
+  function parseEvState(doc) {
+    const box = doc.querySelector('.event_registration_buttons');
+    const main = box && box.querySelector('j-button.link_to_tab');
+    const mt = norm(main ? main.textContent : '');
+    const bm = box && box.querySelector('j-button.js_submit_bookmark_form');
+    const st = /warteliste/.test(mt) ? 'W' : mt === 'angemeldet' ? 'A' : bm && /gemerkt/i.test(bm.textContent || '') ? 'M' : main || bm ? 'N' : '?';
+    // Auswahl „Anmeldung als“: Optionen stehen im Shadow DOM (live) bzw. in <template shadowrootmode> (abgerufene Seite)
+    const deepText = (el) => {
+      if (!el) return '';
+      let t = el.textContent || '';
+      if (el.shadowRoot) t += ' ' + deepText(el.shadowRoot);
+      if (el.querySelectorAll) el.querySelectorAll('template').forEach((tp) => { t += ' ' + deepText(tp.content); });
+      if (el.querySelectorAll) el.querySelectorAll('*').forEach((c) => { if (c.shadowRoot) t += ' ' + deepText(c.shadowRoot); });
+      return t;
+    };
+    const wordRe = (w) => new RegExp(`(^|[^\\p{L}-])${w}([^\\p{L}-]|$)`, 'u');
+    const sel = doc.querySelector('#event_anmeldung j-form-select') || doc.querySelector('j-form-select');
+    const selText = deepText(sel);
+    const offered = ['Frau', 'Mann', 'Paar'].filter((w) => wordRe(w).test(selText));
+    const errEl = doc.querySelector('j-growl[variant="error"]');
+    const growl = (v) => [...doc.querySelectorAll(`j-growl[variant="${v}"]`)].map((g) => (g.textContent || '').replace(/\s+/g, ' ').trim()).join(' ');
+    const title = (doc.querySelector('title') || {}).textContent || '';
+    const name = title.replace(/\s*-\s*JOYclub\s*$/, '').replace(/^Erfolgreich angemeldet für\s*/, '');
+    return { st, offered, err: errEl ? (errEl.textContent || '').replace(/\s+/g, ' ').trim() : '', ok: growl('success'), info: growl('info'), title, name };
+  }
+  async function postFormDoc(form, extra = {}) {
+    const fd = formDataOf(form);
+    for (const [k, v] of Object.entries(extra)) fd.set(k, v);
+    const action = new URL(form.getAttribute('action') || location.href, location.origin).href;
+    const r = await fetch(action, { method: 'POST', body: fd, credentials: 'include' });
+    const html = await r.text();
+    return new DOMParser().parseFromString(html, 'text/html');
+  }
+  const psState = async (url) => parseEvState(await fetchDoc(url));
+  // merken (want=true) bzw. nicht mehr merken
+  async function psBookmark(ev, want) {
+    const doc = await fetchDoc(ev.url);
+    const s = parseEvState(doc);
+    if (s.st === 'A' || s.st === 'W') return { r: 'skip', msg: want ? 'angemeldet – Merken nicht nötig' : 'angemeldet – bleibt' };
+    if (want && s.st === 'M') return { r: 'skip', msg: 'bereits gemerkt' };
+    if (!want && s.st !== 'M') return { r: 'skip', msg: 'nicht gemerkt' };
+    const form = doc.getElementById('f_bookmark_event');
+    if (!form) return { r: 'fail', msg: 'Merken-Formular nicht gefunden' };
+    if (CONFIG.DRY_RUN) return { r: 'ok', msg: 'Testmodus' };
+    await postForm(form);
+    await sleep(800);
+    const s2 = await psState(ev.url);
+    return (want ? s2.st === 'M' : s2.st === 'N') ? { r: 'ok', msg: want ? 'gemerkt' : 'nicht mehr gemerkt' } : { r: 'fail', msg: `Status danach: ${s2.st}` };
+  }
+  // anmelden als g ('m'|'w'|'p'); Ergebnis r: ok (A/W) | skip | fail
+  async function psRegister(ev, g) {
+    const doc = await fetchDoc(ev.url);
+    const s = parseEvState(doc);
+    if (s.st === 'A' || s.st === 'W') return { r: 'skip', msg: 'bereits angemeldet' };
+    const form = doc.getElementById('event_anmeldung');
+    if (!form) return { r: 'fail', msg: 'keine Anmeldung möglich' };
+    const label = PS_GENDER[g];
+    if (s.offered.length && !s.offered.includes(label)) return { r: 'fail', why: 'type', msg: `nicht angemeldet – nur ${s.offered.join('/')} möglich` };
+    if (CONFIG.DRY_RUN) return { r: 'ok', st: 'A', msg: 'Testmodus' };
+    const res = parseEvState(await postFormDoc(form, { event_anmeldung_gender: g, event_anmeldung_request: 'save' }));
+    if (res.err) return { r: 'fail', why: /zwei Veranstaltungen/i.test(res.err) ? 'day' : 'err', msg: `nicht angemeldet – ${res.err}` };
+    if (/erfolgreich angemeldet/i.test(res.title) || res.ok) {
+      if (/warteliste/i.test(res.info)) return { r: 'ok', st: 'W', msg: 'auf der Warteliste' };
+      if (/erfolgreich angemeldet/i.test(res.ok)) return { r: 'ok', st: 'A', msg: 'angemeldet' };
+    }
+    await sleep(800);
+    const s2 = await psState(ev.url);
+    if (s2.st === 'A' || s2.st === 'W') return { r: 'ok', st: s2.st, msg: s2.st === 'W' ? 'auf der Warteliste' : 'angemeldet' };
+    return { r: 'fail', why: 'err', msg: `nicht angemeldet – ${s2.err || 'unbekannter Grund'}` };
+  }
+  // stornieren: echte Buttons im Hintergrund-Frame („Stornieren“ → „Anmeldung stornieren“)
+  const K_EVST = 'jaf_evst_job';
+  async function psStorno(ev) {
+    const s = await psState(ev.url);
+    if (s.st !== 'A' && s.st !== 'W') return { r: 'skip', msg: 'nicht angemeldet' };
+    if (CONFIG.DRY_RUN) return { r: 'ok', msg: 'Testmodus' };
+    gmSet(K_EVST, { url: ev.url, phase: 'start', ts: Date.now() });
+    let data;
+    try { data = await bgFrameG(ev.url, 'jaf-bg-evst-' + Date.now().toString(36), null, 90000); } catch (e) { if (e.fatal) throw e; data = { error: e.message }; }
+    finally { gmSet(K_EVST, null); }
+    await sleep(600);
+    const s2 = await psState(ev.url);
+    if (s2.st === 'N' || s2.st === 'M') return { r: 'ok', msg: 'storniert' };
+    return { r: 'fail', msg: `Stornieren fehlgeschlagen${data && data.error ? ' – ' + data.error : ''}` };
+  }
+  // IM Frame: Anmeldung stornieren
+  async function evStornoFrame() {
+    try {
+      const job = gmGet(K_EVST, null);
+      await waitFor(() => document.querySelector('.event_registration_buttons'), 30000);
+      await sleep(1200);
+      const s = parseEvState(document);
+      if (!job || job.phase === 'clicked' || (s.st !== 'A' && s.st !== 'W')) { bgPost({ state: s.st }); return; }
+      const btns = () => [...document.querySelectorAll('j-button')];
+      const st = btns().find((b) => norm(b.textContent) === 'stornieren');
+      if (!st) { bgPost({ error: 'Button „Stornieren“ nicht gefunden' }); return; }
+      gmSet(K_EVST, Object.assign({}, job, { phase: 'clicked' }));
+      await realClick(st);
+      const conf = await waitFor(() => btns().find((b) => norm(b.textContent) === 'anmeldung stornieren' && reallyVisible(b)), 10000);
+      if (!conf) { bgPost({ error: 'Bestätigung „Anmeldung stornieren“ nicht gefunden' }); return; }
+      await realClick(conf);
+      // Seite lädt neu (dann meldet der nächste Aufruf) oder ändert sich ohne Neuladen
+      const changed = await waitFor(() => { const x = parseEvState(document); return x.st === 'N' || x.st === 'M' ? x : null; }, 20000);
+      bgPost({ state: changed ? changed.st : parseEvState(document).st });
+    } catch (e) { bgPost({ error: e.message || String(e) }); }
+  }
+
+  // ---- Popups ----
+  function psOpen() {
+    if (bgScan && bgScan.running) { bgPopup(); return; }
+    closeBgPopup();
+    bgBar2(null);
+    bgTitle('Partys synchronisieren', false);
+    bgUi('', 'Partys dieses Kontos exportieren oder die Liste eines anderen Kontos übernehmen.', null, '');
+    bgPopup().querySelector('.jaf-bg-barwrap').style.display = 'none';
+    bgBody(null);
+    bgButtons([
+      { label: 'Exportieren', fn: () => psExport() },
+      { label: 'Importieren', fn: () => psImport() },
+      { label: 'Abbrechen', fn: closeBgPopup, focus: true },
+    ]);
+  }
+  async function psExport() {
+    bgBody(null);
+    bgUi('Exportieren', 'Lese Deine Partys aus „Dates & Events“ …', null, '');
+    bgButtons([{ label: 'Abbrechen', fn: closeBgPopup, focus: true }]);
+    let list;
+    try { list = await psLoadOwn((n) => bgUi(null, `Lese Deine Partys … ${n}`, null, null)); } catch (e) {
+      bgUi('Export nicht möglich', e.message || String(e), null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return;
+    }
+    const acc = ownAccount();
+    const out = { format: PS_FORMAT, v: 1, account: acc.name, accountId: acc.id, ts: Date.now(),
+      events: list.filter((e) => e.status).map((e) => ({ id: e.id, url: e.url, name: e.name, date: e.date, location: e.location, status: PS_ST[e.status] })) };
+    const json = JSON.stringify(out);
+    const ok = await copyText(json);
+    const nA = out.events.filter((e) => e.status === 'Angemeldet').length;
+    bgUi(ok ? `${out.events.length} Partys in die Zwischenablage kopiert` : 'Kopieren nicht möglich',
+      `${nA} angemeldet (inkl. Warteliste) · ${out.events.length - nA} vorgemerkt`, null,
+      ok ? 'Im anderen Konto: „Synchronisieren“ → „Importieren“ und mit Strg+V einfügen.' : 'Bitte den Text unten markieren und kopieren.');
+    if (!ok) { const ta = document.createElement('textarea'); ta.value = json; ta.style.cssText = 'width:100%;height:120px;margin-top:8px;background:#24272a;color:#eee;border:1px solid #3a3e42;border-radius:6px'; bgBody(ta); ta.select(); }
+    bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]);
+  }
+  function psImport() {
+    bgUi('Importieren', 'Liste aus dem anderen Konto hier einfügen (Strg+V):', null, '');
+    const ta = document.createElement('textarea');
+    ta.style.cssText = 'width:100%;height:110px;box-sizing:border-box;margin-top:4px;background:#24272a;color:#eee;border:1px solid #3a3e42;border-radius:6px;padding:6px;font:12px monospace';
+    const err = document.createElement('div'); err.style.cssText = 'color:#ff8a80;font-size:12px;margin-top:4px';
+    const w = document.createElement('div'); w.appendChild(ta); w.appendChild(err);
+    bgBody(w);
+    setTimeout(() => ta.focus(), 50);
+    bgButtons([
+      { label: 'Weiter', fn: () => {
+        let d;
+        try { d = JSON.parse(ta.value.trim()); } catch (e) { err.textContent = 'Das ist keine gültige Liste.'; return; }
+        if (!d || d.format !== PS_FORMAT || !Array.isArray(d.events)) { err.textContent = 'Das ist keine Party-Liste des Opa-Scans.'; return; }
+        psChoose(d);
+      } },
+      { label: 'Abbrechen', fn: closeBgPopup, focus: true },
+    ]);
+  }
+  function psChoose(d) {
+    const t0 = todayStart();
+    const evs = d.events.filter((e) => e && e.id && e.url && (() => { const m = String(e.date || '').match(/(\d{2})\.(\d{2})\.(\d{4})/); return !m || new Date(+m[3], +m[2] - 1, +m[1]).getTime() >= t0; })());
+    const nA = evs.filter((e) => e.status === 'Angemeldet').length;
+    const same = String(d.accountId || '') === String(ownAccount().id);
+    bgUi(`Liste von ${d.account || '?'} vom ${fmtTs(d.ts)}`,
+      `${evs.length} kommende Partys: ${nA} angemeldet (inkl. Warteliste), ${evs.length - nA} vorgemerkt`, null,
+      same ? '⚠ Die Liste stammt aus diesem Konto.' : '');
+    bgBody(null);
+    const go = (opt) => () => psPrepare(opt, evs);
+    bgButtons([
+      { label: '1. Importierte Partys merken', fn: go(1), hint: 'Alle Partys der Liste werden gemerkt. Bereits Gemerktes bleibt.' },
+      { label: '2. Importierte Partys merken / nicht mehr merken', fn: go(2), hint: 'Erst wird alles nicht mehr gemerkt, was nicht in der Liste steht (Anmeldungen bleiben), dann wird alles aus der Liste gemerkt.' },
+      { label: '3. Für importierte Partys anmelden', fn: go(3), hint: 'Angemeldete der Liste werden angemeldet, Vorgemerkte gemerkt. Nichts wird entfernt.' },
+      { label: '4. Für importierte Partys an-/abmelden', fn: go(4), hint: 'Stellt den Stand der Liste her: anmelden, merken, stornieren und nicht mehr merken.' },
+      { label: '5. Einzeln fragen', fn: go(5), hint: 'Jede Party einzeln mit ihrem aktuellen Status anzeigen und entscheiden.' },
+      { label: '6. Abbrechen', fn: closeBgPopup, focus: true },
+    ]);
+  }
+  // Anmeldetyp wählen (3, 4, 5)
+  function psAskGender() {
+    return new Promise((resolve) => {
+      const own = gmGet(K_OWN_TYPE, '');
+      const def = { Mann: 'm', Frau: 'w', Paar: 'p' }[own] || 'm';
+      bgUi('Anmeldung als', '', null, '');
+      const sel = document.createElement('select');
+      sel.style.cssText = 'width:100%;padding:8px;border-radius:8px;background:#24272a;color:#eee;border:1px solid #3a3e42;font:15px system-ui';
+      sel.innerHTML = '<option value="m">Mann</option><option value="w">Frau</option><option value="p">Paar</option>';
+      sel.value = def;
+      bgBody(sel);
+      bgButtons([{ label: 'Fortsetzen', fn: () => resolve(sel.value) }, { label: 'Abbrechen', fn: () => { closeBgPopup(); resolve(null); }, focus: true }]);
+    });
+  }
+  async function psPrepare(opt, evs) {
+    let g = null;
+    if (opt >= 3) { g = await psAskGender(); if (!g) return; }
+    bgBody(null);
+    bgUi('Vorbereiten', 'Lese den Stand dieses Kontos aus „Dates & Events“ …', null, '');
+    bgButtons([{ label: 'Abbrechen', fn: closeBgPopup, focus: true }]);
+    let own;
+    try { own = await psLoadOwn((n) => bgUi(null, `Lese Deine Partys … ${n}`, null, null)); } catch (e) {
+      bgUi('Nicht möglich', e.message || String(e), null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return;
+    }
+    const here = new Map(own.map((e) => [String(e.id), e]));
+    const imp = new Map(evs.map((e) => [String(e.id), e]));
+    const hs = (id) => (here.get(id) || {}).status || '';
+    const isA = (e) => e.status === 'Angemeldet';
+    if (opt === 5) { psSingle(evs, g, own); return; }
+    const acts = [];
+    // bei 4: stornieren, was in der Liste nicht angemeldet ist; steht es dort als vorgemerkt, danach merken
+    if (opt === 4) for (const [id, e] of here) if (hs(id) === 'A' && !(imp.has(id) && isA(imp.get(id)))) { acts.push({ t: 'storno', ev: e }); if (imp.has(id)) acts.push({ t: 'bm', ev: imp.get(id) }); }
+    if (opt === 2 || opt === 4) for (const [id, e] of here) if (hs(id) === 'M' && !imp.has(id)) acts.push({ t: 'unbm', ev: e });
+    for (const [id, e] of imp) {
+      if (opt <= 2) { if (!hs(id)) acts.push({ t: 'bm', ev: e }); continue; }
+      if (isA(e)) { if (hs(id) !== 'A') acts.push({ t: 'reg', ev: e }); } else if (!hs(id)) acts.push({ t: 'bm', ev: e });
+    }
+    if (!acts.length) { bgUi('Nichts zu tun', 'Dieses Konto entspricht bereits der Liste.', null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
+    const st = acts.filter((a) => a.t === 'storno');
+    if (st.length) {
+      bgUi('Rückfrage', `${st.length} Anmeldungen würden storniert:`, null, '');
+      const ul = document.createElement('div'); ul.style.cssText = 'max-height:220px;overflow:auto;font-size:13px';
+      st.forEach((a) => { const l = document.createElement('div'); l.innerHTML = `${escHtml(a.ev.date || '')} · <a href="${escHtml(a.ev.url)}" target="_blank" style="color:#9ec5ff">${escHtml(a.ev.name || a.ev.url)}</a>`; ul.appendChild(l); });
+      bgBody(ul);
+      const ok = await new Promise((r) => bgButtons([{ label: 'Stornieren und fortsetzen', fn: () => r(true) }, { label: 'Abbrechen', fn: () => r(false), focus: true }]));
+      if (!ok) { closeBgPopup(); return; }
+    }
+    psRun(acts, g);
+  }
+  async function psRun(acts, g) {
+    const order = { storno: 0, unbm: 1, bm: 2, reg: 3 };
+    acts.sort((a, b) => order[a.t] - order[b.t]);
+    bgScan = { stop: false, running: true };
+    window.__jafBgBusy = true;
+    window.addEventListener('beforeunload', beforeUnloadGuard);
+    bgBody(null);
+    bgTitle('Partys synchronisieren', true);
+    bgButtons([bgStopButton()]);
+    const res = { reg: [], wait: [], bm: [], unbm: [], storno: [], skip: [], fail: [] };
+    const stats = () => `angemeldet: ${res.reg.length} · Warteliste: ${res.wait.length} · gemerkt: ${res.bm.length} · nicht mehr gemerkt: ${res.unbm.length} · storniert: ${res.storno.length}\n` +
+      `unverändert: ${res.skip.length} · nicht möglich: ${res.fail.length}${CONFIG.DRY_RUN ? '\nTestmodus: auf JOYclub wird nichts verändert' : ''}`;
+    const verb = { storno: 'Storniere', unbm: 'Nicht mehr merken', bm: 'Merke', reg: 'Melde an' };
+    try {
+      for (let i = 0; i < acts.length && !bgScan.stop; i++) {
+        const a = acts[i];
+        bgUi(`${verb[a.t]} (${i + 1}/${acts.length})`, `${a.ev.date || ''} · ${a.ev.name || a.ev.url}`, i / acts.length, stats());
+        let r;
+        try {
+          r = a.t === 'storno' ? await psStorno(a.ev) : a.t === 'reg' ? await psRegister(a.ev, g) : await psBookmark(a.ev, a.t === 'bm');
+        } catch (e) { if (e.fatal) throw e; r = { r: 'fail', msg: e.message || String(e) }; }
+        const item = Object.assign({}, a.ev, { msg: r.msg });
+        if (r.r === 'ok') (a.t === 'reg' ? (r.st === 'W' ? res.wait : res.reg) : res[a.t]).push(item);
+        else if (r.r === 'skip') res.skip.push(item); else res.fail.push(item);
+        bgUi(null, null, (i + 1) / acts.length, stats());
+        await sleep(rand(1500, 3000));
+      }
+    } catch (e) { res.fail.push({ name: 'Abbruch', msg: e.message || String(e) }); }
+    finally {
+      window.removeEventListener('beforeunload', beforeUnloadGuard);
+      window.__jafBgBusy = false;
+      const stopped = bgScan && bgScan.stop;
+      bgScan = null;
+      bgTitle(stopped ? 'Synchronisieren abgebrochen' : 'Synchronisieren fertig', false);
+      bgUi(stopped ? 'Abgebrochen' : 'Fertig', '', stopped ? null : 1, stats());
+      if (res.fail.length) {
+        const box = document.createElement('div'); box.style.cssText = 'max-height:220px;overflow:auto;font-size:13px;margin-top:8px';
+        box.innerHTML = '<b>Nicht möglich:</b>';
+        res.fail.forEach((x) => { const l = document.createElement('div'); l.innerHTML = `${escHtml(x.date || '')} · ${x.url ? `<a href="${escHtml(x.url)}" target="_blank" style="color:#9ec5ff">${escHtml(x.name || x.url)}</a>` : escHtml(x.name || '')} – ${escHtml(x.msg || '')}`; box.appendChild(l); });
+        bgBody(box);
+      }
+      bgButtons([{ label: 'Schließen', fn: () => { closeBgPopup(); location.reload(); }, focus: true }]);
+    }
+  }
+  // Option 5: jede Party einzeln
+  async function psSingle(evs, g, own) {
+    bgScan = { stop: false, running: false };
+    for (let i = 0; i < evs.length; i++) {
+      const ev = evs[i];
+      const last = i === evs.length - 1;
+      bgBody(null);
+      bgUi(`Party ${i + 1}/${evs.length}`, 'Prüfe den aktuellen Status …', null, '');
+      bgButtons([{ label: 'Abbrechen', fn: closeBgPopup, focus: true }]);
+      if (!document.getElementById('jaf-bg-popup')) return;
+      let s;
+      try { s = await psState(ev.url); } catch (e) { s = { st: '?' }; }
+      if (!document.getElementById('jaf-bg-popup')) return;
+      bgUi(`Party ${i + 1}/${evs.length}`, '', null, '');
+      const stTxt = { A: 'angemeldet', W: 'auf der Warteliste', M: 'gemerkt', N: 'weder gemerkt noch angemeldet', '?': 'unbekannt' }[s.st];
+      const done = await new Promise((resolve) => {
+        const render = (note) => {
+          const head = document.createElement('div');
+          head.innerHTML = `<div style="font-weight:bold;margin:4px 0"><a href="${escHtml(ev.url)}" target="_blank" style="color:#9ec5ff">${escHtml(ev.name || ev.url)}</a></div>` +
+            `<div style="font-size:12px;opacity:.8">${escHtml(ev.date || '')} · in der Liste: ${escHtml(ev.status || '')} · hier: ${escHtml(stTxt)}</div>` +
+            (note ? `<div style="margin-top:6px;color:#ffb300">${note}</div>` : '');
+          bgBody(head);
+          return head;
+        };
+        const act = async (fn, okTxt) => {
+          bgButtons([{ label: 'Bitte warten …', disabled: true }]);
+          let r; try { r = await fn(); } catch (e) { r = { r: 'fail', msg: e.message || String(e) }; }
+          if (r.r === 'fail' && r.why === 'day') return dayConflict(r);
+          render(escHtml(r.msg || okTxt));
+          bgButtons([{ label: last ? 'Schließen' : 'Weiter', fn: () => resolve(true), focus: true }]);
+        };
+        // „bereits zwei Veranstaltungen an diesem Tag“: Partys des Tages zeigen, je mit „Diese stornieren und hier anmelden“
+        const dayConflict = (r) => {
+          const head = render(escHtml(r.msg));
+          const sameDay = own.filter((e) => e.status === 'A' && e.date === ev.date && String(e.id) !== String(ev.id));
+          sameDay.forEach((o) => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px';
+            row.innerHTML = `<a href="${escHtml(o.url)}" target="_blank" style="color:#9ec5ff;flex:1">${escHtml(o.name || o.url)}</a>`;
+            const b = popupButton('Diese stornieren und hier anmelden', async () => {
+              bgButtons([{ label: 'Bitte warten …', disabled: true }]);
+              const s1 = await psStorno(o).catch((e) => ({ r: 'fail', msg: e.message }));
+              if (s1.r !== 'ok') { render(escHtml(`Stornieren fehlgeschlagen: ${s1.msg}`)); bgButtons([{ label: last ? 'Schließen' : 'Weiter', fn: () => resolve(true), focus: true }]); return; }
+              o.status = '';
+              const r2 = await psRegister(ev, g).catch((e) => ({ r: 'fail', msg: e.message }));
+              render(escHtml(`${o.name}: storniert · ${ev.name || ''}: ${r2.msg}`));
+              bgButtons([{ label: last ? 'Schließen' : 'Weiter', fn: () => resolve(true), focus: true }]);
+            });
+            b.style.fontSize = '13px'; b.style.padding = '8px'; b.style.width = 'auto';
+            row.appendChild(b);
+            head.appendChild(row);
+          });
+          bgButtons([{ label: last ? 'Schließen' : 'Überspringen', fn: () => resolve(true), focus: true }]);
+        };
+        render('');
+        const btns = [];
+        if (s.st === 'N') btns.push({ label: 'Merken', fn: () => act(() => psBookmark(ev, true), 'gemerkt') });
+        if (s.st === 'M') btns.push({ label: 'Nicht mehr merken', fn: () => act(() => psBookmark(ev, false), 'nicht mehr gemerkt') });
+        if (s.st === 'A' || s.st === 'W') btns.push({ label: 'Abmelden', fn: () => act(() => psStorno(ev), 'storniert') });
+        else if (s.st !== '?') btns.push({ label: `Anmelden als ${PS_GENDER[g]}`, fn: () => act(() => psRegister(ev, g), 'angemeldet') });
+        btns.push({ label: last ? 'Schließen' : 'Überspringen', fn: () => resolve(true), focus: true });
+        bgButtons(btns);
+      });
+      if (!done || !document.getElementById('jaf-bg-popup')) return;
+    }
+    bgScan = null;
+    closeBgPopup();
+    location.reload();
+  }
+  // Button „Synchronisieren“ (Seite der eigenen Eventanmeldungen: rechts neben dem Opa-Scan; „Dates & Events“: links davon)
+  function insertPartySyncButton() {
+    if (document.querySelector('.jaf-ps-btn')) return true;
+    if (isRegistrationsPage()) {
+      const opa = document.querySelector('.jaf-reg-opa-btn');
+      if (!opa) return false;
+      const b = document.createElement('button');
+      b.type = 'button'; b.title = 'Partys mit einem anderen Konto abgleichen';
+      b.className = 'jaf-ps-btn btn-flat-special-light btn btn-default';
+      b.style.marginRight = '8px';
+      b.innerHTML = `${SYNC_SVG} <span class="btn-text">Synchronisieren</span>`;
+      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); psOpen(); });
+      opa.before(b);
+      return true;
+    }
+    const opa = document.querySelector('.jaf-ev-opa-btn');
+    if (!opa) return false;
+    const b = document.createElement('j-control-button');
+    b.className = 'jaf-ps-btn';
+    b.setAttribute('variant', 'tertiary'); b.setAttribute('role', '');
+    b.title = 'Partys mit einem anderen Konto abgleichen';
+    b.style.cssText = 'margin-left:24px;vertical-align:middle';
+    b.innerHTML = `<span slot="icon-prepend" style="display:inline-flex">${SYNC_SVG}</span><span>Synchronisieren</span>`;
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); psOpen(); });
+    opa.after(b);
     return true;
   }
 
@@ -4069,12 +4542,12 @@
     if (isAppointmentsPage() || isRegistrationsPage()) {
       if (isRegistrationsPage()) {
         await waitFor(() => document.querySelector('button.button_past_events'), 10000);
-        insertRegOpaButton();
+        insertRegOpaButton(); insertPartySyncButton();
         saveEventsFromList(readRegistrations());
       } else {
         if (!isOwnAppointments()) return false;
         await waitFor(eventsHeadline, 10000);
-        insertEventOpaButton();
+        insertEventOpaButton(); insertPartySyncButton();
         saveEventsFromList(readAppointments());
       }
       updateEventBadges();
@@ -4085,8 +4558,8 @@
         p.appendChild(btn('Fehlschläge löschen', () => { gmSet(K_EVFAIL, []); p.remove(); }));
       }
       if (!window.__jafEvTimer) window.__jafEvTimer = setInterval(() => {
-        if (isAppointmentsPage()) { insertEventOpaButton(); updateEventBadges(); }
-        else if (isRegistrationsPage()) { insertRegOpaButton(); updateEventBadges(); }
+        if (isAppointmentsPage()) { insertEventOpaButton(); insertPartySyncButton(); updateEventBadges(); }
+        else if (isRegistrationsPage()) { insertRegOpaButton(); insertPartySyncButton(); updateEventBadges(); }
       }, 3000);
       if (!o.running) {
         if (o.phase === 'done' && o.log && o.log.length) { const p = panel(); if (!p.querySelector('button')) p.innerHTML = opaT('<b>Opa-Scan Partys</b><br>'); log(o.log[o.log.length - 1]); }
@@ -4228,7 +4701,7 @@
   const isGroupMembersPage = () => /^\/groups\/[^/]+\/mitglieder$/.test(cleanPath(location.pathname));
   setInterval(() => {
     try {
-      if (isProfilePage()) relabelProfile();
+      if (isProfilePage()) { relabelProfile(); updateProfileSliderBadges(); }
       if (isEventPage() || isGroupMembersPage()) relabelCards();
       if (currentListPage() || isMemberSearchPage() || myJoyPage()) relabelSearchCards();
     } catch (e) { /* weiter */ }
@@ -4518,6 +4991,7 @@
     if (gate) { bgPost({ gate, url: location.href }); return; }
     if (n === 'jaf-bg-ev') return bgEventFrame();
     if (n.startsWith('jaf-bg-act-')) return bgActFrame();
+    if (n.startsWith('jaf-bg-evst-')) return evStornoFrame();
     if (n.startsWith('jaf-bg-ms')) return msFrame();
     if (n.startsWith('jaf-bg-mj-')) return mjFrame();
     if (n === 'jaf-bg-reg') return regFrame();
@@ -6081,7 +6555,7 @@
       await waitFor(() => document.querySelector('button.button_past_events, .card-list-ui-list-item.event-card-ui, .jc-infinite-scroll'), 30000);
       await sleep(800);
       const list = await loadAllRegistrations((n) => bgPost({ progress: n }));
-      bgPost({ list: list.map((e) => ({ id: e.id, url: e.url, date: e.date, dayTs: e.dayTs, location: e.location, name: e.name, slugName: e.slugName })) });
+      bgPost({ list: list.map((e) => ({ id: e.id, url: e.url, date: e.date, dayTs: e.dayTs, location: e.location, name: e.name, slugName: e.slugName, status: e.status })) });
     } catch (e) { bgPost({ error: e.message || String(e) }); }
   }
   // IM Frame: „Alle meine Gruppen“ aufklappen und sammeln

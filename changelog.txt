@@ -1,6 +1,11 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.75 (22.10.2026)
+- Gästeliste: keine leeren Reiter; leere Gruppe behält ihren Original-Reiter; Original-Reiter verschwinden nur, wenn alle Anmeldungen umgezogen sind; Anmeldungen ohne neuen Reiter kommen in den Original-Reiter ihrer zugeordneten Gruppe
+- AWO-Faktor und Scan-Datum im Slider „Dates & Events“ der Profilseiten (eigenes Profil mit Platzhaltern, fremde nur gescannte Partys); Platzhalter „AWO – (--.--.----)“ auf „Dates & Events“
+- Neu: Button „Synchronisieren“ auf der eigenen Seite der Eventanmeldungen und auf „Dates & Events“ – Partys per Zwischenablage zwischen zwei Konten abgleichen (merken, an-/abmelden, einzeln fragen)
+
 1.74 (22.10.2026)
 - WICHTIG: Alle Schalter sind nach Installation und Update AUS. Einschalten auf der Seite „Opa-Schutz“ je Gruppe: „Visuelle Einstufung“ und „Ignorieren aktiv“
 - Regeln je Gruppe (Männer, Frauen, Paare) und Quelle: drei Anzeigestufen (zwei Grenzen) und eine Ignorier-Schwelle, Bezeichnungen frei wählbar; Mitgliedersuche standardmäßig ab 100

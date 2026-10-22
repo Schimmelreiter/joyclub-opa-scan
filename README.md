@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
 
-Stand: Version 1.74 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 1.75 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -250,16 +250,59 @@ Ein Maß für den Anteil alter Gäste einer Party (Stufen nach den visuellen Wer
 - Einstellbar auf der Seite „Opa-Schutz“ im Abschnitt **AWO-Faktor**: drei ganzzahlige %-Felder je Gruppe (die Grenzen in der Beschriftung folgen den Reglern) und ein Gewichtungs-Regler mit zwei Griffen (bei Frauen 0 % liegen sie bündig nebeneinander; Tooltips „Männer = xx % / Frauen = yy %“ bzw. „Frauen = yy % / Paare = zz %“). Die Gewichte ergeben immer 100 %.
 - Farben: unter 10 % hellgrün, unter 25 % grün, unter 35 % orange, ab 35 % rot
 
-Angezeigt wird er auf der Event-Seite (rechts in der Reiterleiste), als Badge auf den Karten der Eventanmeldungen und auf „Dates & Events“ hinter „… Personen angemeldet.“ samt Zeitpunkt des letzten Scans.
+Angezeigt wird er
+- auf der Event-Seite (rechts in der Reiterleiste),
+- auf den Karten der eigenen Eventanmeldungen und im Slider „Dates & Events“ der **Profilseiten**: oben rechts das Datum des letzten Scans, darunter „AWO xx %“. Auf dem eigenen Profil zeigen noch nicht gescannte Partys die Platzhalter „--.--.----“ und „AWO –“; auf fremden Profilen erscheint bei ungescannten Partys nichts,
+- auf „Dates & Events“ hinter „… Personen angemeldet.“ samt Zeitpunkt des letzten Scans, ungescannt „AWO – (--.--.----)“.
 
 ### Event-Seite
 
 - Die Gästeliste wird im Hintergrund in zusätzliche Reiter aufgeteilt – je Gruppe mit eingeschalteter visueller Einstufung nach den Mehrzahl-Bezeichnungen der Stufen, z. B. **Männer → Männer / Opas**, **Frauen → Frauen / Omas**, **Paare → Pärchen / Paare / Geronto-Paare** (gleiche Bezeichnungen = ein Reiter). Trans*/Non-binary-Anmeldungen wandern in die zugeordnete Gruppe, Paare (auch Männer-/Frauen-Paare) bleiben bei den Paaren. Die Originalliste bleibt sichtbar, bis die Reiter fertig sind.
+  - Leere Reiter entstehen nicht. Hat eine Gruppe gar keine Anmeldungen, bleibt ihr Original-Reiter von JOYclub stehen.
+  - Ein Original-Reiter wird nur ausgeblendet, wenn alle seine Anmeldungen in neue Reiter umgezogen sind.
+  - Anmeldungen, deren zugeordnete Gruppe keine visuelle Einstufung hat (z. B. eine den Frauen zugeordnete Transfrau aus „Männer“), kommen in den Original-Reiter dieser Gruppe; dessen Zahl wird angepasst, fehlt er, wird er angelegt.
 - Gäste werden nach Anmeldealter eingefärbt; ignorierte Mitglieder bekommen ein rotes X.
 - Klick auf ein ignoriertes Mitglied öffnet ein Popup *„Du ignorierst …“* mit Grund (Profilnotiz) und den Buttons **Trotzdem öffnen**, **Nicht mehr ignorieren** (entsperrt und setzt auf die Whitelist) und **Abbrechen**:
 
   <img src="docs/popup-ignoriert.png" width="400" alt="Popup für ein ignoriertes Mitglied">
 - Reiter **„Opa-Liste“** (zwischen „Dates“ und „Kommentare“): Testlauf des Scans für diese Party; listet alphabetisch alle bereits ignorierten bzw. die Kriterien erfüllenden Gäste mit Profil-Links und der Wahl *Ignorieren / Whitelist*, dann „Anwenden“.
+
+### Partys synchronisieren (zwei Konten)
+
+Auf der eigenen Seite der Eventanmeldungen (rechts neben „Opa-Scan starten“) und auf „Dates & Events“ (links neben „Opa-Scan starten“) steht der Button **„Synchronisieren“**. Er gleicht die Partys zweier Konten ab, z. B. in zwei Browser-Profilen.
+
+<img src="docs/partys-start.png" width="400" alt="Partys synchronisieren">
+
+**Exportieren** liest alle kommenden Partys aus „Dates & Events“ (bei Bedarf im Hintergrund) und kopiert sie mit Titel, Datum, Ort, Link und Status – *Angemeldet* (inkl. Warteliste) oder *Vorgemerkt* – samt Konto und Zeitpunkt in die Zwischenablage.
+
+**Importieren** fragt nach der Liste (Einfügen mit Strg+V), prüft sie und zeigt, von welchem Konto und wann sie stammt. Dann:
+
+<img src="docs/partys-options.png" width="400" alt="Optionen beim Import">
+
+| Option | In der Liste | Hier angemeldet | Hier gemerkt | Hier nichts |
+|---|---|---|---|---|
+| 1. merken | angemeldet / vorgemerkt | bleibt | bleibt | merken |
+| | nicht enthalten | bleibt | bleibt | – |
+| 2. merken / nicht mehr merken | angemeldet / vorgemerkt | bleibt | bleibt | merken |
+| | nicht enthalten | bleibt | nicht mehr merken | – |
+| 3. anmelden | angemeldet | bleibt | anmelden | anmelden |
+| | vorgemerkt | bleibt | bleibt | merken |
+| | nicht enthalten | bleibt | bleibt | – |
+| 4. an-/abmelden | angemeldet | bleibt | anmelden | anmelden |
+| | vorgemerkt | stornieren, danach merken | bleibt | merken |
+| | nicht enthalten | stornieren | nicht mehr merken | – |
+
+- Bei 3, 4 und 5 fragt das Skript zuerst **„Anmeldung als“** (Mann / Frau / Paar; vorausgewählt ist der eigene Profiltyp, sonst Mann). Optionen des Veranstalters, Nachricht und „anonym“ bleiben leer bzw. auf „normal anmelden“.
+
+  <img src="docs/partys-gender.png" width="400" alt="Anmeldung als">
+- Bei 4 listet eine Rückfrage vor dem Start alle Partys, die storniert würden. Gearbeitet wird in der Reihenfolge stornieren → nicht mehr merken / merken → anmelden, damit Plätze am selben Tag frei werden.
+
+  <img src="docs/partys-confirm.png" width="400" alt="Rückfrage vor dem Stornieren">
+- **5. Einzeln fragen** prüft für jede Party den aktuellen Status und zeigt den Titel als Link (neuer Tab) mit **Merken / Nicht mehr merken**, **Anmelden / Abmelden** und **Überspringen** bzw. bei der letzten **Schließen**. Meldet JOYclub „bereits für zwei Veranstaltungen an diesem Tag angemeldet“, erscheinen die Partys dieses Tages je mit **„Diese stornieren und hier anmelden“**.
+
+  <img src="docs/partys-single.png" width="400" alt="Einzeln fragen">
+- Ergebnis jeder Anmeldung: „Du bist erfolgreich angemeldet!“ → angemeldet, „Du stehst auf der Warteliste.“ → Warteliste. Bietet eine Party den gewählten Typ nicht an (z. B. nur Paare) oder meldet JOYclub einen Fehler, wird sie übersprungen und am Ende mit Grund und Link aufgeführt.
+- Merken und Anmelden laufen über die Formulare der Event-Seite; Stornieren klickt im unsichtbaren Frame „Stornieren“ und bestätigt „Anmeldung stornieren“. Danach prüft das Skript jeweils den neuen Status.
 
 ---
 
@@ -382,6 +425,7 @@ Im Script-Speicher steht beim Verdrängten „entsperrt (Platz für neue Sperre,
 
 ## Profilseiten
 
+- Im Slider „Dates & Events“ stehen Scan-Datum und AWO-Faktor der Partys (siehe [AWO-Faktor](#awo-faktor)).
 - Der Profiltyp im Profilkopf wird bei eingeschalteter visueller Einstufung zur Bezeichnung der Stufe (z. B. Opa, Oma, Geronto-Paar; Symbol in Stufe 3). Werte: höchste Quelle, in der das Mitglied gesehen wurde.
 - Alter, Typ und „zuletzt online“ werden mitgeschrieben; daraus berechnet das Skript Geburtsjahr-Spannen (bei Paaren für beide Personen).
 - **Sternzeichen** aus dem Steckbrief grenzen den Geburtszeitraum weiter ein (Grenztage ±1 Tag; bei Paaren je Person über Geschlechts-Symbol und Alter zugeordnet). Passt ein Sternzeichen nicht zum Zeitraum, wird es ignoriert.
