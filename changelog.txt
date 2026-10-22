@@ -1,6 +1,19 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.73 (22.10.2026)
+- Einstellungsseite „Opa-Schutz“ (/edit/account/#opa-schutz) mit Experten-Einstellungen, Rückfrage bei ungespeicherten Änderungen
+- Einstellungen im Skript-Speicher; Änderungen im Quelltext haben Vorrang, solange sich der Quelltext-Wert ändert
+- Whitelist-Popup: eigene Gruppen und Mitglieder bearbeiten, automatisch gefundene Einträge entfernen
+- Hamburger-Menü: „Opa-Scan“ (alle Scans nacheinander, Auswahl gemerkt) und „Opa-Schutz“; Opa-Button mit Status in der Titelzeile; Eintrag in der linken Spalte der Profilverwaltung
+- Neue Scans: Profilbesucher (/my_joy/visitors/) und „Mögen mich“ (/my_joy/voting/top/), Karten werden beim Ansehen eingefärbt
+- Sichtbarkeit: Warnung vor Profilaufrufen bei sichtbarem Login (unsichtbar schalten / sichtbar fortfahren / abbrechen), Rückfrage auf /edit/invisible/ während laufender Vorgänge
+- Ignorierliste: Füllstand zu Beginn jedes Scans, Limit (IGNORE_LIMIT 1000) mit Verdrängung nach Quelle, „zuletzt gesehen“, Altersregel und Sugar-Daddy-Regel
+- Quellen: neue Rangfolge Interaktionen > Profilbesucher > Partygäste > Gruppen > Mitgliedersuche > Synchronisation (einstellbar); „zuletzt gesehen“ je Quelle
+- Mitgliedersuche: SEARCH_IGNORE (Standard aus) – nur Statistik „würden ignoriert“ mit Export
+- Sternzeichen aus dem Steckbrief grenzen den Geburtszeitraum ein; Exporte um „zuletzt gesehen“ und Sternzeichen ergänzt (Konten-Export: Spalten „zuerst/zuletzt erfasst“ umbenannt)
+- Alter Code der Mitgliedersuche (Panel, Automatik, MEMBER_SEARCH) entfernt
+
 1.72 (21.10.2026)
 - Abmeldung: Gast-Seite (Fehler 401) erkennen, Login im kleinen Fenster über identity.joyclub.com (automatisch max. 1× in 30 min)
 - Ignorierliste: Button „Synchronisieren“ (JOYclub/Script hat Vorrang, optional Notizen abgleichen)
