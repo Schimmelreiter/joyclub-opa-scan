@@ -2,9 +2,9 @@
 
 Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
-Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach festen Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
+Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
 
-Stand: Version 1.73 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 1.74 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -17,21 +17,41 @@ Stand: Version 1.73 – Änderungen siehe [changelog.txt](changelog.txt)
 
 Alle gespeicherten Daten (Protokoll, Whitelist, Scan-Stände …) liegen im Tampermonkey-Speicher und bleiben bei Updates erhalten.
 
+> **Wichtig ab 1.74: Nach der Installation ist alles ausgeschaltet.** Für jede Gruppe (Männer, Frauen, Paare) gibt es die Schalter **„Visuelle Einstufung“** und **„Ignorieren aktiv“** – beide stehen zunächst auf *aus*, auch nach einem Update. Einschalten auf der Seite **Opa-Schutz** (Hamburger-Menü → *Opa-Schutz*, siehe [Einstellungen](#einstellungen-seite-opa-schutz)). Solange „Ignorieren aktiv“ aus ist, sperrt das Skript in dieser Gruppe niemanden.
+
+**Speicher-Umbau (einmalig mit 1.74):** Beim ersten Aufruf nach dem Update fragt das Skript, ob es vorher eine Sicherung aller Daten herunterladen soll, und baut den Speicher dann auf einen Eintrag je Mitglied um. Die alten Daten werden erst gelöscht, wenn jeder Eintrag geprüft ist.
+
+<img src="docs/speicher-umbau.png" width="400" alt="Rückfrage vor dem Speicher-Umbau">
+
 ---
 
 ## Regeln: Wer wird ignoriert?
 
-| Regel | Einstellung | Standard |
-|---|---|---|
-| Männer und ähnliche Profiltypen über einem Höchstalter | `MAX_AGE`, `ONLY_TYPES` | über 49; Mann, Transmann, Non-binary, Transvestit, Männer-Paar |
-| Gemischte Paare mit großem Altersunterschied („Sugar Daddy“) | `COUPLE_AGE_GAP` | ab 18 Jahren Unterschied |
-| Gemischte Paare, bei denen beide alt sind („Geronto-Paar“) | `COUPLE_BOTH_MIN_AGE` | beide ab 60 |
-| Frauen | – | werden nie ignoriert |
-| Whitelist | `WHITELIST` + gelernte Einträge | werden nie ignoriert |
+Die Mitglieder werden in drei **Gruppen** eingeteilt: **Männer**, **Frauen** und **Paare**. Jede Gruppe hat je **Quelle** (Interaktionen, Profilbesucher, Partygäste, Gruppen, Mitgliedersuche) eigene Altersgrenzen:
 
-Vor dem Ignorieren schreibt das Skript eine Profilnotiz, z. B.
-`Alter Sack (Party) geblockt am 21.10.2026 um 12:00`, `Sugar Daddy (Gruppen) ignoriert am …` oder `Geronto-Paar (Party) ignoriert am …`.
-Die Quelle in Klammern sagt, wo das Mitglied gefunden wurde.
+- **Visuelle Einstufung** in drei Stufen (zwei Grenzen): bis zur ersten Grenze Stufe 1 (grün), bis zur zweiten Stufe 2 (orange), darüber Stufe 3 (rot). Die Stufen bestimmen Farben, Bezeichnungen (z. B. Mann/Mann/Opa), Reiter der Gästeliste und den AWO-Faktor.
+- **Ignorieren ab** einem Alter (eine Grenze).
+
+| Gruppe | Bezeichnungen (Einzahl) | Visuell bis | Ignorieren ab | Profiltypen (Standard) |
+|---|---|---|---|---|
+| Männer | Mann / Mann / Opa | 29 / 49 | 50 (Suche: 100) | Mann, Transmann, Transvestit, Non-binary, Männer-Paar |
+| Frauen | Frau / Frau / Oma | 25 / 49 | 50 (Suche: 100) | Frau |
+| Paare | Pärchen / Paar / Geronto-Paar | 39 / 59 | 60 (Suche: 100) | Paar |
+
+- **Paare:** Frau und Mann haben eigene Werte; ein Paar wird erst ignoriert, wenn **beide** ihre Schwelle erreichen (Geronto-Paar). Angezeigt wird die Stufe der jüngeren Person.
+- **Sugar Daddy** (Mann mindestens 18 Jahre älter) und **Sugar Mom** (Frau mindestens 18 Jahre älter) gehören zu den Paaren, jeweils mit eigenem Schalter und Abstand. Trifft Geronto-Paar und Sugar Daddy zu, gilt Sugar Daddy; Geronto-Paar und Sugar Mom → Geronto-Paar.
+- **Männer-/Frauen-Paare** in der Gruppe Paare nutzen die Werte des Mannes bzw. der Frau mit dem höheren Alter; großer Altersunterschied → Sugar Daddy bzw. Sugar Mom. In den Gruppen Männer/Frauen zählt bei Paar-Typen das höhere Alter.
+- **Profiltypen:** Mann, Frau und Paar sind fest zugeordnet. Trans* und Non-binary können zu Männern oder Frauen, Männer-Paare zu Männern oder Paaren, Frauen-Paare zu Frauen oder Paaren, Trans-Paare zu allen drei. Jeder Typ gehört zu höchstens einer Gruppe; **nicht zugeordnete Typen werden nicht bearbeitet**. Unbekannte Typen, die das Skript findet, erscheinen in allen Gruppen (nicht angehakt).
+- **Whitelist** (`WHITELIST` + gelernte Einträge): wird nie ignoriert.
+- **Schalter je Gruppe** (Standard: aus): *Visuelle Einstufung* (Farben, Umbenennen, eigene Reiter) und *Ignorieren aktiv* (rotes X, Notiz, Sperre).
+
+Vor dem Ignorieren schreibt das Skript eine Profilnotiz mit der Bezeichnung der Stufe 3, z. B.
+`Opa (Party) ignoriert am 21.10.2026 um 12:00`, `Oma (Likes) ignoriert am …`, `Geronto-Paar (Gruppen) ignoriert am …`, `Sugar Daddy (Party) ignoriert am …` oder `Sugar Mom (Suche) ignoriert am …`.
+Die Quelle in Klammern sagt, wo das Mitglied gefunden wurde. Ältere Notizen (z. B. „Alter Sack … geblockt am …“) und früher verwendete Bezeichnungen werden weiter erkannt; „Synchronisieren – Script hat Vorrang“ mit Notizen gleicht umbenannte Notizen an.
+
+**Eigenes Profil:** Ist das eigene Profil ein *Mann*, heißt alles „Oma“ statt „Opa“ (Oma-Scan, Oma-Schutz, Reiter „Oma-Liste“, Badge „blockierte Omas“, Oma-Symbol). Bei allen anderen eigenen Profiltypen bleibt es bei „Opa“.
+
+**Werte beim bloßen Ansehen:** Gästeliste → Partygäste, Profilbesuche → Profilbesucher, „Mögen mich“ → Interaktionen, Gruppen-Mitgliederliste → Gruppen, Suche → Mitgliedersuche, Profil/sonst → höchste Quelle, in der das Mitglied gesehen wurde (sonst die niedrigste).
 
 Ignoriert wird über das Profil (Notiz speichern → *Profiloptionen → Profil ignorieren → Ignorieren*) bzw. im Hintergrund über die Ignorierliste `/ignore/`.
 
@@ -53,17 +73,52 @@ Ignoriert wird über das Profil (Notiz speichern → *Profiloptionen → Profil 
 
 Adresse: `https://www.joyclub.de/edit/account/#opa-schutz` – aufgebaut wie JOYclubs Seite „Account“.
 
-<img src="docs/einstellungen.png" width="480" alt="Seite Opa-Schutz">
+<img src="docs/einstellungen.png" width="560" alt="Seite Opa-Schutz">
 
-- **Immer sichtbar:** Höchstalter Männer, Warnalter, Profiltypen, Paar-Modus, Altersunterschied Sugar Daddy, Mindestalter Geronto-Paar, Whitelist (Zusammenfassung + Button **Whitelist bearbeiten**).
-- **Experten-Einstellungen** (beim Öffnen immer zugeklappt): Debug-Ausgaben, Testlauf, Suche ignoriert (rote Warnung, wenn an), Obergrenze für den ersten Scan von Profilbesuchern/Interaktionen, **Limit** der Ignorierliste (rot), **Rangfolge der Quellen** (▲▼, Erklärung beim Darüberfahren), Notiz schreiben, Notiz Pflicht.
+**Kopfzeile:** „Derzeit ignoriert: X / Limit“ und „Nach Anwenden der neuen Einstellungen zu ignorieren: N / Limit“ – live berechnet aus dem Gedächtnis aller bekannten Konten, während man Regler verschiebt. Orange bei weniger als 50 freien Plätzen, rot über dem Limit; ein „+“ heißt, dass es zusätzlich unklare Mitglieder gibt (z. B. Paare mit nur einer Altersangabe).
+
+<img src="docs/einstellungen-info.png" width="420" alt="Kopfzeile der Einstellungen">
+
+**Je Gruppe (Männer, Frauen, Paare)**, in dieser Reihenfolge:
+1. **Schalter** als Kippschalter: *Visuelle Einstufung* über der Spalte der visuellen Regler, *Ignorieren aktiv* über der Spalte „Ignorieren ab“.
+2. **Altersgrenzen je Quelle:** ein Regler mit zwei Griffen (Stufe 1 bis · Stufe 2 bis) und ein Regler mit einem Griff (Ignorieren ab), Bereich 18–100; Button **„Werte der ersten Zeile für alle Quellen übernehmen“**. Bei Paaren je Quelle eine Zeile für die Frau und eine für den Mann; ohne Haken bei **Getrenntes Alter** verschieben sich beide Balken gemeinsam. Dazu **Sugar Daddy** und **Sugar Mom** mit Schalter und Altersabstand.
+3. **Bezeichnungen** der drei Stufen (Einzahl/Mehrzahl). Gleiche Mehrzahl-Bezeichnungen ergeben einen gemeinsamen Reiter.
+4. **Profiltypen** (Haken; ein Haken entfernt den Typ aus den anderen Gruppen).
+
+<img src="docs/einstellungen-maenner.png" width="560" alt="Gruppe Männer">
+
+<img src="docs/einstellungen-paare.png" width="560" alt="Gruppe Paare mit Sugar Daddy und Sugar Mom">
+
+Der Link **Quelltext-Werte** neben der Überschrift setzt eine Gruppe auf die Werte aus dem Quelltext zurück.
+
+**Whitelist** (Zusammenfassung + Button **Whitelist bearbeiten**) und **AWO-Faktor** (siehe [AWO-Faktor](#awo-faktor)):
+
+<img src="docs/einstellungen-awo.png" width="560" alt="Whitelist und AWO-Faktor">
+
+- **Experten-Einstellungen** (beim Öffnen immer zugeklappt): Debug-Ausgaben, Testlauf, Obergrenze für den ersten Scan von Profilbesuchern/Interaktionen, **Limit** der Ignorierliste (rot), **Rangfolge der Quellen** (▲▼, Erklärung beim Darüberfahren), Notiz schreiben, Notiz Pflicht.
 
   <img src="docs/einstellungen-experten.png" width="480" alt="Experten-Einstellungen">
 - **Speichern / Abbrechen.** Wer die Seite mit ungespeicherten Änderungen verlässt, wird gefragt (*Speichern und verlassen / Verwerfen und verlassen / Abbrechen*); beim Schließen oder Neuladen des Tabs kommt die Standardabfrage des Browsers.
 
   <img src="docs/einstellungen-verlassen.png" width="360" alt="Rückfrage beim Verlassen">
 
-**Speicherung:** Die Einstellungen liegen im Tampermonkey-Speicher, zusammen mit dem zuletzt gesehenen Wert aus dem Quelltext. Ändert man einen Wert im Quelltext, gilt ab dann dieser; solange der Quelltext-Wert gleich bleibt, gilt der gespeicherte. Abweichungen vom Quelltext sind mit „°“ markiert, der Link **Quelltext-Wert** setzt zurück. Betroffen: `DRY_RUN`, `DEBUG`, `SEARCH_IGNORE`, `IGNORE_LIMIT`, `MYJOY_FIRST_MAX`, `MAX_AGE`, `WARN_AGE`, `ONLY_TYPES`, `COUPLE_MODE`, `COUPLE_AGE_GAP`, `COUPLE_BOTH_MIN_AGE`, `WHITELIST`, `WRITE_NOTE`, `NOTE_REQUIRED`, `SOURCE_RANK`. Alles andere steht nur im Quelltext.
+### Speichern von Regeländerungen
+
+Ändern sich Regeln, die das Ignorieren betreffen (Schalter „Ignorieren aktiv“, Schwellen, Profiltypen, Sugar Daddy/Mom, Stufe-3-Bezeichnungen, Limit), zeigt **Speichern** ein Popup mit den Auswirkungen: derzeit ignoriert, nach Anwenden, fallen weg, kommen dazu, Notizen weichen ab, unklar.
+
+<img src="docs/speichern-popup.png" width="400" alt="Popup beim Speichern">
+
+| Button | Wirkung |
+|---|---|
+| Änderungen speichern und anwenden | speichert und gleicht die Ignorierliste an: Mitglieder werden gesperrt oder entsperrt, Notizen angepasst |
+| … und Mitglieder entsperren | nur, wenn welche wegfallen: speichert und entsperrt sie |
+| … und Mitglieder sperren | nur, wenn welche dazukommen: speichert und sperrt sie (bei vollem Limit verdrängen sie weniger wichtige) |
+| Änderungen nur speichern | Ignorierliste bleibt; neue Regeln gelten ab dem nächsten Scan |
+| Änderungen verwerfen (vorausgewählt) | verwirft alle Änderungen der Seite |
+
+Der Haken **„Unklare Mitglieder erneut prüfen“** ruft deren Profile im Hintergrund auf (mit Sichtbarkeits-Warnung). Wird das Limit verringert, entsperrt das Skript in der Verdrängungs-Reihenfolge. Danach prüft es die JOYclub-Liste gegen die erwarteten Einträge und repariert sie. Von Hand Gesperrte werden nie angefasst. Nach jeder Regeländerung beginnen die Scans von vorn (Partys, Gruppen, Profilbesucher/„Mögen mich“).
+
+**Speicherung:** Die Einstellungen liegen im Tampermonkey-Speicher, zusammen mit dem zuletzt gesehenen Wert aus dem Quelltext. Ändert man einen Wert im Quelltext, gilt ab dann dieser; solange der Quelltext-Wert gleich bleibt, gilt der gespeicherte. Abweichungen vom Quelltext sind mit „°“ markiert, der Link **Quelltext-Wert** setzt zurück. Betroffen: `DRY_RUN`, `DEBUG`, `IGNORE_LIMIT`, `MYJOY_FIRST_MAX`, `GROUPS`, `AWO`, `WHITELIST`, `WRITE_NOTE`, `NOTE_REQUIRED`, `SOURCE_RANK`. Die Altersgrenzen bis 1.73 (`MAX_AGE`, `WARN_AGE`, `COUPLE_BOTH_MIN_AGE`, `COUPLE_AGE_GAP`, `ONLY_TYPES`) werden beim Update einmalig in die neue Tabelle übernommen; die Schalter bleiben dabei aus.
 
 ---
 
@@ -96,7 +151,7 @@ Inhalt:
 
 ## Opa-Scan aus dem Menü (alle Scans)
 
-**Opa-Scan** im Hamburger-Menü öffnet ein Popup, das erklärt, was passiert, und alle eingebauten Scans mit Checkbox auflistet – in der aktuellen Rangfolge der Quellen, die Mitgliedersuche wegen ihrer Dauer immer zuletzt. Für Partys gibt es nur einen Eintrag (beide Event-Übersichten zeigen dieselben Partys). Die Auswahl wird gemerkt; anfangs ist alles ausgewählt außer der Mitgliedersuche, die dem Wert von `SEARCH_IGNORE` folgt. Ist das Ignorieren in der Suche aus, steht dort „Sammelt nur Statistiken …“.
+**Opa-Scan** im Hamburger-Menü öffnet ein Popup, das erklärt, was passiert, und alle eingebauten Scans mit Checkbox auflistet – in der aktuellen Rangfolge der Quellen, die Mitgliedersuche wegen ihrer Dauer immer zuletzt. Für Partys gibt es nur einen Eintrag (beide Event-Übersichten zeigen dieselben Partys). Die Auswahl wird gemerkt; anfangs ist alles ausgewählt außer der Mitgliedersuche. Geprüft werden nur Profile, die für die aktuellen Einstellungen relevant sind (z. B. Frauen nur, wenn bei den Frauen „Ignorieren aktiv“ an ist).
 
 <img src="docs/opa-scan-auswahl.png" width="400" alt="Opa-Scan: Auswahl">
 
@@ -104,7 +159,7 @@ Die Scans laufen nacheinander im Hintergrund auf der aktuellen Seite. Oben der G
 
 <img src="docs/opa-scan-laeuft.png" width="400" alt="Opa-Scan läuft">
 
-Am Ende eine Zusammenfassung je Scan: geprüft, neu ignoriert, verdrängt, „Limit erreicht, nicht gesperrt“ (Mitgliedersuche ohne Ignorieren: „würden ignoriert“).
+Am Ende eine Zusammenfassung je Scan: geprüft, neu ignoriert, verdrängt, „Limit erreicht, nicht gesperrt“.
 
 <img src="docs/opa-scan-fertig.png" width="400" alt="Opa-Scan fertig">
 
@@ -149,7 +204,7 @@ Auf der Gruppenübersicht `/groups/` steht der Button **„Opa-Scan starten“**
 - Ignoriert Treffer nach den Regeln, Moderatoren kommen auf die Whitelist.
 - Reihenfolge: am längsten nicht bearbeitete Gruppe zuerst.
 - Jede Gruppenkarte zeigt ein Badge mit dem Datum des letzten vollständigen Scans.
-- In Mitgliederlisten wird „Mann“ je nach Alter zu **Jungschwanz / Schwanz / Opa** (mit Opa-Icon).
+- In Mitgliederlisten wird der Profiltyp bei eingeschalteter visueller Einstufung zur Bezeichnung der Stufe (z. B. Mann / Opa, Frau / Oma; Opa- bzw. Oma-Symbol in Stufe 3).
 
 ---
 
@@ -174,9 +229,10 @@ Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, das P
 2. VIP-Gäste aus dem Veranstaltungstext auf die Whitelist.
 3. Gästeliste „Alle“ vollständig lesen.
 4. Jede Anmeldung einordnen:
-   - Paare werden direkt anhand der beiden Altersangaben entschieden,
-   - Männer etc. werden nur auf dem Profil geprüft, wenn schon das Anmeldealter über `MAX_AGE` liegt,
-   - Frauen, externe und anonyme Anmeldungen, Shops sowie Club-/Veranstalter-Profile (`business_profile`) werden übersprungen.
+   - nur Gruppen mit „Ignorieren aktiv“ werden geprüft,
+   - Paare werden direkt anhand der beiden Altersangaben entschieden (mit nur einer Angabe: Profil prüfen),
+   - Einzelpersonen werden nur auf dem Profil geprüft, wenn schon das Anmeldealter die Schwelle der Gruppe erreicht,
+   - externe und anonyme Anmeldungen, Shops sowie Club-/Veranstalter-Profile (`business_profile`) werden übersprungen.
 5. Profile im Hintergrund prüfen (Ergebnis wird 1 Jahr zwischengespeichert) und Treffer ignorieren.
 
 **Effizienz:**
@@ -186,18 +242,19 @@ Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, das P
 
 ### AWO-Faktor
 
-Ein Maß für den Opa-Anteil einer Party:
+Ein Maß für den Anteil alter Gäste einer Party (Stufen nach den visuellen Werten der Quelle „Partygäste“):
 
-- **Männer:** Opas ÷ erwartete Männer, mit erwartet = ⌈Jungschwänze/3⌉ + ⌈Schwänze·2/3⌉ + Opas
-- **Paare:** Geronto-Paare (beide ab 60, Einzelalter ab 60 oder Sugar Daddy) ÷ alle Paare
-- **AWO = ⅔ · Männer + ⅓ · Paare** (fehlt eine Gruppe, zählt nur die andere)
+- Je Gruppe und Stufe eine **Anwesenheitsquote** (Standard: Männer 33 / 66 / 95 %, Frauen 95 / 95 / 95 %, Paare 90 / 90 / 90 %): So viele der Angemeldeten erscheinen voraussichtlich.
+- **Anteil je Gruppe** = erwartete Anwesende der Stufe 3 ÷ alle erwarteten Anwesenden der Gruppe (Sugar Daddys/Moms zählen als Stufe 3).
+- **AWO** = gewichtete Summe der Anteile, Gewichte Standard Männer 67 / Frauen 0 / Paare 33 %. Hat eine Gruppe keine Anmeldungen, wird ihr Gewicht anteilig auf die anderen verteilt.
+- Einstellbar auf der Seite „Opa-Schutz“ im Abschnitt **AWO-Faktor**: drei ganzzahlige %-Felder je Gruppe (die Grenzen in der Beschriftung folgen den Reglern) und ein Gewichtungs-Regler mit zwei Griffen (bei Frauen 0 % liegen sie bündig nebeneinander; Tooltips „Männer = xx % / Frauen = yy %“ bzw. „Frauen = yy % / Paare = zz %“). Die Gewichte ergeben immer 100 %.
 - Farben: unter 10 % hellgrün, unter 25 % grün, unter 35 % orange, ab 35 % rot
 
 Angezeigt wird er auf der Event-Seite (rechts in der Reiterleiste), als Badge auf den Karten der Eventanmeldungen und auf „Dates & Events“ hinter „… Personen angemeldet.“ samt Zeitpunkt des letzten Scans.
 
 ### Event-Seite
 
-- Die Gästeliste wird im Hintergrund in zusätzliche Reiter aufgeteilt: **Männer → Jungschwänze / Schwänze / Opas**, **Paare → Paare / Geronto-Paare**. Die Originalliste bleibt sichtbar, bis die Reiter fertig sind.
+- Die Gästeliste wird im Hintergrund in zusätzliche Reiter aufgeteilt – je Gruppe mit eingeschalteter visueller Einstufung nach den Mehrzahl-Bezeichnungen der Stufen, z. B. **Männer → Männer / Opas**, **Frauen → Frauen / Omas**, **Paare → Pärchen / Paare / Geronto-Paare** (gleiche Bezeichnungen = ein Reiter). Trans*/Non-binary-Anmeldungen wandern in die zugeordnete Gruppe, Paare (auch Männer-/Frauen-Paare) bleiben bei den Paaren. Die Originalliste bleibt sichtbar, bis die Reiter fertig sind.
 - Gäste werden nach Anmeldealter eingefärbt; ignorierte Mitglieder bekommen ein rotes X.
 - Klick auf ein ignoriertes Mitglied öffnet ein Popup *„Du ignorierst …“* mit Grund (Profilnotiz) und den Buttons **Trotzdem öffnen**, **Nicht mehr ignorieren** (entsperrt und setzt auf die Whitelist) und **Abbrechen**:
 
@@ -212,11 +269,11 @@ Im Seitenkopf der Suche `/member/` steht rechts neben der Lupe (Namenssuche) ein
 
 <img src="docs/suche-auswahl.png" width="400" alt="Auswahl-Popup der Mitgliedersuche">
 
-**Ignorieren oder nur zählen:** Mit `SEARCH_IGNORE: false` (Standard; Seite „Opa-Schutz“ → *Suche ignoriert*) erstellt die Mitgliedersuche nur Statistik: Das Popup heißt „Opa-Scan (nur Statistik)“, Paare mit einer Altersangabe werden im Profil nur gelesen, Vorgemerkte nur gezählt, Mehrfachfunde zählen einmal; die Liste „würden ignoriert“ lässt sich exportieren. Grund: Die Suche findet weit mehr Treffer, als die Ignorierliste fasst.
+**Schwellen der Suche:** Standardmäßig steht „Ignorieren ab“ für die Mitgliedersuche in allen Gruppen auf 100 – die Suche findet weit mehr Treffer, als die Ignorierliste fasst. Der frühere Statistik-Modus (`SEARCH_IGNORE`) ist entfallen.
 
 ### Mit aktuellen Sucheinstellungen filtern
 
-Lädt die gerade eingestellte Suche in einem unsichtbaren Frame komplett nach, bestimmt die Treffer nach den Regeln (MAX_AGE, Typen, Paar-Regeln, Whitelist) und ignoriert sie im Hintergrund (Notiz-Quelle „Suche“).
+Lädt die gerade eingestellte Suche in einem unsichtbaren Frame komplett nach, bestimmt die Treffer nach den Regeln (Schwellen der Mitgliedersuche, Typen, Paar-Regeln, Whitelist) und ignoriert sie im Hintergrund (Notiz-Quelle „Suche“).
 
 ### Systematische Suche
 
@@ -227,20 +284,19 @@ Ein zweites Popup spiegelt die JOYclub-Filter **Ich suche** (Frauen, Männer, Pa
 Ablauf:
 - Für jeden Umkreis (50 km um eine Stadt) und jedes Alter einzeln – rückwärts von 70+ bis zur Untergrenze – wird die Suche per Deeplink aufgerufen:
   `/member/<ort>-x<GeoNames-ID>-r/is-<typen>/?user_geo_distance=50&user_age=<alter>_<alter>`
-  (JOYclub nutzt GeoNames-IDs als Orts-ID; `70_70` bedeutet „70 und älter“, Werte über 70 kennt die Suche nicht.)
+  (JOYclub nutzt GeoNames-IDs als Orts-ID; `70_70` bedeutet „70 und älter“, Werte über 70 kennt die Suche nicht – liegt eine Schwelle über 70, wird die Klasse 70+ durchsucht und nach dem genauen Alter gefiltert.)
 - Jede Einzelsuche wird wiederholt, bis ein Durchlauf keine neuen Profile mehr bringt (höchstens 20, bei 70+ höchstens 200 Durchläufe); Treffer werden nach jedem Durchlauf ignoriert.
 - Paare werden anhand ihrer zwei Altersangaben entschieden; Paare mit nur einer Altersangabe werden auf dem Profil geprüft und gesondert gemerkt.
-- Zu Beginn jedes Such-Scans werden fällige Vorgemerkte (inzwischen über `MAX_AGE`) ignoriert.
+- Zu Beginn jedes Such-Scans werden fällige Vorgemerkte (inzwischen an der Schwelle ihrer Gruppe und Quelle) ignoriert.
 - Fortschritt: zwei Balken – **Gesamt** (jeder Umkreis zählt gleich viel; innerhalb eines Umkreises zählt 70+ zehnfach, jedes weitere Alter einfach) und **aktuelle Altersklasse**; die Kopfzeile zeigt Alter und Umkreis als „x/Gesamt“:
 
   <img src="docs/suche-laeuft.png" width="400" alt="Systematische Suche läuft">
-- Protokoll je Einzelsuche: Stadt, Bundesland, Orts-ID, Alter, Zahl der Durchläufe bis ohne neue Treffer, gefundene und ignorierte Profile, ob die Obergrenze erreicht wurde.
 
 ### Sonstiges
 
-- Das Popup während des Scans entspricht dem des Party-Scans (Warnhinweis, Fortschrittsbalken, Statistik, Abbrechen); am Ende gibt es Export-Buttons für Protokoll, Paare mit einer Altersangabe und Fehlschläge.
+- Das Popup während des Scans entspricht dem des Party-Scans (Warnhinweis, Fortschrittsbalken, Statistik, Abbrechen); am Ende gibt es Export-Buttons für Paare mit einer Altersangabe und Fehlschläge.
 - Header-Badge mit der Zahl der vom Skript blockierten Opas.
-- **Markierung der Ergebnisse** (bei normalem Aufruf, nicht in den Scan-Frames): Karten werden wie Gästelisten auf Partys eingefärbt, ignorierte Mitglieder bleiben sichtbar und bekommen ein rotes X; ein Klick darauf öffnet das Popup *„Du ignorierst …“* („Nicht mehr ignorieren“ schreibt hier `Whitelist: Suche am …`). „Mann“ wird zu Jungschwanz / Schwanz / Opa.
+- **Markierung der Ergebnisse** (bei normalem Aufruf, nicht in den Scan-Frames): Karten werden wie Gästelisten auf Partys eingefärbt, ignorierte Mitglieder bleiben sichtbar und bekommen ein rotes X; ein Klick darauf öffnet das Popup *„Du ignorierst …“* („Nicht mehr ignorieren“ schreibt hier `Whitelist: Suche am …`). Bei eingeschalteter visueller Einstufung zeigen die Symbole die Stufe (Opa/Oma in Stufe 3).
 - Eine unterbrochene systematische Suche (Abbrechen, Abmeldung) lässt sich im Auswahl-Popup an derselben Stelle fortsetzen.
 - Die alte Behandlung der Suche (Panel, Automatik, Ignorieren im Tab) wurde in Version 1.73 entfernt.
 
@@ -299,12 +355,26 @@ Beispiel: Partygäste, 01.10.2026 + „Mögen mich“ vom 25.09.2026 → Interak
 
 ### Limit und Verdrängung
 
-JOYclub behält nur die letzten `IGNORE_LIMIT` (1000) Sperren. Jeder Scan liest zu Beginn die Ignorierliste ein und zeigt den Füllstand („Ignorierliste: 987/1.000 (13 frei)“). Ist sie voll, macht das Skript vor einer neuen Sperre genau einen Platz frei – und entfernt dabei die eigene Notizzeile des Verdrängten:
+JOYclub behält nur die letzten `IGNORE_LIMIT` (1000) Sperren. Jeder Scan liest zu Beginn die Ignorierliste ein und zeigt den Füllstand („Ignorierliste: 987/1.000 (13 frei)“). Ist sie voll, macht das Skript vor einer neuen Sperre genau einen Platz frei – und entfernt dabei die eigene Notizzeile des Verdrängten. Reihenfolge, wer zuerst weicht:
 
-1. Nur Einträge aus **gleich- oder niedrigerrangigen** Quellen; von Hand Gesperrte nie. Ist nichts verdrängbar, wird nicht gesperrt („Limit erreicht, nicht gesperrt“).
-2. Niedrigste Quelle zuerst; darin wer **am längsten nicht gesehen** wurde (ohne Datum = 01.01.1970), aber nur, wenn „zuletzt gesehen“ in der Vergangenheit liegt (eine heutige Party gilt als zukünftig); bei Gleichstand die älteste Sperre.
-3. Liegt alles in der Zukunft: **Altersregel** – Opas und Geronto-Paare mit den wenigsten Tagen über ihrer Grenze (Opa: 50. Geburtstag; Geronto-Paar: 60. Geburtstag des Mannes), bei Gleichstand zuerst das Paar. Das Alter kommt aus den Geburtszeiträumen (mit Sternzeichen), sonst aus der Mitte des Zeitraums.
-4. Sugar Daddys sind von der Altersregel ausgenommen. Ein **neuer Sugar Daddy** verdrängt, wenn sonst nichts geht, den Sugar Daddy mit dem jüngsten Mann – nur wenn der neue Mann älter ist; bei gleichem Alter gewinnt der größere Altersunterschied, bei gleichem Unterschied bleibt der bisherige. Neue Opas oder Paare verdrängen nie Sugar Daddys.
+1. **Niedrigste Quelle** zuerst (Einträge ohne bekannte Quelle gelten als interne Quelle „Altbestand“ ganz unten).
+2. **Art:** Oma → Sugar Mom → Geronto-Paar → Opa → Sugar Daddy.
+3. **Am längsten nicht gesehen** – nur, wenn „zuletzt gesehen“ in der Vergangenheit liegt (eine heutige Party gilt als zukünftig).
+4. **Altersregel:** die wenigsten Tage über der Ignorier-Schwelle (Geronto-Paar: die Person, die ihre Schwelle zuletzt erreicht hat). Das Alter kommt aus den Geburtszeiträumen (mit Sternzeichen).
+
+Aus einer niedrigeren Quelle darf jeder weichen; aus derselben Quelle nur eine gleiche oder niedrigere Art. Von Hand oder über die Whitelist Gesperrte werden nie verdrängt, belegen aber Plätze. Ist nichts verdrängbar, wird nicht gesperrt („Limit erreicht, nicht gesperrt“).
+
+### Gedächtnis
+
+Das Skript merkt sich jedes Mitglied, das jemals gesperrt, verdrängt, vorgemerkt oder im Testmodus „würde gesperrt“ war – mit Quellen („zuletzt gesehen“ je Quelle), Status und Verlauf. Daraus berechnen die Einstellungsseite und das Speichern-Popup, wer nach neuen Regeln gesperrt wäre. Erfüllt jemand die Regeln in mehreren Quellen, zählt die höchste.
+
+### Ignorierliste reparieren
+
+Auf `/ignore/` steht neben **Synchronisieren** der Button **„Ignorierliste reparieren“**. Er zeigt, wie viele vom Skript gesperrte Mitglieder auf JOYclub fehlen (z. B. durch Überlauf herausgefallen), wie viele weniger wichtige Einträge dafür weichen würden und wie viele von Hand gesperrt sind (bleiben unberührt). **Jetzt reparieren** markiert die Fehlenden als „von JOYclub entfernt (Überlauf)“ und sperrt sie – wo nötig auf Kosten weniger wichtiger Einträge – wieder; **Abbrechen** ist vorausgewählt.
+
+<img src="docs/ignorierliste-buttons.png" width="480" alt="Buttons auf der Ignorierliste">
+
+<img src="docs/reparieren-popup.png" width="400" alt="Popup Ignorierliste reparieren">
 
 Im Script-Speicher steht beim Verdrängten „entsperrt (Platz für neue Sperre, Limit)“.
 
@@ -312,40 +382,39 @@ Im Script-Speicher steht beim Verdrängten „entsperrt (Platz für neue Sperre,
 
 ## Profilseiten
 
-- „Mann“ wird im Profilkopf zu Jungschwanz / Schwanz / Opa (mit Opa-Icon).
+- Der Profiltyp im Profilkopf wird bei eingeschalteter visueller Einstufung zur Bezeichnung der Stufe (z. B. Opa, Oma, Geronto-Paar; Symbol in Stufe 3). Werte: höchste Quelle, in der das Mitglied gesehen wurde.
 - Alter, Typ und „zuletzt online“ werden mitgeschrieben; daraus berechnet das Skript Geburtsjahr-Spannen (bei Paaren für beide Personen).
 - **Sternzeichen** aus dem Steckbrief grenzen den Geburtszeitraum weiter ein (Grenztage ±1 Tag; bei Paaren je Person über Geschlechts-Symbol und Alter zugeordnet). Passt ein Sternzeichen nicht zum Zeitraum, wird es ignoriert.
 
 ---
 
-## Exporte und Menü
+## Sicherung, Exporte und Menü
 
-Im Tampermonkey-Menü (alle Exporte als CSV mit `;`, Excel-tauglich):
+Im Tampermonkey-Menü:
 
 | Menüeintrag | Inhalt |
 |---|---|
-| Liste exportieren | alle vom Skript ignorierten Mitglieder mit Quelle, Grund, Zeitpunkt, „zuletzt gesehen“ |
-| alle Konten mit Geburtsjahr exportieren | alle gesehenen Konten mit Geburtsjahr-Spannen, „zuletzt gesehen“ (Datum, Quelle), Sternzeichen |
-| Vorgemerkte exportieren | Mitglieder, die genau `MAX_AGE` alt sind (Vormerkliste) |
+| Alle Daten sichern (JSON) | eine Datei mit allem: Einstellungen, Gesperrte, alle Konten, Vorgemerkte, Whitelist, Gruppen, Gedächtnis, Party-Stände … |
+| Alle Daten wiederherstellen (JSON) | ersetzt nach Rückfrage alle Daten durch eine Sicherung |
+| Unbekannte Profiltypen exportieren | vom Skript gefundene, unbekannte Profiltypen mit Beispielen |
 | Online-Angaben exportieren | vorkommende „zuletzt online“-Texte |
-| Whitelist exportieren | feste und gelernte Whitelist mit Grund |
-| Gruppen (zuletzt bearbeitet) exportieren | Gruppen mit Datum des letzten Scans |
 | Fehlschläge des Party-Scans exportieren / löschen | gespeicherte Fehlschläge |
-| Protokoll der Mitgliedersuche exportieren | Protokoll der systematischen Suche je Einzelsuche |
 | Paare mit nur einer Altersangabe exportieren | in der Suche gefundene Paare mit nur einem Alter |
 | Fehlschläge der Mitgliedersuche exportieren | gespeicherte Fehlschläge der Mitgliedersuche |
-| Mitgliedersuche – „würden ignoriert“ exportieren | Treffer der Suche im Statistik-Modus (`SEARCH_IGNORE: false`) |
 | Einstellungen (Opa-Schutz) öffnen | öffnet die Seite „Opa-Schutz“ |
 | Partys beim nächsten Scan vollständig prüfen | vergisst die bereits geprüften Anmeldungen |
 | Erledigt-Liste leeren | löscht das Protokoll der vom Skript Ignorierten (mit Rückfrage) |
 | Fehlschläge leeren | löscht alle gespeicherten Fehlschläge (mit Rückfrage) |
-| Typen-Info leeren | löscht die gesammelten Infos zu anderen Profiltypen (mit Rückfrage) |
+| Typen-Info leeren | löscht die gesammelten unbekannten Profiltypen (mit Rückfrage) |
 | Lauf zurücksetzen | Notfall: beendet alle laufenden Vorgänge und gibt die Tab-Sperre frei |
+
+Die CSV-Exporte (`;`, Excel-tauglich) unterhalb der Sicherung dienen nur der Fehlersuche und sind nicht in der Sicherung enthalten. Die früheren Einzel-Exporte (Liste, alle Konten, Vorgemerkte, Whitelist, Gruppen) stecken jetzt in der Sicherung; das Protokoll der Mitgliedersuche und „würden ignoriert“ gibt es nicht mehr.
 
 ---
 
 ## Technisches
 
+- **Speicher:** große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen als ein Tampermonkey-Wert je Mitglied (`jaf_log|/profile/…`); geändert wird nur, was sich ändert, andere Tabs werden über `GM_addValueChangeListener` informiert. Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`.
 - **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
 - **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
 - **Fehleranzeige:** Startfehler erscheinen in einem Panel mit „Alles zurücksetzen“.

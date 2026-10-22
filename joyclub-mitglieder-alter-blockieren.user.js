@@ -1,14 +1,17 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.73
-// @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter bzw. Altersunterschied durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Exporte.
+// @version      1.74
+// @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=joyclub.de
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_listValues
+// @grant        GM_deleteValue
+// @grant        GM_addValueChangeListener
 // @run-at       document-idle
 // @homepageURL  https://github.com/Schimmelreiter/joyclub-opa-scan
 // @updateURL    https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
@@ -17,21 +20,118 @@
 
 (function () {
   'use strict';
+  // ---------- Speicher ----------
+  // Große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen ab 1.74 als
+  // EIN Tampermonkey-Wert JE MITGLIED („jaf_log|/profile/…“) statt als ein riesiger Wert. Der Rest des Skripts
+  // sieht weiter ganze Listen: gmGet liefert die Liste, gmSet schreibt nur geänderte Einträge.
+  // Andere Tabs erfahren über „<name>#v“, welche Einträge sich geändert haben.
+  const BIG_KEYS = ['jaf_log', 'jaf_ignored', 'jaf_accounts', 'jaf_checked', 'jaf_watch', 'jaf_mem'];
+  const K_STORE_V = 'jaf_store_v2'; // Namen der bereits umgebauten Listen
+  const STORE_TAB = Math.random().toString(36).slice(2, 9);
+  const hasListen = typeof GM_addValueChangeListener === 'function';
+  const BIG = {};
+  const storeMigrated = (name) => (GM_getValue(K_STORE_V, []) || []).includes(name);
+  function bigLoad(name) {
+    let st = BIG[name];
+    if (st && st.loaded) return st;
+    st = BIG[name] = st || { loaded: false, strs: new Map(), legacy: false };
+    st.strs.clear();
+    st.legacy = !storeMigrated(name);
+    if (st.legacy) {
+      const o = GM_getValue(name, null);
+      if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) st.strs.set(k, JSON.stringify(v));
+    } else {
+      const pre = name + '|';
+      for (const k of GM_listValues()) if (k.startsWith(pre)) { const v = GM_getValue(k); if (v !== undefined) st.strs.set(k.slice(pre.length), JSON.stringify(v)); }
+    }
+    st.loaded = true;
+    if (!st.listen && hasListen) {
+      st.listen = true;
+      GM_addValueChangeListener(name + '#v', (k, o, n, remote) => {
+        if (!remote || !BIG[name].loaded) return;
+        const s2 = BIG[name];
+        if (n && Array.isArray(n.keys) && !s2.legacy) {
+          for (const x of n.keys) { const v = GM_getValue(name + '|' + x); if (v === undefined) s2.strs.delete(x); else s2.strs.set(x, JSON.stringify(v)); }
+        } else s2.loaded = false;
+      });
+    }
+    return st;
+  }
+  function bigGet(name, d) {
+    const st = bigLoad(name);
+    if (!st.strs.size) return d === undefined || d === null ? (d === null ? null : {}) : d;
+    const o = {};
+    for (const [k, v] of st.strs) o[k] = JSON.parse(v);
+    return o;
+  }
+  function bigSet(name, m) {
+    const st = bigLoad(name);
+    m = m || {};
+    const changed = [];
+    if (st.legacy) {
+      GM_setValue(name, m);
+      st.strs.clear();
+      for (const [k, v] of Object.entries(m)) st.strs.set(k, JSON.stringify(v));
+    } else {
+      for (const [k, v] of Object.entries(m)) {
+        if (v === undefined) continue;
+        const s2 = JSON.stringify(v);
+        if (st.strs.get(k) !== s2) { GM_setValue(name + '|' + k, v); st.strs.set(k, s2); changed.push(k); }
+      }
+      for (const k of [...st.strs.keys()]) if (!(k in m) || m[k] === undefined) { GM_deleteValue(name + '|' + k); st.strs.delete(k); changed.push(k); }
+      if (!changed.length) return;
+    }
+    GM_setValue(name + '#v', { ts: Date.now(), tab: STORE_TAB, keys: st.legacy || changed.length > 300 ? null : changed });
+  }
+  // einzelne Einträge (ohne die ganze Liste zu bauen)
+  function bigGet1(name, key) { const v = bigLoad(name).strs.get(key); return v === undefined ? undefined : JSON.parse(v); }
+  function bigSet1(name, key, v) {
+    const st = bigLoad(name);
+    if (st.legacy) { const m = bigGet(name, {}); if (v === undefined) delete m[key]; else m[key] = v; bigSet(name, m); return; }
+    const s2 = v === undefined ? undefined : JSON.stringify(v);
+    if (st.strs.get(key) === s2) return;
+    if (v === undefined) { GM_deleteValue(name + '|' + key); st.strs.delete(key); } else { GM_setValue(name + '|' + key, v); st.strs.set(key, s2); }
+    GM_setValue(name + '#v', { ts: Date.now(), tab: STORE_TAB, keys: [key] });
+  }
+  const gmGet = (k, d) => (BIG_KEYS.includes(k) ? bigGet(k, d) : GM_getValue(k, d));
+  const gmSet = (k, v) => (BIG_KEYS.includes(k) ? bigSet(k, v) : GM_setValue(k, v));
+  if (hasListen) GM_addValueChangeListener(K_STORE_V, (k, o, n, remote) => { if (remote) for (const x of Object.keys(BIG)) BIG[x].loaded = false; });
+  // Umbau alter Einzelwerte → ein Wert je Mitglied; alte Daten bleiben, bis jeder Eintrag geprüft ist
+  function storeNeedsMigration() { return BIG_KEYS.some((n) => !storeMigrated(n) && GM_getValue(n, null)); }
+  function migrateStores() {
+    const res = { ok: [], failed: [] };
+    for (const name of BIG_KEYS) {
+      if (storeMigrated(name)) continue;
+      const o = GM_getValue(name, null);
+      const done = () => { const l = GM_getValue(K_STORE_V, []) || []; if (!l.includes(name)) GM_setValue(K_STORE_V, l.concat(name)); };
+      if (!o || typeof o !== 'object') { done(); continue; }
+      const keys = Object.keys(o);
+      for (const k of keys) GM_setValue(name + '|' + k, o[k]);
+      const bad = keys.filter((k) => JSON.stringify(GM_getValue(name + '|' + k)) !== JSON.stringify(o[k]));
+      if (bad.length) { for (const k of keys) GM_deleteValue(name + '|' + k); res.failed.push(name); continue; }
+      done();
+      GM_deleteValue(name);
+      res.ok.push(`${name}: ${keys.length}`);
+      if (BIG[name]) BIG[name].loaded = false;
+    }
+    return res;
+  }
+
   // ---------- Login-Seite (identity.joyclub.com): nur einloggen, wenn das Skript den Login angestoßen hat ----------
   if (location.hostname === 'identity.joyclub.com') {
     (async () => {
       const K = 'jaf_login_pending';
-      const p = GM_getValue(K, null);
+      const p = gmGet(K, null);
       if (!p || !p.auto || p.tried || Date.now() - p.ts > 5 * 60000) return; // Login von Hand → nichts tun
       const sl = (ms) => new Promise((r) => setTimeout(r, ms));
       const q = (sel) => document.querySelector(sel);
       let user = null, pw = null;
       for (let i = 0; i < 40 && !(user && pw); i++) { user = q('[data-e2e="input-username"] input'); pw = q('[data-e2e="input-password"] input[type="password"]'); await sl(500); }
       await sl(2500); // Passwort-Manager füllen lassen
-      const report = (msg) => GM_setValue('jaf_login_result', { token: p.token, ok: false, msg, ts: Date.now() });
+      const report = (msg) => gmSet('jaf_login_result', { token: p.token, ok: false, msg, ts: Date.now() });
       if (!user || !pw) { report('Login-Formular nicht gefunden'); return; }
       if (!user.value || !pw.value) { report('Benutzername/Passwort nicht ausgefüllt'); return; }
-      GM_setValue(K, Object.assign({}, p, { tried: Date.now() }));
+      gmSet(K, Object.assign({}, p, { tried: Date.now() }));
       const cb = q('[data-e2e="checkbox-autologin"] input[type="checkbox"]');
       if (cb && !cb.checked) { cb.click(); await sl(300); }
       // Cloudflare-Prüfung (Turnstile) abwarten, falls vorhanden
@@ -55,21 +155,35 @@
   const CONFIG = {
     DRY_RUN: false,         // true = Testmodus: spielt alles durch, ignoriert aber niemanden (klickt „Abbrechen“)
     DEBUG: false,
-    SEARCH_IGNORE: false,   // Mitgliedersuche: true = Treffer ignorieren, false = nur Statistik („würden ignoriert“)
     IGNORE_LIMIT: 1000,     // JOYclub behält nur so viele Sperren (die ältesten fallen sonst still heraus)
     MYJOY_FIRST_MAX: 1000,  // Profilbesucher / „Mögen mich“: beim ersten Scan höchstens so viele Karten
     // Rangfolge der Quellen (höchste zuerst): eine höhere Quelle ersetzt eine niedrigere, nie umgekehrt
     SOURCE_RANK: ['Likes', 'Besucher', 'Party', 'Gruppen', 'Suche', 'Sync'],
 
-    MAX_AGE: 49,            // Mitglieder, die ÄLTER als dieser Wert sind, werden blockiert
-    WARN_AGE: 29,           // Farben: bis WARN_AGE grün, darüber hellorange, genau MAX_AGE (1 Jahr vor der Grenze) dunkelorange
-    ONLY_TYPES: ['Mann', 'Transmann', 'Non-binary', 'Transvestit', 'Männer-Paar'],   // nur diese Profiltypen ignorieren (z. B. 'Mann', 'Frau', 'Paar', 'Transfrau' …)
-    COUPLE_MODE: 'any',     // Paare: 'any' = eine Person zu alt reicht, 'all' = beide müssen zu alt sein
-    // Gemischte Paare (Frau + Mann; JOYclub zeigt zuerst das Alter der Frau, dann das des Mannes):
-    // NICHT nach MAX_AGE, sondern nur, wenn die Frau COUPLE_AGE_GAP oder mehr Jahre jünger ist als der Mann.
-    COUPLE_RULE_TYPES: ['Paar'],
-    COUPLE_AGE_GAP: 18,
-    COUPLE_BOTH_MIN_AGE: 60,  // Paare werden außerdem ignoriert, wenn BEIDE so alt oder älter sind („Geronto-Paar“)
+    // ---- Regeln je Gruppe (Männer m, Frauen f, Paare p) und Quelle ----
+    // visual: Farben, Umbenennen, eigene Reiter · ignore: Treffer sperren (mit Notiz, rotes X)
+    // names: Bezeichnungen der drei Altersstufen (Einzahl/Mehrzahl) · types: zugeordnete Profiltypen
+    // src: je Quelle [Stufe 1 bis, Stufe 2 bis, ignorieren ab]; bei Paaren je { f: [...], m: [...] } (Frau/Mann)
+    // Paare werden ignoriert, wenn BEIDE ihre Schwelle erreichen; split = Frau und Mann getrennt einstellen
+    GROUPS: {
+      m: { visual: false, ignore: false,
+        names: { one: ['Mann', 'Mann', 'Opa'], many: ['Männer', 'Männer', 'Opas'] },
+        types: ['Mann', 'Transmann', 'Transvestit', 'Non-binary', 'Männer-Paar'],
+        src: { Likes: [29, 49, 50], Besucher: [29, 49, 50], Party: [29, 49, 50], Gruppen: [29, 49, 50], Suche: [29, 49, 100] } },
+      f: { visual: false, ignore: false,
+        names: { one: ['Frau', 'Frau', 'Oma'], many: ['Frauen', 'Frauen', 'Omas'] },
+        types: ['Frau'],
+        src: { Likes: [25, 49, 50], Besucher: [25, 49, 50], Party: [25, 49, 50], Gruppen: [25, 49, 50], Suche: [25, 49, 100] } },
+      p: { visual: false, ignore: false, split: false,
+        names: { one: ['Pärchen', 'Paar', 'Geronto-Paar'], many: ['Pärchen', 'Paare', 'Geronto-Paare'] },
+        types: ['Paar'],
+        src: { Likes: { f: [39, 59, 60], m: [39, 59, 60] }, Besucher: { f: [39, 59, 60], m: [39, 59, 60] }, Party: { f: [39, 59, 60], m: [39, 59, 60] },
+          Gruppen: { f: [39, 59, 60], m: [39, 59, 60] }, Suche: { f: [39, 59, 100], m: [39, 59, 100] } },
+        sd: { on: true, gap: 18 },   // Sugar Daddy: Mann mindestens gap Jahre älter als die Frau
+        sm: { on: true, gap: 18 } }, // Sugar Mom: Frau mindestens gap Jahre älter als der Mann
+    },
+    // ---- AWO-Faktor: erwartete Anwesenheit je Gruppe und Altersstufe (%), Gewichtung der Gruppen (%) ----
+    AWO: { quota: { m: [33, 66, 95], f: [95, 95, 95], p: [90, 90, 90] }, weight: { m: 67, f: 0, p: 33 } },
 
     // Werden NIE blockiert (Groß-/Kleinschreibung egal). Fest eingetragen; dazu kommen automatisch
     // gefundene Einträge (z. B. Gruppen-Moderatoren aus dem Opa-Scan), die im Tampermonkey-Speicher liegen.
@@ -280,12 +394,8 @@
 
     WRITE_NOTE: true,       // Profilnotiz hinterlegen und mit „Speichern“ sichern – immer VOR dem Ignorieren
     NOTE_REQUIRED: true,    // true = ohne gespeicherte Notiz wird das Profil NICHT ignoriert
-    // {quelle} = "Suche" (Mitgliedersuche)
-    NOTE_TEXT: 'Alter Sack ({quelle}) geblockt am {datum} um {uhrzeit}',
-    // gemischte Paare, die wegen des Altersunterschieds (COUPLE_AGE_GAP) ignoriert werden
-    COUPLE_NOTE_TEXT: 'Sugar Daddy ({quelle}) ignoriert am {datum} um {uhrzeit}',
-    // Paare, bei denen beide COUPLE_BOTH_MIN_AGE oder älter sind
-    GERONTO_NOTE_TEXT: 'Geronto-Paar ({quelle}) ignoriert am {datum} um {uhrzeit}',
+    // {art} = Bezeichnung der Stufe 3 (z. B. „Opa“, „Oma“, „Geronto-Paar“) bzw. „Sugar Daddy“ / „Sugar Mom“; {quelle} = z. B. „Party“
+    NOTE_TEXT: '{art} ({quelle}) ignoriert am {datum} um {uhrzeit}',
 
     LIST_PAGES: [
       // wird vom Opa-Scan im Hintergrund gelesen (keine eigene Bedienoberfläche)
@@ -326,15 +436,7 @@
     VISIT_REASON: 'Profilbesucher',
     LIKE_NOTE_TEXT: 'Whitelist: Interaktion am {datum}',      // „Nicht mehr ignorieren“ auf „Mögen mich“
     LIKE_REASON: 'Interaktion',
-    // neue Reiter der Gästeliste (statt „Männer“), nach Anmelde-Alter
-    GUEST_TABS: [
-      { key: 'jung', label: 'Jungschwänze' },   // bis WARN_AGE
-      { key: 'mid', label: 'Schwänze' },         // WARN_AGE+1 … MAX_AGE
-      { key: 'opa', label: 'Opas' },             // über MAX_AGE (oder ohne Altersangabe)
-    ], // Opa-Scan ignoriert über die Profilseiten – nur so wird die Profilnotiz gespeichert
     MOD_NOTE_TEXT: 'Whitelist: Moderator der Gruppe "{gruppe}"',
-    // eigene Notiz-Zeilen des Skripts (werden bei entblockten Moderatoren entfernt) – „geblockt“ und „blockiert“
-    OWN_NOTE_RE: /^\s*(?:Alter Sack|Sugar Daddy|Geronto-Paar)(?:\s*\([^)]*\))?\s+(?:geblockt|blockiert|ignoriert)\s+am\s+\S+\s+um\s+\S+\s*$/i,
     PROFILE_PATH_RE: /^\/profile\/\d+\.[^/]+\.html$/i,
 
     // Texterkennung auf der Profilseite
@@ -347,18 +449,78 @@
     NOTE_OPEN_TEXTS: ['notiz'],
     NOTE_SAVE_TEXTS: ['speichern', 'übernehmen', 'fertig', 'ok'],
   };
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const normType = (t) => norm(t).replace(/[-\s]/g, '');
+  const SCAN_SOURCES = ['Likes', 'Besucher', 'Party', 'Gruppen', 'Suche'];
+  const ALTBESTAND = 'Altbestand'; // interne Quelle: Konten ohne bekannte Quelle, immer ganz unten
+  const GROUP_KEYS = ['m', 'f', 'p'];
+  const GROUP_LABELS = { m: 'Männer', f: 'Frauen', p: 'Paare' };
+  // bekannte JOYclub-Profiltypen und in welche Gruppen sie dürfen (erste = fest)
+  const KNOWN_TYPES = {
+    'Mann': ['m'], 'Frau': ['f'], 'Paar': ['p'],
+    'Transmann': ['m', 'f'], 'Transfrau': ['m', 'f'], 'Transvestit': ['m', 'f'], 'Non-binary': ['m', 'f'],
+    'Männer-Paar': ['m', 'p'], 'Frauen-Paar': ['f', 'p'], 'Trans-Paar': ['m', 'f', 'p'],
+  };
+  const FIXED_TYPES = { Mann: 'm', Frau: 'f', Paar: 'p' };
   // ==========================================================
   // ---------- Einstellungen im Skript-Speicher ----------
   // Je Einstellung: gültiger Wert + zuletzt gesehener Quelltext-Wert. Ändert man den Wert im Quelltext, gilt ab dann
   // dieser (auch wenn vorher auf der Seite „Opa-Schutz“ etwas anderes gespeichert war). Solange der Quelltext-Wert
   // unverändert bleibt, gilt der gespeicherte Wert. Listen werden als Ganzes verglichen.
-  const SETTING_KEYS = ['DRY_RUN', 'DEBUG', 'SEARCH_IGNORE', 'IGNORE_LIMIT', 'MYJOY_FIRST_MAX', 'MAX_AGE', 'WARN_AGE', 'ONLY_TYPES', 'COUPLE_MODE',
-    'COUPLE_AGE_GAP', 'COUPLE_BOTH_MIN_AGE', 'WHITELIST', 'WRITE_NOTE', 'NOTE_REQUIRED', 'SOURCE_RANK'];
+  const SETTING_KEYS = ['DRY_RUN', 'DEBUG', 'IGNORE_LIMIT', 'MYJOY_FIRST_MAX', 'GROUPS', 'AWO', 'WHITELIST', 'WRITE_NOTE', 'NOTE_REQUIRED', 'SOURCE_RANK'];
+  // Einstellungen bis 1.73 (werden einmalig in GROUPS übernommen und dann entfernt)
+  const OLD_RULE_KEYS = ['SEARCH_IGNORE', 'MAX_AGE', 'WARN_AGE', 'ONLY_TYPES', 'COUPLE_MODE', 'COUPLE_AGE_GAP', 'COUPLE_BOTH_MIN_AGE'];
   const K_SETTINGS = 'jaf_settings'; // { KEY: { value, src } }
   const SOURCE_DEFAULTS = {};        // Werte laut Quelltext
+  // alte Altersgrenzen (bis 1.73) → neue Tabelle; Schalter bleiben aus
+  function migrateOldRules(st, groups) {
+    const old = {};
+    for (const k of OLD_RULE_KEYS) if (st[k] && st[k].value !== undefined) old[k] = st[k].value;
+    if (!Object.keys(old).length) return false;
+    const G = JSON.parse(JSON.stringify(groups));
+    const clamp = (n) => Math.max(18, Math.min(100, Math.round(n)));
+    if (old.MAX_AGE != null) {
+      const t = clamp(old.MAX_AGE + 1), w = clamp(Math.min(old.WARN_AGE != null ? old.WARN_AGE : 29, t - 2));
+      for (const q of SCAN_SOURCES) {
+        const th = q === 'Suche' && !old.SEARCH_IGNORE ? G.m.src.Suche[2] : t;
+        G.m.src[q] = [w, Math.max(w + 1, t - 1), th];
+      }
+    }
+    if (old.COUPLE_BOTH_MIN_AGE != null) {
+      const t = clamp(old.COUPLE_BOTH_MIN_AGE);
+      for (const q of SCAN_SOURCES) for (const who of ['f', 'm']) {
+        const v = G.p.src[q][who];
+        const th = q === 'Suche' && !old.SEARCH_IGNORE ? v[2] : t;
+        G.p.src[q][who] = [Math.min(v[0], t - 2), t - 1, th];
+      }
+    }
+    if (old.COUPLE_AGE_GAP != null) G.p.sd.gap = Math.max(1, Math.round(old.COUPLE_AGE_GAP));
+    if (Array.isArray(old.ONLY_TYPES)) {
+      for (const t of old.ONLY_TYPES) {
+        const k = Object.keys(KNOWN_TYPES).find((x) => normType(x) === normType(t)) || t;
+        if (FIXED_TYPES[k] || GROUP_KEYS.some((g) => G[g].types.includes(k))) continue;
+        if (!KNOWN_TYPES[k] || KNOWN_TYPES[k].includes('m')) G.m.types.push(k);
+      }
+    }
+    for (const k of OLD_RULE_KEYS) delete st[k];
+    return G;
+  }
+  // fehlende Felder (neue Skript-Version) aus den Quelltext-Werten ergänzen
+  function completeGroups(G, D) {
+    for (const g of Object.keys(D)) {
+      G[g] = Object.assign({}, JSON.parse(JSON.stringify(D[g])), G[g] || {});
+      for (const q of Object.keys(D[g].src)) if (!G[g].src[q]) G[g].src[q] = JSON.parse(JSON.stringify(D[g].src[q]));
+      for (const x of ['sd', 'sm', 'names']) if (D[g][x]) G[g][x] = Object.assign({}, D[g][x], G[g][x] || {});
+    }
+    return G;
+  }
   (function applyStoredSettings() {
-    const st = GM_getValue(K_SETTINGS, {}) || {};
+    const st = gmGet(K_SETTINGS, {}) || {};
     let ch = false;
+    if (!st.GROUPS) {
+      const G = migrateOldRules(st, CONFIG.GROUPS);
+      if (G) { st.GROUPS = { value: G, src: JSON.stringify(CONFIG.GROUPS) }; ch = true; }
+    } else if (OLD_RULE_KEYS.some((k) => st[k])) { OLD_RULE_KEYS.forEach((k) => delete st[k]); ch = true; }
     for (const k of SETTING_KEYS) {
       const src = JSON.stringify(CONFIG[k]);
       SOURCE_DEFAULTS[k] = JSON.parse(src);
@@ -368,16 +530,19 @@
     }
     // Quellen, die im gespeicherten Wert fehlen (neue Skript-Version), hinten anhängen
     for (const q of SOURCE_DEFAULTS.SOURCE_RANK) if (!CONFIG.SOURCE_RANK.includes(q)) CONFIG.SOURCE_RANK.push(q);
-    if (ch) GM_setValue(K_SETTINGS, st);
+    completeGroups(CONFIG.GROUPS, SOURCE_DEFAULTS.GROUPS);
+    // nicht mehr benutzte Speicher (bis 1.73)
+    for (const k of ['jaf_pauses', 'jaf_ms_protocol', 'jaf_ms_would']) if (gmGet(k, null) != null) GM_deleteValue(k);
+    if (ch) gmSet(K_SETTINGS, st);
   })();
-  const storedSettings = () => GM_getValue(K_SETTINGS, {}) || {};
+  const storedSettings = () => gmGet(K_SETTINGS, {}) || {};
   function saveSettings(values) {
     const st = storedSettings();
     for (const [k, v] of Object.entries(values)) {
       if (!SETTING_KEYS.includes(k)) continue;
       st[k] = { value: JSON.parse(JSON.stringify(v)), src: JSON.stringify(SOURCE_DEFAULTS[k]) };
     }
-    GM_setValue(K_SETTINGS, st);
+    gmSet(K_SETTINGS, st);
   }
   // Anzeige-Namen der Quellen (intern bleiben die kurzen Namen)
   const SOURCE_LABELS = { Likes: 'Interaktionen', Besucher: 'Profilbesucher', Party: 'Partygäste', Gruppen: 'Gruppen', Suche: 'Mitgliedersuche', Sync: 'Synchronisation' };
@@ -390,29 +555,30 @@
   const K_DONE = 'jaf_done';
   const K_FAILED = 'jaf_failed';
   const K_TYPES = 'jaf_other_types';
-  const typeAllowed = (t) => CONFIG.ONLY_TYPES.some((x) => norm(x).replace(/[-\s]/g, '') === norm(t).replace(/[-\s]/g, ''));
-  const handledType = (t) => typeAllowed(t) || CONFIG.COUPLE_RULE_TYPES.some((x) => norm(x).replace(/[-\s]/g, '') === norm(t).replace(/[-\s]/g, ''));
+  const handledType = (t) => !!groupOfType(t);
   const GENDER_NAMES = { 1: 'Mann', 2: 'Frau', 3: 'Paar', 7: 'Transfrau' };
 
-  // andere Profiltypen merken (Debug-Info): { Typ: [Namen …] }
-  // gespeicherte Typen, ohne die inzwischen erlaubten (alte Einträge aus früheren Einstellungen)
-  const getTypes = () => {
-    const t = GM_getValue(K_TYPES, {});
-    let changed = false;
-    for (const k of Object.keys(t)) if (handledType(k)) { delete t[k]; changed = true; }
-    if (changed) GM_setValue(K_TYPES, t);
-    return t;
-  };
+  // unbekannte Profiltypen sammeln (Profile und Karten): { Typ: [Namen …] } – erscheinen in den Einstellungen in allen Gruppen
+  const isUnknownType = (t) => !!t && String(t).split('|').some((x) => !knownType(x));
+  const getTypes = () => gmGet(K_TYPES, {}) || {};
   function noteType(type, name) {
-    if (!type || handledType(type)) return;
+    if (!isUnknownType(type)) return;
     const t = getTypes();
-    const list = t[type] || (t[type] = []);
-    if (!list.includes(name)) { list.push(name); GM_setValue(K_TYPES, t); }
+    for (const x of String(type).split('|').filter((y) => !knownType(y))) {
+      const list = t[x] || (t[x] = []);
+      if (name && !list.includes(name) && list.length < 200) list.push(name);
+    }
+    gmSet(K_TYPES, t);
+  }
+  function exportTypes() {
+    const t = getTypes();
+    downloadCsv('unbekannte-profiltypen', ['Profiltyp', 'Anzahl Konten', 'Beispiele'], Object.keys(t).sort().map((k) => [k, t[k].length, t[k].slice(0, 20).join(', ')]));
+    return Object.keys(t).length;
   }
   function typesSummary() {
     const t = getTypes();
     const parts = Object.keys(t).sort().map((k) => `${k}: ${t[k].length}`);
-    return parts.length ? 'Andere Profiltypen (übersprungen): ' + parts.join(', ') : 'Andere Profiltypen: noch keine';
+    return parts.length ? 'Unbekannte Profiltypen: ' + parts.join(', ') : 'Unbekannte Profiltypen: noch keine';
   }
   function showTypes() {
     const t = getTypes();
@@ -425,7 +591,6 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const rand = (a, b) => a + Math.floor(Math.random() * (b - a));
-  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const pad = (n) => String(n).padStart(2, '0');
   const cleanPath = (p) => p.replace(/\/+$/, '') || '/';
 
@@ -444,17 +609,17 @@
       return id;
     } catch (e) { return 'x' + Math.random().toString(36).slice(2); }
   })();
-  const getLock = () => GM_getValue(K_LOCK, null);
+  const getLock = () => gmGet(K_LOCK, null);
   const lockedByOther = () => { const l = getLock(); return l && l.owner !== TAB_ID && Date.now() - l.ts < LOCK_TTL ? l : null; };
   const ownsLock = () => { const l = getLock(); return !!(l && l.owner === TAB_ID); };
   async function acquireLock(what) {
     if (lockedByOther()) return false;
-    GM_setValue(K_LOCK, { owner: TAB_ID, ts: Date.now(), what, url: location.href });
+    gmSet(K_LOCK, { owner: TAB_ID, ts: Date.now(), what, url: location.href });
     await new Promise((r) => setTimeout(r, 150 + Math.random() * 150)); // Gleichzeitiger Zugriff: wer zuletzt schrieb, gewinnt
     const l = getLock();
     return !!(l && l.owner === TAB_ID);
   }
-  function releaseLock() { if (ownsLock()) GM_setValue(K_LOCK, null); }
+  function releaseLock() { if (ownsLock()) gmSet(K_LOCK, null); }
   function lockNotice(l) {
     const age = Math.round((Date.now() - l.ts) / 1000);
     return `🔒 Ein anderer Tab arbeitet gerade (${l.what || 'beschäftigt'}, vor ${age} s aktiv) – hier wird nur markiert.`;
@@ -464,7 +629,7 @@
   const K_WHITE = 'jaf_whitelist';   // { normName: { name, url, reasons: [..], modGroups: [{ key, name }], since } }
   const MOD_PREFIX = 'Moderator der Gruppe ';
   const getDynWhite = () => {
-    const w = GM_getValue(K_WHITE, {});
+    const w = gmGet(K_WHITE, {});
     // Übernahme aus 1.26: „Moderator der Gruppe X“ stand in reasons
     let ch = false;
     for (const e of Object.values(w)) {
@@ -476,7 +641,7 @@
         ch = true;
       }
     }
-    if (ch) GM_setValue(K_WHITE, w);
+    if (ch) gmSet(K_WHITE, w);
     return w;
   };
   const sameGroup = (a, b) => (a.key && b.key ? a.key === b.key : norm(a.name) === norm(b.name));
@@ -493,7 +658,7 @@
     const i = e.modGroups.findIndex((x) => sameGroup(x, g));
     if (i < 0) e.modGroups.push({ key: g.key, name: g.name }); else e.modGroups[i] = { key: g.key || e.modGroups[i].key, name: g.name };
     w[k] = e;
-    GM_setValue(K_WHITE, w);
+    gmSet(K_WHITE, w);
   }
   // bekannte Moderatoren von Gruppe g, die dort nicht mehr Moderator sind → Gruppe entfernen;
   // ohne verbleibende Gruppe und ohne andere Begründung fliegen sie von der Whitelist. Rückgabe: diese Ex-Moderatoren
@@ -511,7 +676,7 @@
         if (!WHITELIST.some((x) => norm(x.name) === k)) former.push({ name: e.name, url: e.url, path: e.url ? cleanPath(new URL(e.url, location.origin).pathname) : '' });
       }
     }
-    if (ch) GM_setValue(K_WHITE, w);
+    if (ch) gmSet(K_WHITE, w);
     return former;
   }
   const dynReasons = (e) => (e.reasons || []).concat((e.modGroups || []).map((g) => MOD_PREFIX + g.name));
@@ -520,7 +685,7 @@
   let _wIdCache = { t: 0, set: new Set() };
   // gelernte Profil-Links der Whitelist-Mitglieder (feste Einträge haben im Skript nur den Namen)
   const K_WHITE_URLS = 'jaf_white_urls'; // { normName: { name, url, id, seen } }
-  const getWhiteUrls = () => GM_getValue(K_WHITE_URLS, {});
+  const getWhiteUrls = () => gmGet(K_WHITE_URLS, {});
   // beim Sehen eines Profils (Profilseite, Gästeliste, Karten): fehlenden Link/ID der Whitelist ergänzen
   function learnWhiteUrl(name, path) {
     if (!name || !path || !CONFIG.PROFILE_PATH_RE.test(path)) return;
@@ -530,12 +695,12 @@
     const isStatic = WHITELIST.some((e) => norm(e.name) === k);
     const w = getDynWhite();
     const dyn = w[k];
-    if (dyn && (!dyn.url || !dyn.id)) { if (!dyn.url) dyn.url = url; if (!dyn.id) dyn.id = id; GM_setValue(K_WHITE, w); _wIdCache.t = 0; }
+    if (dyn && (!dyn.url || !dyn.id)) { if (!dyn.url) dyn.url = url; if (!dyn.id) dyn.id = id; gmSet(K_WHITE, w); _wIdCache.t = 0; }
     if (!isStatic) return;
     const m = getWhiteUrls();
     if (m[k] && m[k].id === id) return;
     m[k] = { name, url, id, seen: new Date().toISOString() };
-    GM_setValue(K_WHITE_URLS, m);
+    gmSet(K_WHITE_URLS, m);
     _wIdCache.t = 0;
   }
   const whiteUrlOf = (name) => { const k = norm(name); return (getWhiteUrls()[k] || {}).url || (getDynWhite()[k] || {}).url || ''; };
@@ -567,7 +732,7 @@
       if (!e[key].some((x) => x.name === party.name && x.date === party.date)) e[key].push(party);
     }
     w[k] = e;
-    GM_setValue(K_WHITE, w);
+    gmSet(K_WHITE, w);
     _wIdCache.t = 0;
   }
   function whiteList() {
@@ -585,7 +750,7 @@
     const isNew = !w[k];
     if (reason && !e.reasons.includes(reason)) e.reasons.push(reason);
     w[k] = e;
-    GM_setValue(K_WHITE, w);
+    gmSet(K_WHITE, w);
     return isNew;
   }
   function whiteReason(name) {
@@ -596,32 +761,32 @@
     return reasons.join('; ');
   }
 
-  const getState = () => GM_getValue(K_STATE, { running: false, queue: [], count: 0 });
-  const setState = (s) => GM_setValue(K_STATE, Object.assign({}, s, { ts: Date.now() }));
-  const resetState = () => GM_setValue(K_STATE, { running: false, queue: [], count: 0, ts: Date.now() });
+  const getState = () => gmGet(K_STATE, { running: false, queue: [], count: 0 });
+  const setState = (s) => gmSet(K_STATE, Object.assign({}, s, { ts: Date.now() }));
+  const resetState = () => gmSet(K_STATE, { running: false, queue: [], count: 0, ts: Date.now() });
   const K_LOG = 'jaf_log';           // { path: { name, url, ages, type, source, method, ts } } – vom Skript ignoriert
   const K_IGNORED = 'jaf_ignored';   // { path: { name, url, id } } – echte Ignorierliste von JOYclub (Abgleich)
   const K_IGNORED_TS = 'jaf_ignored_ts';
   const getLog = () => {
-    const l = GM_getValue(K_LOG, null);
+    const l = gmGet(K_LOG, null);
     if (l) return l;
     // einmalige Übernahme der alten Erledigt-Liste (nur Pfade)
     const m = {};
-    for (const p of GM_getValue(K_DONE, [])) {
+    for (const p of gmGet(K_DONE, [])) {
       const mm = p.match(/\/profile\/\d+\.([^/]+)\.html/);
       m[p] = { name: mm ? mm[1] : '', url: location.origin + p, method: 'Profil (alt)', ts: 0 };
     }
-    GM_setValue(K_LOG, m);
+    gmSet(K_LOG, m);
     return m;
   };
-  const getIgnored = () => GM_getValue(K_IGNORED, {});
+  const getIgnored = () => gmGet(K_IGNORED, {});
   // vom Skript ignoriert und nicht wieder entblockt
   const getDone = () => Object.entries(getLog()).filter(([, r]) => !r.unblocked).map(([p]) => p);
   // bereits ignoriert = vom Skript ignoriert (nicht entblockt) ODER auf der echten Ignorierliste
   const isBlocked = (path, log_ = getLog(), ign = getIgnored()) => !!((log_[path] && !log_[path].unblocked) || ign[path]);
   const addGroup = (arr, g) => { arr = Array.isArray(arr) ? arr.slice() : []; if (g && !arr.includes(g)) arr.push(g); return arr; };
   // Rangfolge der Quellen (CONFIG.SOURCE_RANK): höher stehende ersetzt niedrigere; ohne Quelle = ganz unten
-  const srcRank = (s) => { const i = CONFIG.SOURCE_RANK.indexOf(s || ''); return i < 0 ? 99 : i; };
+  const srcRank = (s) => { const i = CONFIG.SOURCE_RANK.indexOf(s || ''); return i < 0 ? 1000 : i; }; // unbekannt/leer = Altbestand (ganz unten)
   const betterSource = (a, b) => (srcRank(b) < srcRank(a) ? b : (a || b || ''));
   // ---------- „zuletzt gesehen“ + Quelle ----------
   // Sichtung eines Mitglieds in einer Quelle (Party-Datum, Besuchs-/Like-Datum; Gruppen/Suche ohne Datum):
@@ -655,10 +820,17 @@
       const e = k && l[k];
       if (e && !e.unblocked && applySighting(e, source, d, 'source', 'seen')) { lc = true; n++; }
       const ak = m.path && acc[m.path] ? m.path : (k && acc[k] ? k : null);
-      if (ak) { const a = Object.assign({}, acc[ak]); if (applySighting(a, source, d, 'seenSrc', 'seen')) { acc[ak] = a; ac = true; } }
+      if (ak) {
+        const a = Object.assign({}, acc[ak]);
+        let ch = applySighting(a, source, d, 'seenSrc', 'seen');
+        // je Quelle: zuletzt gesehen (für die Werte beim Ansehen und das Gedächtnis)
+        const sr = Object.assign({}, a.srcs || {});
+        if (!(source in sr) || (d && (!sr[source] || d > sr[source]))) { sr[source] = d || sr[source] || ''; a.srcs = sr; ch = true; }
+        if (ch) { acc[ak] = a; ac = true; }
+      }
     }
-    if (lc) GM_setValue(K_LOG, l);
-    if (ac) GM_setValue(K_ACCOUNTS, acc);
+    if (lc) gmSet(K_LOG, l);
+    if (ac) gmSet(K_ACCOUNTS, acc);
     return n;
   }
   const upgradeSources = (members, source, day = null) => noteSighting(members, source, day);
@@ -670,30 +842,53 @@
       source: info.source || getState().source || '', method, ts: Date.now(),
     };
     if (info.reason) l[p].reason = info.reason;
+    if (info.kind) l[p].kind = toKind(info.kind, info.type);
     if (info.seen) l[p].seen = info.seen;
     if (info.fromWatch) l[p].vorgemerkt = true;
     if (info.formerMod) l[p].formerMod = true;
-    const accOnline = (GM_getValue('jaf_accounts', {})[p] || {}).online;
+    memNote(p, 'blocked', Object.assign({}, info, { source: l[p].source, why: method }));
+    const accOnline = (gmGet('jaf_accounts', {})[p] || {}).online;
     if (accOnline) l[p].online = accOnline;
-    GM_setValue(K_LOG, l);
+    gmSet(K_LOG, l);
     // Zähler der JOYclub-Ignorierliste mitführen (für das Limit)
     const ign = getIgnored();
-    if (!ign[p]) { ign[p] = { name: info.name || '', url: info.url || location.origin + p, id: idOf(p) }; GM_setValue(K_IGNORED, ign); }
+    if (!ign[p]) { ign[p] = { name: info.name || '', url: info.url || location.origin + p, id: idOf(p) }; gmSet(K_IGNORED, ign); }
     removeFromWatch(p);
     if (info.ages && info.ages.length) recordAccounts([{ path: p, url: info.url, name: info.name, ages: info.ages, type: info.type }]);
   };
+  // ---------- Gedächtnis aller Kandidaten ----------
+  // Jedes Mitglied, das jemals gesperrt, verdrängt, vorgemerkt oder (Testmodus) „würde gesperrt“ war:
+  // { name, url, type, ages, kind, src, status, ts, hist: [{ ts, st, src, why }] }
+  const K_MEM = 'jaf_mem';
+  const MEM_STATUS = { blocked: 'gesperrt', displaced: 'verdrängt (Limit)', unblocked: 'entsperrt', removed: 'von JOYclub entfernt (Überlauf)', watch: 'vorgemerkt', would: 'würde gesperrt (Testmodus)' };
+  const getMem = () => gmGet(K_MEM, {});
+  function memNote(path, st, info = {}) {
+    if (!path || !CONFIG.PROFILE_PATH_RE.test(path)) return;
+    const old = bigGet1(K_MEM, path) || {};
+    const e = Object.assign({}, old);
+    for (const k of ['name', 'url', 'type']) if (info[k]) e[k] = info[k];
+    if (info.ages && info.ages.length) e.ages = info.ages;
+    if (info.kind || info.reason) e.kind = toKind(info.kind || info.reason, info.type || e.type);
+    const src = info.source || info.src || '';
+    if (src && srcRank(src) <= srcRank(e.src)) e.src = src;
+    if (e.status === st && old.ts && Date.now() - old.ts < 60000) return;
+    e.status = st; e.ts = Date.now();
+    e.hist = (e.hist || []).concat({ ts: e.ts, st, src, why: info.why || '' }).slice(-20);
+    bigSet1(K_MEM, path, e);
+  }
   function markUnblocked(path, info, reason) {
     const l = getLog();
     const e = l[path] || { name: info.name || '', url: info.url || location.origin + path, ages: [], type: '', source: '', method: 'nur JOYclub-Ignorierliste', ts: 0 };
     e.unblocked = { ts: Date.now(), reason };
     l[path] = e;
-    GM_setValue(K_LOG, l);
+    gmSet(K_LOG, l);
+    memNote(path, /Limit|Platz/.test(reason) ? 'displaced' : /Überlauf/.test(reason) ? 'removed' : 'unblocked', Object.assign({}, e, { why: reason }));
     const ign = getIgnored();
-    if (ign[path]) { delete ign[path]; GM_setValue(K_IGNORED, ign); }
+    if (ign[path]) { delete ign[path]; gmSet(K_IGNORED, ign); }
   }
-  const getFailed = () => GM_getValue(K_FAILED, {});
-  const setFailed = (p, why) => { const f = getFailed(); f[p] = why; GM_setValue(K_FAILED, f); };
-  const clearFailed = (p) => { const f = getFailed(); if (p in f) { delete f[p]; GM_setValue(K_FAILED, f); } };
+  const getFailed = () => gmGet(K_FAILED, {});
+  const setFailed = (p, why) => { const f = getFailed(); f[p] = why; gmSet(K_FAILED, f); };
+  const clearFailed = (p) => { const f = getFailed(); if (p in f) { delete f[p]; gmSet(K_FAILED, f); } };
 
   const currentListPage = () => CONFIG.LIST_PAGES.find((l) => !l.background && cleanPath(location.pathname) === l.path);
   const sourceOf = (name) => (CONFIG.LIST_PAGES.find((l) => l.name === name) || {}).source || '';
@@ -758,64 +953,190 @@
   // damit Listen ohne Typ-Text (z. B. Gruppen-Mitgliederlisten) richtig eingeordnet werden.
   const K_GENDER = 'jaf_gender_map'; // { num: { Typ: Anzahl } }
   function learnGender(num, title) {
-    const m = GM_getValue(K_GENDER, {});
+    const m = gmGet(K_GENDER, {});
     const e = m[num] || (m[num] = {});
     if ((e[title] || 0) >= 20) return; // genug Belege – nicht ständig schreiben
     e[title] = (e[title] || 0) + 1;
-    GM_setValue(K_GENDER, m);
+    gmSet(K_GENDER, m);
   }
   function typeFromGender(num) {
-    const e = (GM_getValue(K_GENDER, {}) || {})[num];
+    const e = (gmGet(K_GENDER, {}) || {})[num];
     const titles = e ? Object.keys(e) : [];
     if (titles.length === 1) return titles[0];
     if (titles.length > 1) return titles.sort((a, b) => e[b] - e[a]).join('|'); // mehrdeutig
     return GENDER_NAMES[num] || `Typ ${num || '?'}`;
   }
-  const normType = (t) => norm(t).replace(/[-\s]/g, '');
-  const isCoupleRuleType = (t) => String(t || '').split('|').every((x) => CONFIG.COUPLE_RULE_TYPES.some((c) => normType(c) === normType(x)));
-  // gemischtes Paar: [Frau, Mann] – Frau mindestens COUPLE_AGE_GAP Jahre jünger?
-  const coupleGap = (ages) => (ages && ages.length === 2 ? ages[1] - ages[0] : null);
-  const gapHit = (c) => isCoupleRuleType(c.type) && coupleGap(c.ages) != null && coupleGap(c.ages) >= CONFIG.COUPLE_AGE_GAP;
-  const bothOld = (ages) => !!(ages && ages.length === 2 && ages.every((a) => a >= CONFIG.COUPLE_BOTH_MIN_AGE));
-  // Grund, ein (gemischtes) Paar zu ignorieren: 'Altersunterschied' (Sugar Daddy) | 'Geronto-Paar' | null
-  function coupleReason(ages) {
-    const gap = coupleGap(ages);
-    if (gap != null && gap >= CONFIG.COUPLE_AGE_GAP) return 'Altersunterschied';
-    if (bothOld(ages)) return 'Geronto-Paar';
+  // =====================================================================
+  // ---------- Regelwerk: Gruppen (Männer m / Frauen f / Paare p) × Quellen ----------
+  // Jede Gruppe: Stufe 1 bis a, Stufe 2 bis b, darüber Stufe 3 (nur Anzeige); ignoriert ab t (wenn „Ignorieren aktiv“).
+  // Paare: je Frau und Mann eigene Werte; ein Paar wird ignoriert, wenn BEIDE ihre Schwelle erreichen.
+  // Sugar Daddy (Mann ≥ gap älter) und Sugar Mom (Frau ≥ gap älter) gehören zu den Paaren.
+  // Männer-/Frauen-Paare in der Gruppe Paare: Werte des Mannes bzw. der Frau, verglichen mit dem höheren Alter.
+  // =====================================================================
+  const isCoupleType = (t) => /paar/i.test(String(t || '')); // Paar, Männer-Paar, Frauen-Paar, Trans-Paar …
+  const knownType = (t) => Object.keys(KNOWN_TYPES).find((k) => normType(k) === normType(t)) || '';
+  function groupOfType(t, cfg = CONFIG) {
+    for (const x of String(t || '').split('|')) {
+      const k = knownType(x) || x;
+      if (FIXED_TYPES[k]) return FIXED_TYPES[k];
+      for (const g of GROUP_KEYS) if ((cfg.GROUPS[g].types || []).some((y) => normType(y) === normType(k))) return g;
+    }
     return null;
   }
-  const typeOkFor = (t) => String(t || '').split('|').some((x) => typeAllowed(x));
+  // Werte einer Quelle; Sync/Altbestand/unbekannt → unterste Quelle mit eigenen Werten
+  function srcKey(src, cfg = CONFIG) {
+    if (SCAN_SOURCES.includes(src)) return src;
+    const ranked = cfg.SOURCE_RANK.filter((q) => SCAN_SOURCES.includes(q));
+    return ranked[ranked.length - 1] || 'Suche';
+  }
+  const vals = (g, src, who, cfg = CONFIG) => {
+    const v = cfg.GROUPS[g].src[srcKey(src, cfg)];
+    return g === 'p' ? v[who || 'm'] : v;
+  };
+  const stageOf = (age, v) => (age == null ? null : age <= v[0] ? 1 : age <= v[1] ? 2 : 3);
+  // Einordnung eines Mitglieds { type, ages } für eine Quelle:
+  // { group, kind: 'opa'|'oma'|'geronto'|'sd'|'sm'|null, hit (Kriterien erfüllt), active (wird ignoriert), stage, unclear, why }
+  function judge(c, src, cfg = CONFIG) {
+    const out = { group: null, kind: null, hit: false, active: false, stage: null, unclear: false, why: '' };
+    const type = c.type || '';
+    const g = groupOfType(type, cfg);
+    out.group = g;
+    if (!g) { out.why = type ? `Profiltyp „${type}“ nicht zugeordnet` : 'Profiltyp unbekannt'; return out; }
+    const G = cfg.GROUPS[g];
+    const ages = (c.ages || []).filter((a) => a >= 18 && a <= 120);
+    if (!ages.length) { out.unclear = true; out.why = 'Alter unbekannt'; return out; }
+    if (g === 'p') {
+      const k = knownType(type.split('|')[0]) || type;
+      if (k === 'Männer-Paar' || k === 'Frauen-Paar') {
+        const who = k === 'Männer-Paar' ? 'm' : 'f';
+        const a = Math.max(...ages);
+        const v = vals('p', src, who, cfg);
+        out.stage = stageOf(a, v);
+        const gap = ages.length === 2 ? Math.abs(ages[0] - ages[1]) : null;
+        const gapRule = who === 'm' ? G.sd : G.sm;
+        if (gap != null && gapRule && gapRule.on && gap >= gapRule.gap) { out.kind = who === 'm' ? 'sd' : 'sm'; out.why = `Unterschied ${gap}`; }
+        else if (a >= v[2]) { out.kind = 'geronto'; out.why = G.names.one[2]; }
+        if (ages.length < 2 && !out.kind) out.unclear = true;
+      } else {
+        if (ages.length < 2) { out.unclear = true; out.why = 'Paar mit nur einer Altersangabe'; out.stage = stageOf(ages[0], vals('p', src, 'm', cfg)); return out; }
+        const [fa, ma] = ages; // JOYclub: zuerst die Frau, dann der Mann
+        const vf = vals('p', src, 'f', cfg), vm = vals('p', src, 'm', cfg);
+        out.stage = Math.min(stageOf(fa, vf), stageOf(ma, vm));
+        const ger = fa >= vf[2] && ma >= vm[2];
+        const sd = G.sd && G.sd.on && ma - fa >= G.sd.gap;
+        const sm = G.sm && G.sm.on && fa - ma >= G.sm.gap;
+        if (sd) { out.kind = 'sd'; out.why = `Sugar Daddy, Unterschied ${ma - fa}`; }
+        else if (ger) { out.kind = 'geronto'; out.why = G.names.one[2]; }
+        else if (sm) { out.kind = 'sm'; out.why = `Sugar Mom, Unterschied ${fa - ma}`; }
+      }
+    } else {
+      const a = Math.max(...ages); // Paar-Typen in der Gruppe Männer/Frauen: das höhere Alter zählt
+      const v = vals(g, src, null, cfg);
+      out.stage = stageOf(a, v);
+      if (a >= v[2]) { out.kind = g === 'm' ? 'opa' : 'oma'; out.why = G.names.one[2]; }
+    }
+    out.hit = !!out.kind;
+    out.active = out.hit && !!G.ignore;
+    return out;
+  }
+  // „würde/wird ignoriert“ – höchste zutreffende Quelle aus einer Liste
+  function bestSource(c, sources, cfg = CONFIG) {
+    const list = (sources && sources.length ? sources : [ALTBESTAND]).slice().sort((a, b) => srcRankOf(a, cfg) - srcRankOf(b, cfg));
+    for (const q of list) { const j = judge(c, q, cfg); if (j.active) return { src: q, j }; }
+    return null;
+  }
+  const srcRankOf = (s, cfg = CONFIG) => { const i = cfg.SOURCE_RANK.indexOf(s || ''); return i < 0 ? 1000 : i; };
+  // Grund-Text für Protokoll/Notiz (kompatibel zu älteren Einträgen)
+  const KIND_REASON = { sd: 'Altersunterschied', sm: 'Sugar Mom', geronto: 'Geronto-Paar', opa: 'Alter', oma: 'Alter' };
+  const reasonKind = (r, group) => (r === 'Altersunterschied' ? 'sd' : r === 'Sugar Mom' ? 'sm' : r === 'Geronto-Paar' ? 'geronto' : group === 'f' ? 'oma' : 'opa');
+  // Bezeichnung in der Notiz: Sugar Daddy / Sugar Mom / Stufe-3-Bezeichnung der Gruppe
+  function kindLabel(kind, cfg = CONFIG) {
+    if (kind === 'sd') return 'Sugar Daddy';
+    if (kind === 'sm') return 'Sugar Mom';
+    if (kind === 'geronto') return cfg.GROUPS.p.names.one[2];
+    if (kind === 'oma') return cfg.GROUPS.f.names.one[2];
+    return cfg.GROUPS.m.names.one[2];
+  }
+  // Text der aktuell ignorierten Arten (für Hinweise), z. B. „Opas, Sugar Daddys, Geronto-Paare“
+  function ignoredKindsText(cfg = CONFIG) {
+    const out = [];
+    if (cfg.GROUPS.m.ignore) out.push(cfg.GROUPS.m.names.many[2]);
+    if (cfg.GROUPS.f.ignore) out.push(cfg.GROUPS.f.names.many[2]);
+    if (cfg.GROUPS.p.ignore) {
+      out.push(cfg.GROUPS.p.names.many[2]);
+      if (cfg.GROUPS.p.sd.on) out.push('Sugar Daddys');
+      if (cfg.GROUPS.p.sm.on) out.push('Sugar Moms');
+    }
+    return out.join(', ') || 'derzeit keine – Ignorieren ist überall ausgeschaltet';
+  }
+  // alle jemals verwendeten Stufe-3-Bezeichnungen (für das Erkennen eigener Notizzeilen)
+  const K_LABELS = 'jaf_note_labels';
+  function noteLabels() {
+    const l = new Set(['Alter Sack', 'Sugar Daddy', 'Sugar Mom', 'Geronto-Paar', 'Opa', 'Oma'].concat(gmGet(K_LABELS, []) || []));
+    for (const g of GROUP_KEYS) l.add(CONFIG.GROUPS[g].names.one[2]);
+    return [...l].filter(Boolean);
+  }
+  function rememberNoteLabels() {
+    const have = gmGet(K_LABELS, []) || [];
+    const add = GROUP_KEYS.map((g) => CONFIG.GROUPS[g].names.one[2]).filter((x) => x && !have.includes(x));
+    if (add.length) gmSet(K_LABELS, have.concat(add));
+  }
+  const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let _ownRe = null, _ownReKey = '';
+  function ownNoteRe() {
+    const labels = noteLabels();
+    const key = labels.join('|');
+    if (!_ownRe || key !== _ownReKey) {
+      _ownReKey = key;
+      _ownRe = new RegExp(`^\\s*(${labels.map(reEsc).sort((a, b) => b.length - a.length).join('|')})(?:\\s*\\([^)]*\\))?\\s+(?:geblockt|blockiert|ignoriert)\\s+am\\s+\\S+\\s+um\\s+\\S+\\s*$`, 'i');
+    }
+    return _ownRe;
+  }
+  // Kompatibilität: alte Helfer auf das neue Regelwerk abgebildet
+  const isCoupleRuleType = (t) => groupOfType(t) === 'p';
+  const typeOkFor = (t) => !!groupOfType(t);
+  const coupleGap = (ages) => (ages && ages.length === 2 ? ages[1] - ages[0] : null);
+  // Grund eines Paares (für Notiz/Protokoll): 'Altersunterschied' | 'Sugar Mom' | 'Geronto-Paar' | null
+  function coupleReason(ages, src = 'Party', type = 'Paar') {
+    const j = judge({ type, ages }, src);
+    return j.kind ? KIND_REASON[j.kind] === 'Alter' ? null : KIND_REASON[j.kind] : null;
+  }
   // Soll dieses Mitglied ignoriert werden? (ohne Prüfung „bereits ignoriert“)
   // white === null → Whitelist bewusst nicht berücksichtigen (z. B. „würde die Kriterien erfüllen“)
-  function shouldBlock(c, white = whiteList()) {
+  function shouldBlock(c, white = whiteList(), src = 'Party') {
     if (white !== null && isWhiteMember(c, white)) return false;
-    if (isCoupleRuleType(c.type)) return !!coupleReason(c.ages);
-    return typeOkFor(c.type) && isTooOld(c.ages);
+    return judge(c, src).active;
+  }
+
+  // Karte/Listeneintrag für einen Scan einordnen: { kind: 'ignore'|'verify'|'skip', why, item }
+  // ctx: { white, blocked } · nur, was fürs Ignorieren relevant ist, wird geprüft
+  function classifyCard(c, ctx, src) {
+    if (!CONFIG.PROFILE_PATH_RE.test(c.path || '')) return { kind: 'skip', why: 'kein Mitgliederprofil' };
+    if (ctx.blocked && ctx.blocked.get(idOf(c.path))) return { kind: 'skip', why: 'bereits ignoriert' };
+    if (ctx.white && isWhiteMember(c, ctx.white)) return { kind: 'skip', why: 'Whitelist' };
+    const j = judge(c, src);
+    if (!j.group) return { kind: 'skip', why: j.why };
+    if (!CONFIG.GROUPS[j.group].ignore) return { kind: 'skip', why: `Ignorieren für ${GROUP_LABELS[j.group]} aus` };
+    const item = { path: c.path, url: c.url || location.origin + c.path, name: c.name, ages: c.ages || [], type: c.type, source: src };
+    if (c.day || c.seen) item.seen = c.day || c.seen;
+    if (j.active) return { kind: 'ignore', why: j.why, item: Object.assign(item, { kind: j.kind, reason: KIND_REASON[j.kind] }) };
+    if (j.unclear) return { kind: 'verify', why: j.why, item: Object.assign(item, { verify: true }) };
+    return { kind: 'skip', why: 'erfüllt die Kriterien nicht' };
   }
 
   // Profiltyp auf der Profilseite: <div class="profile-base-info__line-2"><span>Mann</span> …
   function profileType() {
     const el = document.querySelector('.profile-base-info__line-2 > span');
-    // vom Skript umbenannt (Jungschwanz/Schwanz/Opa) → eigentlicher Typ ist „Mann“
-    if (el && el.textContent.trim()) return ['Jungschwanz', 'Schwanz', 'Opa'].includes(el.textContent.trim()) ? 'Mann' : el.textContent.trim();
+    // vom Skript umbenannt → Originaltyp steht in data-jaf-orig
+    if (el && el.textContent.trim()) return el.getAttribute('data-jaf-orig') || el.textContent.trim();
     const lab = [...document.querySelectorAll('[aria-label^="Profil von "]')].map((e) => e.getAttribute('aria-label'))[0];
     return lab ? (lab.split(',')[1] || '').trim() : '';
   }
 
-  // maßgebliches Alter (bei Paaren wie COUPLE_MODE: 'any' = ältere Person, 'all' = jüngere Person)
-  const effAge = (ages) => (!ages.length ? null : CONFIG.COUPLE_MODE === 'all' ? Math.min(...ages) : Math.max(...ages));
   const COLORS = { white: '#ffffff', green: '#43a047', light: '#ffb74d', dark: '#ef6c00', red: '#e53935', grey: '#616161', done: '#757575' };
-  function ageColor(ages) {
-    const a = effAge(ages);
-    if (a == null || a <= CONFIG.WARN_AGE) return COLORS.green;
-    if (a >= CONFIG.MAX_AGE) return COLORS.dark; // nur noch 1 Jahr bis zur Grenze
-    return COLORS.light;
-  }
+  const STAGE_COLORS = [null, COLORS.green, COLORS.light, COLORS.dark];
 
-  function isTooOld(ages) {
-    if (!ages.length) return false;
-    return CONFIG.COUPLE_MODE === 'all' ? ages.every((x) => x > CONFIG.MAX_AGE) : ages.some((x) => x > CONFIG.MAX_AGE);
-  }
 
   // Knopf „Mehr Ergebnisse“ unten in der Suchliste (Panel des Skripts ausgenommen)
   // wirklich sichtbar? (nicht nur im DOM vorhanden, sondern angezeigt)
@@ -967,10 +1288,24 @@
       ((e.getAttribute('role') === 'dialog' || e.getAttribute('aria-modal') === 'true' || /\bmodal\b/.test(e.className || '')) && visible(e)));
   }
 
-  // kind: false/'' = Alter Sack, 'Altersunterschied' (oder true) = Sugar Daddy, 'Geronto-Paar' = Geronto-Paar
-  function noteText(source, kind = false, ts = Date.now()) {
+  // Art einer Sperre als Kürzel: 'opa' | 'oma' | 'geronto' | 'sd' | 'sm' (auch aus alten Gründen 'Altersunterschied' usw.)
+  function toKind(kind, type = '') {
+    if (['opa', 'oma', 'geronto', 'sd', 'sm'].includes(kind)) return kind;
+    if (kind === true) return 'sd';
+    if (kind === 'Altersunterschied' || kind === 'Geronto-Paar' || kind === 'Sugar Mom') return reasonKind(kind);
+    return groupOfType(type) === 'f' ? 'oma' : 'opa';
+  }
+  // Art eines Protokolleintrags (gespeichert, sonst aus Grund/Typ/Alter abgeleitet)
+  function entryKind(e) {
+    if (!e) return 'opa';
+    if (e.kind) return e.kind;
+    if (e.reason === 'Altersunterschied' || e.reason === 'Geronto-Paar' || e.reason === 'Sugar Mom') return reasonKind(e.reason);
+    const j = judge({ type: e.type, ages: e.ages || [] }, e.source || ALTBESTAND);
+    return j.kind || (groupOfType(e.type) === 'f' ? 'oma' : 'opa');
+  }
+  function noteText(source, kind = false, ts = Date.now(), type = '') {
     const d = new Date(ts);
-    let t = kind === 'Geronto-Paar' ? CONFIG.GERONTO_NOTE_TEXT : kind ? CONFIG.COUPLE_NOTE_TEXT : CONFIG.NOTE_TEXT;
+    let t = CONFIG.NOTE_TEXT.replace('{art}', kindLabel(toKind(kind, type)));
     t = source ? t.replace('{quelle}', source) : t.replace(/\s*\(\{quelle\}\)|\s*\{quelle\}/, '');
     return t.replace('{datum}', `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`)
       .replace('{uhrzeit}', `${pad(d.getHours())}:${pad(d.getMinutes())}`);
@@ -1109,11 +1444,11 @@
       : { ok: false, msg: 'Notiz nicht gespeichert: Text fehlt nach „Speichern“' };
   }
 
-  async function writeNote(source, couple = false) {
+  async function writeNote(source, kind = false, type = '') {
     const ed = await openNoteEditor();
     if (ed.error) return { ok: false, msg: ed.error };
     const old = (ed.ta.value || ed.host.getAttribute('value') || '').trim();
-    const text = noteText(source, couple);
+    const text = noteText(source, kind, Date.now(), type);
     if (old.includes(text.replace(/ am .*/, ''))) {
       await cancelNote(ed);
       return { ok: true, msg: 'Notiz schon vorhanden' };
@@ -1130,8 +1465,8 @@
     if (ed.error) return { ok: false, msg: ed.error };
     const old = (ed.ta.value || ed.host.getAttribute('value') || '');
     const lines = old.split(/\r?\n/);
-    const removed = lines.filter((l) => CONFIG.OWN_NOTE_RE.test(l));
-    const kept = lines.filter((l) => !CONFIG.OWN_NOTE_RE.test(l)).filter((l, i, arr) => l.trim() || (i > 0 && i < arr.length - 1));
+    const removed = lines.filter((l) => ownNoteRe().test(l));
+    const kept = lines.filter((l) => !ownNoteRe().test(l)).filter((l, i, arr) => l.trim() || (i > 0 && i < arr.length - 1));
     if (!kept.some((l) => l.trim() === line)) kept.push(line);
     const value = kept.join('\n').replace(/^\n+|\n+$/g, '');
     if (value === old.trim()) { await cancelNote(ed); return { ok: true, msg: 'Notiz war bereits aktuell' }; }
@@ -1224,7 +1559,7 @@
     if (cur.verify) {
       const ages = profileAges().length ? profileAges() : cur.ages || [];
       const c = { name: cur.name, type: ptype || cur.type, ages };
-      if (!ages.length || !shouldBlock(c)) {
+      if (!ages.length || !shouldBlock(c, whiteList(), cur.source || s.source)) {
         const who = cur.formerMod ? 'ehemaliger Moderator – ' : '';
         log(`${cur.name}: ${who}Profil geprüft (${c.type || '?'}, ${ages.join('+') || '?'} Jahre) – erfüllt die Kriterien nicht, wird nicht ignoriert`);
         s.queue.shift(); s.count += 1;
@@ -1252,11 +1587,11 @@
     let noteMsg = '';
     if (CONFIG.WRITE_NOTE && slot) {
       let note;
-      // Paar wegen Altersunterschied → „Sugar Daddy“, beide alt → „Geronto-Paar“, sonst „Alter Sack“
+      // Art: Sugar Daddy / Sugar Mom / Stufe-3-Bezeichnung (z. B. „Opa“, „Oma“, „Geronto-Paar“)
       const pAges = profileAges().length ? profileAges() : cur.ages;
-      const couple = (cur.reason === 'Altersunterschied' || cur.reason === 'Geronto-Paar') ? cur.reason
-        : (isCoupleRuleType(ptype || cur.type) ? coupleReason(pAges) : false);
-      try { note = await writeNote(cur.source || s.source, couple); } catch (e) { note = { ok: false, msg: 'Notiz-Fehler: ' + e.message }; }
+      const kind = cur.kind || judge({ type: ptype || cur.type, ages: pAges }, cur.source || s.source).kind || toKind(cur.reason, ptype || cur.type);
+      cur.kind = kind;
+      try { note = await writeNote(cur.source || s.source, kind, ptype || cur.type); } catch (e) { note = { ok: false, msg: 'Notiz-Fehler: ' + e.message }; }
       noteMsg = note.msg;
       log(`${cur.name}: ${noteMsg}`);
       await sleep(1000);
@@ -1315,12 +1650,12 @@
     return out;
   }
   function saveIgnored(list) {
-    GM_setValue(K_IGNORED, list);
-    GM_setValue(K_IGNORED_TS, Date.now());
+    gmSet(K_IGNORED, list);
+    gmSet(K_IGNORED_TS, Date.now());
   }
   // Ignorierliste im Hintergrund abrufen (ohne die Seite zu verlassen)
   async function syncIgnoreList(force = false) {
-    if (!force && Date.now() - GM_getValue(K_IGNORED_TS, 0) < CONFIG.IGNORE_SYNC_MIN * 60000) return getIgnored();
+    if (!force && Date.now() - gmGet(K_IGNORED_TS, 0) < CONFIG.IGNORE_SYNC_MIN * 60000) return getIgnored();
     try {
       const r = await jfetch(location.origin + CONFIG.IGNORE_PAGE_PATH + '/');
       const html = r.html;
@@ -1347,7 +1682,7 @@
 
   function finishIgnoreRun(s, msg, done = true) {
     setState({ running: false, queue: [], count: 0, done });
-    log(msg + (s.opa ? ' Zurück zum Opa-Scan …' : ' Zurück zur Suche …'));
+    log(msg + (s.opa ? opaT(' Zurück zum Opa-Scan …') : ' Zurück zur Suche …'));
     setTimeout(() => { location.href = s.returnUrl || location.origin + '/member/'; }, 3000);
   }
 
@@ -1455,7 +1790,7 @@
     const a = r.lo.slice(0, 4), b = r.hi.slice(0, 4);
     return a === b ? a : `${a}/${b}`;
   }
-  const getAccounts = () => GM_getValue(K_ACCOUNTS, {});
+  const getAccounts = () => gmGet(K_ACCOUNTS, {});
 
   // ---------- Sternzeichen → Geburtszeitraum eingrenzen ----------
   // Grenztage großzügig ±1 Tag. Passt das Sternzeichen nicht in den Zeitraum, wird es ignoriert.
@@ -1512,6 +1847,7 @@
       const old = acc[it.path];
       const rec = old ? Object.assign({}, old) : { first: today };
       if (it.name) rec.name = it.name;
+      if (it.type && isUnknownType(it.type)) noteType(it.type, it.name || it.path);
       if (it.name && whiteList().includes(norm(it.name))) learnWhiteUrl(it.name, it.path);
       rec.url = it.url || location.origin + it.path;
       if (it.type) rec.type = it.type;
@@ -1530,17 +1866,17 @@
       if (it.cardOnline) rec.seenOnline = Date.now();
       if (JSON.stringify(rec) !== JSON.stringify(old)) { acc[it.path] = rec; changed = true; }
     }
-    if (changed) GM_setValue(K_ACCOUNTS, acc);
+    if (changed) gmSet(K_ACCOUNTS, acc);
     // „zuletzt online“ auch in den zutreffenden Listen (ignoriert / vorgemerkt) speichern
     if (onlineUpdates.length) {
-      const l = GM_getValue(K_LOG, {}), w = GM_getValue(K_WATCH, {});
+      const l = gmGet(K_LOG, {}), w = gmGet(K_WATCH, {});
       let lc = false, wc = false;
       for (const [path, o] of onlineUpdates) {
         if (l[path]) { l[path].online = o; lc = true; }
         if (w[path]) { w[path].online = o; wc = true; }
       }
-      if (lc) GM_setValue(K_LOG, l);
-      if (wc) GM_setValue(K_WATCH, w);
+      if (lc) gmSet(K_LOG, l);
+      if (wc) gmSet(K_WATCH, w);
     }
   }
 
@@ -1603,10 +1939,10 @@
   }
   setInterval(() => { try { recordVisibleAccounts(); } catch (e) { console.warn('[Alter-Filter] Geburtsjahr', e); } }, 5000);
 
-  // ---------- Vormerkliste: genau MAX_AGE alt (1 Jahr vor der Grenze) ----------
+  // ---------- Vormerkliste: genau 1 Jahr unter der Schwelle (je Gruppe und Quelle; nur Einzelpersonen) ----------
   // { path: { name, url, type, ages, persons: [{lo,hi}], added } }
   const K_WATCH = 'jaf_watch';
-  const getWatch = () => GM_getValue(K_WATCH, {});
+  const getWatch = () => gmGet(K_WATCH, {});
   function updateWatch(cards, log_ = getLog(), ign = getIgnored(), source = '') {
     const w = getWatch();
     const white = whiteList();
@@ -1614,8 +1950,9 @@
     const acc = getAccounts();
     let changed = false;
     for (const c of cards) {
-      const a = effAge(c.ages);
-      const eligible = a === CONFIG.MAX_AGE && typeOkFor(c.type) && !isCoupleRuleType(c.type) && !white.includes(norm(c.name)) && !isBlocked(c.path, log_, ign);
+      const g = groupOfType(c.type);
+      const single = g && g !== 'p' && !isCoupleType(c.type) && c.ages.length === 1;
+      const eligible = single && CONFIG.GROUPS[g].ignore && c.ages[0] === vals(g, source || 'Suche')[2] - 1 && !white.includes(norm(c.name)) && !isBlocked(c.path, log_, ign);
       if (eligible) {
         const persons = ((acc[c.path] || {}).persons) || c.ages.map((x) => birthRange(x));
         const prev = w[c.path];
@@ -1623,16 +1960,16 @@
         const rec = { name: c.name, url: c.url || location.origin + c.path, type: c.type, ages: c.ages, persons, added: (prev && prev.added) || today,
           source: betterSource(prev && prev.source, source || 'Suche') };
         if (online) rec.online = online;
-        if (JSON.stringify(rec) !== JSON.stringify(prev)) { w[c.path] = rec; changed = true; }
-      } else if (w[c.path] && (isBlocked(c.path, log_, ign) || white.includes(norm(c.name)) || !typeOkFor(c.type) || isCoupleRuleType(c.type))) {
+        if (JSON.stringify(rec) !== JSON.stringify(prev)) { w[c.path] = rec; changed = true; if (!prev) memNote(c.path, 'watch', rec); }
+      } else if (w[c.path] && (isBlocked(c.path, log_, ign) || white.includes(norm(c.name)) || !single)) {
         delete w[c.path]; changed = true;
       }
     }
-    if (changed) GM_setValue(K_WATCH, w);
+    if (changed) gmSet(K_WATCH, w);
   }
   function removeFromWatch(path) {
     const w = getWatch();
-    if (w[path]) { delete w[path]; GM_setValue(K_WATCH, w); }
+    if (w[path]) { delete w[path]; gmSet(K_WATCH, w); }
   }
   // Alter heute aus Geburtszeitraum: sicher älter als MAX_AGE, wenn selbst das späteste mögliche Geburtsdatum
   // mindestens MAX_AGE+1 Jahre zurückliegt
@@ -1653,9 +1990,13 @@
       if (isBlocked(path, log_, ign) || isWhiteMember({ name: r.name, path }, white)) { removeFromWatch(path); continue; }
       const persons = ((acc[path] || {}).persons) || r.persons || [];
       if (!persons.length) continue;
-      const over = persons.map((pr) => surelyOlderThan(pr, CONFIG.MAX_AGE));
-      const isDue = CONFIG.COUPLE_MODE === 'all' ? over.every(Boolean) : over.some(Boolean);
-      if (isDue) due.push({ path, url: r.url || location.origin + path, name: r.name, ages: r.ages || [], type: r.type || '', source: r.source || 'Suche', fromWatch: true });
+      const g = groupOfType(r.type);
+      if (!g || g === 'p' || !CONFIG.GROUPS[g].ignore) continue;
+      const t = vals(g, r.source || 'Suche')[2];
+      if (persons.some((pr) => surelyOlderThan(pr, t - 1))) {
+        due.push({ path, url: r.url || location.origin + path, name: r.name, ages: r.ages || [], type: r.type || '', source: r.source || 'Suche', fromWatch: true,
+          kind: g === 'f' ? 'oma' : 'opa' });
+      }
     }
     return due;
   }
@@ -1678,6 +2019,68 @@
   const onlineCols = (o) => (o ? [o.text || '', o.at ? fmtTs(o.at) : ''] : ['', '']);
   const deDay = (iso) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : '');
 
+  // ---------- Sicherung aller Daten (JSON) ----------
+  // Enthält Einstellungen, Protokoll (Gesperrte), Ignorierliste, alle Konten, Vorgemerkte, Whitelist, Gruppen, Gedächtnis usw.
+  // Nicht enthalten: laufende Vorgänge/Sperren und die Fehlersuche-Listen.
+  const BACKUP_SKIP = /^(jaf_state|jaf_lock|jaf_gate|jaf_login_|jaf_vis_run|jaf_bg_job_|jaf_peek|jaf_opa$|jaf_evscan$|jaf_ms_resume|jaf_evscan_failures|jaf_ms_failures|jaf_ms_single_age_couples|jaf_failed)/;
+  function fullBackup() {
+    const data = {};
+    for (const k of GM_listValues()) {
+      if (!k.startsWith('jaf_') || k.includes('|') || k.includes('#') || BACKUP_SKIP.test(k) || BIG_KEYS.includes(k)) continue;
+      data[k] = GM_getValue(k);
+    }
+    for (const n of BIG_KEYS) data[n] = bigGet(n, {});
+    return { format: 'opa-scan-backup', version: (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '', ts: Date.now(), data };
+  }
+  function downloadJson(prefix, obj) {
+    const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
+    const a = document.createElement('a');
+    const now = new Date();
+    a.href = URL.createObjectURL(blob);
+    a.download = `${prefix}_${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}_${pad2(now.getHours())}${pad2(now.getMinutes())}.json`;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  }
+  function downloadBackup() { const b = fullBackup(); downloadJson('opa-scan-sicherung', b); return Object.keys(b.data).length; }
+  function restoreBackup() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.addEventListener('change', async () => {
+      const file = inp.files && inp.files[0];
+      if (!file) return;
+      let b;
+      try { b = JSON.parse(await file.text()); } catch (e) { alert('Die Datei ist keine gültige Sicherung.'); return; }
+      if (!b || b.format !== 'opa-scan-backup' || !b.data) { alert('Die Datei ist keine Sicherung des Opa-Scans.'); return; }
+      const n = Object.keys(b.data).length;
+      if (!confirm(`Sicherung vom ${fmtTs(b.ts)} (Version ${b.version || '?'}, ${n} Bereiche) wiederherstellen?\n\nAlle aktuellen Daten werden dabei ersetzt.`)) return;
+      for (const k of GM_listValues()) if (k.startsWith('jaf_') && !BACKUP_SKIP.test(k) && k !== K_STORE_V) GM_deleteValue(k);
+      for (const nme of BIG_KEYS) if (BIG[nme]) BIG[nme].loaded = false;
+      if (!storeNeedsMigration()) { const l = GM_getValue(K_STORE_V, []) || []; GM_setValue(K_STORE_V, [...new Set(l.concat(BIG_KEYS))]); }
+      for (const [k, v] of Object.entries(b.data)) { if (BIG_KEYS.includes(k)) bigSet(k, v); else if (k !== K_STORE_V) GM_setValue(k, v); }
+      alert('Sicherung wiederhergestellt. Die Seite wird neu geladen.');
+      location.reload();
+    });
+    inp.click();
+  }
+  // einmaliger Umbau des Speichers (1.74): vorher Sicherung anbieten
+  async function storeMigrationInit() {
+    if (IN_FRAME || !storeNeedsMigration()) return;
+    const k = 'jaf_store_mig_ask';
+    const last = GM_getValue(k, 0);
+    if (Date.now() - last < 60000) return; // ein anderer Tab fragt gerade
+    GM_setValue(k, Date.now());
+    const v = await askPopup({ title: opaT('Opa-Scan: Datenspeicher wird umgebaut'), lines: [
+      'Ab Version 1.74 speichert das Skript jedes Mitglied einzeln – das ist schneller und robuster.',
+      'Vor dem einmaligen Umbau kannst Du eine Sicherung aller Daten herunterladen (empfohlen). Die alten Daten werden erst gelöscht, wenn jeder Eintrag geprüft ist.'],
+    buttons: [{ label: 'Sicherung herunterladen und umbauen', value: 'backup', focus: true }, { label: 'Ohne Sicherung umbauen', value: 'go' }] });
+    if (v === 'backup') { downloadBackup(); await sleep(1500); }
+    if (v !== 'backup' && v !== 'go') { GM_setValue(k, 0); return; }
+    const r = migrateStores();
+    GM_setValue(k, 0);
+    if (r.failed.length) alert(`Umbau des Speichers teilweise fehlgeschlagen (${r.failed.join(', ')}). Diese Daten bleiben im alten Format und werden beim nächsten Aufruf erneut umgebaut.`);
+    else console.log('[Alter-Filter] Speicher umgebaut:', r.ok.join(', '));
+  }
+
   // jede vorkommende „Online vor …“-Angabe nur einmal (zum späteren Umrechnen in ein Datum)
   function exportOnlineTexts() {
     const stat = {};
@@ -1693,88 +2096,40 @@
     return rows.length;
   }
 
-  // vom Skript ignorierte Mitglieder
-  function exportList() {
-    const log_ = getLog();
-    const acc = getAccounts();
-    const rows = Object.entries(log_).sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0)).map(([path, r]) => {
-      const d = r.ts ? new Date(r.ts) : null;
-      const by = ((acc[path] || {}).persons || []).map(birthYear);
-      return [
-        r.name || (acc[path] || {}).name || '', r.url || location.origin + path, (r.ages || []).join('+'),
-        by[0] || '', by[1] || '', r.type || (acc[path] || {}).type || '', r.source || '', r.vorgemerkt ? 'ja' : '', r.formerMod ? 'ja' : '', r.method || '',
-        d ? `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}` : '',
-        d ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}` : '',
-        r.unblocked ? `entblockt am ${fmtTs(r.unblocked.ts)} (${r.unblocked.reason})` : 'ignoriert',
-        ...onlineCols(r.online || (acc[path] || {}).online), deDay(r.seen),
-      ];
-    });
-    downloadCsv('blockierte-opas',
-      ['Name', 'Profil-Link', 'Alter (beim Ignorieren)', 'Geburtsjahr (Person 1 / Frau bei Paar)', 'Geburtsjahr 2 (Mann bei Paar)', 'Profiltyp', 'Quelle', 'vorgemerkt', 'ehem. Moderator', 'Methode', 'Datum', 'Uhrzeit',
-        'Status', 'Zuletzt online (Angabe)', 'Angabe abgerufen am', 'zuletzt gesehen (Quelle)'], rows);
-    return rows.length;
-  }
 
-  function exportWatch() {
-    const w = getWatch();
-    const rows = Object.entries(w).sort((a, b) => (a[1].name || '').localeCompare(b[1].name || '')).map(([path, r]) => {
-      const by = (((getAccounts()[path] || {}).persons) || r.persons || []).map(birthYear);
-      return [r.name || '', r.url || location.origin + path, r.type || '', (r.ages || []).join('+'), by[0] || '', by[1] || '', r.added || '',
-        r.source || '',
-        ...onlineCols(r.online || (getAccounts()[path] || {}).online)];
-    });
-    downloadCsv('vorgemerkt', ['Name', 'Profil-Link', 'Profiltyp', 'Alter (beim Vormerken)', 'Geburtsjahr (Person 1 / Frau bei Paar)', 'Geburtsjahr 2 (Mann bei Paar)', 'vorgemerkt seit',
-      'gefunden in', 'Zuletzt online (Angabe)', 'Angabe abgerufen am'], rows);
-    return rows.length;
-  }
 
-  function exportGroups() {
-    const m = getGroupDone();
-    const rows = Object.entries(m).sort((a, b) => a[1].ts - b[1].ts).map(([k, e]) => [e.name, `${location.origin}${CONFIG.GROUPS_PATH}/${k}/`, fmtTs(e.ts)]);
-    downloadCsv('gruppen', ['Gruppe', 'Link', 'zuletzt komplett bearbeitet'], rows);
-    return rows.length;
-  }
 
-  function exportWhitelist() {
-    const dyn = getDynWhite();
-    const acc = getAccounts();
-    const urlOf = (name) => { const k = norm(name); const l = whiteUrlOf(name); if (l) return l; const e = Object.entries(acc).find(([, r]) => norm(r.name) === k); return e ? e[1].url : ''; };
-    const rows = [];
-    for (const e of WHITELIST) rows.push([e.name, urlOf(e.name), whiteReason(e.name), 'fest im Skript', '', ((dyn[norm(e.name)] || {}).modGroups || []).map((g) => g.name).join('; '), '', '']);
-    for (const [k, e] of Object.entries(dyn)) {
-      if (WHITELIST.some((x) => norm(x.name) === k)) continue;
-      const pl = (arr) => (arr || []).map((x) => `${x.name} (${x.date})`).join('; ');
-      rows.push([e.name, e.url || urlOf(e.name), dynReasons(e).join('; '), 'automatisch', e.since ? fmtTs(Date.parse(e.since)) : '',
-        (e.modGroups || []).map((g) => g.name).join('; '), pl(e.vipParties), pl(e.parties)]);
-    }
-    downloadCsv('whitelist', ['Name', 'Profil-Link', 'Begründung', 'Herkunft', 'seit', 'moderiert Gruppe(n)', 'VIP-Gast bei Party', 'freigeschaltet bei Party'], rows);
-    return rows.length;
-  }
 
-  // alle jemals gesehenen Konten mit Geburtsjahr
-  function exportAccounts() {
-    const acc = getAccounts();
-    const log_ = getLog();
-    const ign = getIgnored();
-    const white = whiteList();
-    const rows = Object.entries(acc).sort((a, b) => (a[1].name || '').localeCompare(b[1].name || '')).map(([path, r]) => {
-      const by = (r.persons || []).map(birthYear);
-      return [
-        r.name || '', r.url || location.origin + path, r.type || '', by[0] || '', by[1] || '',
-        log_[path] ? (log_[path].unblocked ? 'entblockt' : 'ja') : '', ign[path] ? 'ja' : '',
-        white.includes(norm(r.name)) ? whiteReason(r.name) || 'ja' : '', r.first || '', r.last || '',
-        ...onlineCols(r.online), r.seenOnline ? fmtTs(r.seenOnline) : '',
-        deDay(r.seen), SOURCE_LABELS[r.seenSrc] || r.seenSrc || '', (r.persons || []).map((x) => x.sign || '').join(' / ').replace(/^ \/ $/, ''),
-      ];
-    });
-    downloadCsv('joyclub-konten',
-      ['Name', 'Profil-Link', 'Profiltyp', 'Geburtsjahr (Person 1 / Frau bei Paar)', 'Geburtsjahr 2 (Mann bei Paar)', 'vom Skript ignoriert', 'auf Ignorierliste', 'Whitelist (Begründung)', 'zuerst erfasst', 'zuletzt erfasst',
-        'Zuletzt online (Angabe)', 'Angabe abgerufen am', 'zuletzt als „online“ gesehen (Karte)', 'zuletzt gesehen (Datum)', 'zuletzt gesehen in', 'Sternzeichen'], rows);
-    return rows.length;
-  }
+
+
+
+
+
 
   // ---------- Kopfzeilen-Badge „blockierte Opas“ ----------
   const OPA_PATH = 'M3408 12790 c-235 -43 -487 -227 -651 -477 -33 -50 -47 -63 -67 -63 -37 0 -119 -24 -168 -49 -102 -52 -148 -120 -201 -298 -48 -164 -73 -337 -69 -483 3 -112 6 -131 30 -180 15 -30 41 -64 58 -75 29 -19 30 -23 30 -92 0 -39 -3 -74 -8 -77 -4 -2 -86 -1 -182 4 -273 12 -411 -7 -566 -80 -227 -105 -387 -276 -518 -551 -127 -266 -203 -574 -253 -1019 -22 -199 -25 -1016 -5 -1265 20 -240 60 -603 82 -750 12 -82 15 -131 9 -133 -6 -3 -6 -8 0 -16 7 -8 -3 -51 -30 -136 -109 -339 -191 -737 -235 -1140 -22 -191 -25 -693 -6 -845 33 -258 72 -434 158 -699 234 -721 431 -1986 554 -3566 12 -145 22 -265 23 -266 1 -1 52 -16 114 -34 98 -29 113 -36 121 -59 45 -127 347 -276 743 -366 622 -140 1209 -69 1131 137 l-10 28 168 0 c273 0 423 30 492 100 62 62 50 120 -43 204 -59 53 -250 150 -377 191 l-84 27 6 77 c35 439 116 2702 166 4611 15 587 12 548 44 595 65 94 130 255 161 400 9 44 19 87 21 97 4 13 23 4 102 -49 201 -134 411 -220 617 -252 109 -16 209 -22 222 -14 18 13 32 57 39 126 l6 64 69 -35 69 -36 0 -156 c0 -170 4 -186 60 -215 37 -19 64 -19 104 0 55 26 61 45 66 214 l5 155 28 7 27 7 0 -2924 c0 -3216 -5 -2965 60 -2999 62 -32 136 -10 164 49 15 31 16 279 16 3052 l0 3017 25 64 c99 246 -33 525 -286 604 -33 10 -83 19 -110 19 -27 0 -60 6 -72 14 -37 24 -132 36 -367 46 -124 6 -272 15 -330 20 -98 9 -467 74 -476 83 -3 2 -9 91 -14 198 -27 543 -53 829 -125 1389 l-6 45 53 35 c141 94 296 282 422 513 20 37 42 67 49 67 7 0 46 -17 87 -38 59 -29 78 -45 93 -74 30 -59 36 -140 25 -308 -13 -195 -6 -359 17 -424 26 -71 104 -148 178 -175 200 -73 369 48 421 302 9 42 16 81 16 86 0 17 -87 71 -148 92 -72 26 -220 28 -308 5 -34 -9 -66 -16 -72 -16 -5 0 -11 71 -15 173 -4 137 -9 186 -26 239 -28 89 -88 155 -173 193 -35 15 -65 29 -66 31 -2 1 10 39 27 83 40 105 106 337 122 433 11 69 16 78 40 88 77 32 105 336 42 457 -16 31 -21 68 -27 190 -4 84 -14 199 -21 255 -14 100 -13 104 6 120 23 19 35 74 25 113 -6 24 -10 26 -39 21 l-32 -6 -19 82 c-10 46 -35 137 -57 203 -171 527 -466 883 -824 994 -79 25 -249 36 -327 21z';
+  const OMA_PARTS = '<circle cx="9.6" cy="9.2" r="3.3"/><circle cx="15.2" cy="12.4" r="5"/><path d="M8.4 16.2 C5.6 19.6 5.8 26 8.2 32 L4.6 53 L22.8 53 L19 33 C20.6 29 21 24.6 19.2 20.4 C16.6 17.2 12.2 15.4 8.4 16.2Z"/><path d="M17.4 21.6 C20.6 23.4 23.2 26 25.4 29.2 L23.8 30.4 C21.4 28 19 26 16.4 24.6Z"/><path d="M24.8 29.6 L24.8 62" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="M24.8 29.6 C24.8 26.4 28.8 26.4 28.8 29.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><rect x="9.6" y="52" width="3.2" height="9" rx="1"/><rect x="14.6" y="52" width="3.2" height="9" rx="1"/><path d="M8.2 60 h5.6 v2.6 h-6.6 z"/><path d="M13.6 60 h6 v2.6 h-6 z"/>';
+  // Symbole im 640×1280-Raster: Opa (Pfad) bzw. Oma (32×64, ×20 skaliert)
+  const OPA_G = `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g>`;
+  const OMA_G = `<g transform="scale(20)">${OMA_PARTS}</g>`;
+  // ---------- Eigener Profiltyp: nur ein eigenes Männer-Profil heißt alles „Oma“ (Oma-Scan, Oma-Schutz …) ----------
+  const K_OWN_TYPE = 'jaf_own_type';
+  function detectOwnType() {
+    const el = document.getElementById('ad_data');
+    if (!el) return;
+    try {
+      const d = JSON.parse(el.getAttribute('data-custom_d') || '{}');
+      const t = ((d.dimensions || []).find((x) => +x.key === 1) || {}).value;
+      if (t && t !== gmGet(K_OWN_TYPE, '')) gmSet(K_OWN_TYPE, t);
+    } catch (e) { /* egal */ }
+  }
+  const ownIsMan = () => gmGet(K_OWN_TYPE, '') === 'Mann';
+  const NICK = () => (ownIsMan() ? 'Oma' : 'Opa');
+  const nickG = () => (ownIsMan() ? OMA_G : OPA_G);
+  function opaT(s) {
+    if (!ownIsMan()) return s;
+    return String(s).replace(/Opa-(Scan|Schutz|Liste)/g, 'Oma-$1').replace(/blockierte Opas/g, 'blockierte Omas');
+  }
   function updateOpaBadge() {
     const happy = document.querySelector('.page-header-info-element.happy_member_num_info');
     if (!happy) return;
@@ -1787,10 +2142,10 @@
       if (icon) {
         icon.innerHTML = `<svg viewBox="0 0 640 1280" width="24" height="24" preserveAspectRatio="xMidYMid meet" ` +
           `style="width:24px;height:24px;fill:currentColor;display:inline-block" aria-hidden="true">` +
-          `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg>`;
+          `${nickG()}</svg>`;
       }
       const lower = b.querySelector('.page-header-info-element__lower-text');
-      if (lower) lower.textContent = 'blockierte Opas';
+      if (lower) lower.textContent = opaT('blockierte Opas');
       const logins = happy.parentElement.querySelector('.page-header-info-element.logins_today_num_info');
       happy.parentElement.insertBefore(b, logins && logins.parentElement === happy.parentElement ? logins : happy.nextSibling);
     }
@@ -1808,22 +2163,22 @@
   // =====================================================================
   const K_OPA = 'jaf_opa';
   const K_GROUP_DONE = 'jaf_group_done'; // { key: { name, ts } } – Gruppe zuletzt komplett bearbeitet
-  const getGroupDone = () => GM_getValue(K_GROUP_DONE, {});
+  const getGroupDone = () => gmGet(K_GROUP_DONE, {});
   function markGroupDone(g) {
     const m = getGroupDone();
     m[g.key] = { name: g.name, ts: Date.now() };
-    GM_setValue(K_GROUP_DONE, m);
+    gmSet(K_GROUP_DONE, m);
   }
-  const getOpa = () => GM_getValue(K_OPA, { running: false });
-  const setOpa = (o) => GM_setValue(K_OPA, Object.assign({}, o, { ts: Date.now() }));
+  const getOpa = () => gmGet(K_OPA, { running: false });
+  const setOpa = (o) => gmSet(K_OPA, Object.assign({}, o, { ts: Date.now() }));
   const isGroupsPage = () => cleanPath(location.pathname) === CONFIG.GROUPS_PATH;
   const groupsUrl = () => location.origin + CONFIG.GROUPS_PATH + '/';
   const opaStale = (o) => !o.ts || Date.now() - o.ts > 10 * 60 * 1000;
 
   function opaPanel(title) {
     const p = panel();
-    p.innerHTML = `<b>Opa-Scan</b>${title ? ' – ' + title : ''}${CONFIG.DRY_RUN ? ' – <span style="color:#ffb300">Testmodus</span>' : ''}<br>`;
-    p.appendChild(btn('Opa-Scan stoppen', opaStop));
+    p.innerHTML = opaT(`<b>Opa-Scan</b>${title ? ' – ' + title : ''}${CONFIG.DRY_RUN ? ' – <span style="color:#ffb300">Testmodus</span>' : ''}<br>`);
+    p.appendChild(btn(opaT('Opa-Scan stoppen'), opaStop));
     return p;
   }
   function opaStop() {
@@ -1831,10 +2186,10 @@
     setOpa(Object.assign(o, { running: false }));
     const st = getState();
     if (st.running) setState({ running: false, queue: [], count: 0 });
-    log('Opa-Scan gestoppt.');
+    log(opaT('Opa-Scan gestoppt.'));
     if (!isGroupsPage()) setTimeout(() => { location.href = groupsUrl(); }, 1500);
   }
-  const opaLog = (msg) => { log(msg); const o = getOpa(); o.log = (o.log || []).concat(`${fmtTs(Date.now())} ${msg}`).slice(-200); GM_setValue(K_OPA, o); };
+  const opaLog = (msg) => { log(msg); const o = getOpa(); o.log = (o.log || []).concat(`${fmtTs(Date.now())} ${msg}`).slice(-200); gmSet(K_OPA, o); };
 
   // ---- Badge auf jeder Gruppenkarte: Opa-Symbol + Datum der letzten kompletten Bearbeitung ----
   // Die Karte (<j-card-group>) zeigt unten rechts im Shadow DOM ein <j-badge> mit der Mitgliederzahl;
@@ -1857,15 +2212,14 @@
         b.setAttribute('is-on-image', 'true');
         b.style.marginRight = '4px';
         b.innerHTML = `<svg slot="icon" viewBox="0 0 640 1280" width="10" height="10" preserveAspectRatio="xMidYMid meet" ` +
-          `style="width:10px;height:10px;fill:currentColor" aria-hidden="true"><g transform="translate(0,1280) scale(0.1,-0.1)">` +
-          `<path d="${OPA_PATH}"/></g></svg>`;
+          `style="width:10px;height:10px;fill:currentColor" aria-hidden="true">${nickG()}</svg>`;
         box.style.display = box.style.display || 'flex';
         box.insertBefore(b, slot);
       }
       if (b.getAttribute('content') !== txt) {
         b.setAttribute('content', txt);
-        b.setAttribute('aria-label', d ? `Opa-Scan zuletzt komplett: ${fmtTs(e.ts)}` : 'Opa-Scan: noch nie komplett bearbeitet');
-        b.title = d ? `Opa-Scan zuletzt komplett bearbeitet: ${fmtTs(e.ts)}` : 'Opa-Scan: noch nie komplett bearbeitet';
+        b.setAttribute('aria-label', d ? opaT(`Opa-Scan zuletzt komplett: ${fmtTs(e.ts)}`) : opaT('Opa-Scan: noch nie komplett bearbeitet'));
+        b.title = d ? opaT(`Opa-Scan zuletzt komplett bearbeitet: ${fmtTs(e.ts)}`) : opaT('Opa-Scan: noch nie komplett bearbeitet');
       }
     });
   }
@@ -1883,8 +2237,8 @@
     b.setAttribute('role', '');
     b.style.marginLeft = '8px';
     b.innerHTML = `<svg slot="icon-prepend" viewBox="0 0 640 1280" width="16" height="16" preserveAspectRatio="xMidYMid meet" ` +
-      `style="width:16px;height:16px;fill:currentColor" aria-hidden="true"><g transform="translate(0,1280) scale(0.1,-0.1)">` +
-      `<path d="${OPA_PATH}"/></g></svg> <span>Opa-Scan starten</span>`;
+      `style="width:16px;height:16px;fill:currentColor" aria-hidden="true">${nickG()}</svg>` +
+      opaT('<span>Opa-Scan starten</span>');
     b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); opaStart(); });
     anchor.after(b);
     return true;
@@ -1892,11 +2246,11 @@
 
   async function opaStart() {
     const other = lockedByOther();
-    if (other) { alert(lockNotice(other).replace(' – hier wird nur markiert.', '. Der Opa-Scan kann erst danach gestartet werden.')); return; }
-    if (!(await acquireLock('Opa-Scan'))) { alert('Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.'); return; }
+    if (other) { alert(lockNotice(other).replace(' – hier wird nur markiert.', opaT('. Der Opa-Scan kann erst danach gestartet werden.'))); return; }
+    if (!(await acquireLock(opaT('Opa-Scan')))) { alert('Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.'); return; }
     const o = getOpa();
-    if (o.running && !opaStale(o)) { if (!confirm('Ein Opa-Scan läuft bereits. Neu beginnen?')) return; }
-    if (!confirm(`Opa-Scan starten?\n\nFür jede deiner Gruppen: Moderatoren auf die Whitelist (ggf. entblocken), ` +
+    if (o.running && !opaStale(o)) { if (!confirm(opaT('Ein Opa-Scan läuft bereits. Neu beginnen?'))) return; }
+    if (!confirm(opaT(`Opa-Scan starten?\n\nFür jede deiner Gruppen: Moderatoren auf die Whitelist (ggf. entblocken), `) +
       `Mitgliederliste lesen und Treffer ignorieren.${CONFIG.DRY_RUN ? '\n\n[Testmodus: es wird nichts ignoriert/entblockt]' : ''}`)) return;
     if (!(await visGuard())) return;
     try { await syncIgnoreList(true); } catch (e) { /* egal */ }
@@ -1991,9 +2345,13 @@
   function filteredUrl(tpl, gid) {
     const u = new URL(tpl, location.origin);
     const want = new Set();
-    for (const t of CONFIG.ONLY_TYPES.concat(CONFIG.COUPLE_RULE_TYPES)) {
-      const k = Object.keys(CONFIG.GROUP_GENDER_FILTER).find((x) => normType(x) === normType(t));
-      (k ? CONFIG.GROUP_GENDER_FILTER[k] : ['m', 'w', 'p', 'd']).forEach((g) => want.add(g));
+    for (const grp of GROUP_KEYS) {
+      if (!CONFIG.GROUPS[grp].ignore) continue;
+      const types = Object.keys(FIXED_TYPES).filter((t) => FIXED_TYPES[t] === grp).concat(CONFIG.GROUPS[grp].types || []);
+      for (const t of types) {
+        const k = Object.keys(CONFIG.GROUP_GENDER_FILTER).find((x) => normType(x) === normType(t));
+        (k ? CONFIG.GROUP_GENDER_FILTER[k] : ['m', 'w', 'p', 'd']).forEach((g) => want.add(g));
+      }
     }
     for (const g of ['w', 'm', 'p', 'd']) {
       if (want.has(g)) u.searchParams.set('user_gender_' + g, '1'); else u.searchParams.delete('user_gender_' + g);
@@ -2038,7 +2396,7 @@
     // Debug: welche Typen kamen trotz Filter vor?
     const seen = {};
     all.forEach((m) => { seen[m.type] = (seen[m.type] || 0) + 1; });
-    console.log('[Alter-Filter][Opa-Scan] Typen in', cur.name, seen);
+    console.log(opaT('[Alter-Filter][Opa-Scan] Typen in'), cur.name, seen);
     // doppelte (falls Seiten überlappen) entfernen
     const uniq = new Map(); all.forEach((m) => uniq.set(m.path, m));
     return { members: [...uniq.values()], types: seen, partial };
@@ -2075,7 +2433,7 @@
           setOpa(Object.assign(o, { running: false, phase: 'done' }));
           const st = o.stats || {};
           opaPanel('fertig');
-          opaLog(`Opa-Scan fertig: ${st.groups || 0} Gruppen, ${st.mods || 0} Moderatoren, ${st.unblocked || 0} entblockt, ` +
+          opaLog(opaT(`Opa-Scan fertig: ${st.groups || 0} Gruppen, ${st.mods || 0} Moderatoren, ${st.unblocked || 0} entblockt, `) +
             `${st.members || 0} Mitglieder gelesen, ${st.hits || 0} zum Ignorieren übergeben.`);
           return;
         }
@@ -2133,9 +2491,8 @@
         noteSighting(members, 'Gruppen', null);
         updateWatch(members, getLog(), getIgnored(), sourceOf('Gruppen-Mitgliederliste') || 'Gruppen');
         const white = whiteList(), log_ = getLog(), ign = getIgnored();
-        let hits = members.filter((m) => shouldBlock(m, white) && !isBlocked(m.path, log_, ign))
-          .map((m) => ({ path: m.path, url: m.url, name: m.name, ages: m.ages, type: m.type,
-            source: sourceOf('Gruppen-Mitgliederliste') || 'Gruppen', reason: isCoupleRuleType(m.type) ? coupleReason(m.ages) : 'Alter' }));
+        const gctx = { white, blocked: blockedIdMap() };
+        let hits = members.map((m) => classifyCard(m, gctx, 'Gruppen')).filter((r) => r.kind !== 'skip').map((r) => r.item);
         // Vorgemerkte, die inzwischen über der Grenze sind, an den Anfang
         const due = dueFromWatch();
         if (due.length) { const inDue = new Set(due.map((d) => d.path)); hits = due.concat(hits.filter((h) => !inDue.has(h.path))); }
@@ -2176,7 +2533,7 @@
       if (o.phase === 'next') {
         const g = o.groups[o.gi];
         if (g && o.curComplete && !CONFIG.DRY_RUN) { markGroupDone(g); updateGroupBadges(); opaLog(`${g.name}: komplett bearbeitet ✔`); }
-        else if (g) opaLog(`${g.name}: nicht komplett bearbeitet – kommt beim nächsten Opa-Scan wieder früh dran.`);
+        else if (g) opaLog(opaT(`${g.name}: nicht komplett bearbeitet – kommt beim nächsten Opa-Scan wieder früh dran.`));
         o = getOpa();
         o.curComplete = false;
         o.gi++; o.phase = 'group'; o.cur = null; o.unblock = []; o.notes = []; setOpa(o);
@@ -2200,7 +2557,7 @@
     const white = whiteList();
     let ch = false;
     for (const [p, r] of Object.entries(w)) if (white.includes(norm(r.name))) { delete w[p]; ch = true; }
-    if (ch) GM_setValue(K_WATCH, w);
+    if (ch) gmSet(K_WATCH, w);
   }
 
   // ---- Moderatoren entblocken (auf /ignore/) ----
@@ -2287,35 +2644,35 @@
       updateGroupBadges();
       const other = lockedByOther();
       if (other) {
-        if (o.running) { const p = panel(); p.innerHTML = '<b>Opa-Scan</b><br>'; log(lockNotice(other)); return true; }
+        if (o.running) { const p = panel(); p.innerHTML = opaT('<b>Opa-Scan</b><br>'); log(lockNotice(other)); return true; }
         return false;
       }
       if (!o.running) {
-        if (o.phase === 'done' && o.log && o.log.length) { const p = panel(); p.innerHTML = '<b>Opa-Scan</b><br>'; log(o.log[o.log.length - 1]); }
+        if (o.phase === 'done' && o.log && o.log.length) { const p = panel(); p.innerHTML = opaT('<b>Opa-Scan</b><br>'); log(o.log[o.log.length - 1]); }
         return false;
       }
       if (getState().running) return false; // Ignorier-Lauf hat Vorrang
       if (opaStale(o) && o.phase !== 'ignore') { // nach einem (langen) Ignorier-Lauf immer automatisch weiter
         const p = panel();
-        p.innerHTML = `<b>Opa-Scan</b> – unterbrochen bei Gruppe ${(o.gi || 0) + 1}/${(o.groups || []).length}<br>`;
+        p.innerHTML = opaT(`<b>Opa-Scan</b> – unterbrochen bei Gruppe ${(o.gi || 0) + 1}/${(o.groups || []).length}<br>`);
         p.appendChild(btn('Fortsetzen', async () => {
-          if (!(await acquireLock('Opa-Scan'))) { log(lockNotice(getLock())); return; }
+          if (!(await acquireLock(opaT('Opa-Scan')))) { log(lockNotice(getLock())); return; }
           setOpa(getOpa()); opaStep();
         }));
-        p.appendChild(btn('Abbrechen', () => { setOpa(Object.assign(getOpa(), { running: false })); log('Opa-Scan abgebrochen.'); }));
-        log('Der Opa-Scan wurde unterbrochen.');
+        p.appendChild(btn('Abbrechen', () => { setOpa(Object.assign(getOpa(), { running: false })); log(opaT('Opa-Scan abgebrochen.')); }));
+        log(opaT('Der Opa-Scan wurde unterbrochen.'));
         return true;
       }
-      if (!(await acquireLock('Opa-Scan'))) { log(lockNotice(getLock())); return true; }
+      if (!(await acquireLock(opaT('Opa-Scan')))) { log(lockNotice(getLock())); return true; }
       opaStep();
       return true;
     }
     if (!o.running || opaStale(o)) return false;
     if (lockedByOther()) return false; // gehört einem anderen Tab
-    if (isIgnorePage() && o.phase === 'unblock' && !getState().running) { await acquireLock('Opa-Scan: entblocken'); opaUnblockOnIgnorePage(); return true; }
+    if (isIgnorePage() && o.phase === 'unblock' && !getState().running) { await acquireLock(opaT('Opa-Scan: entblocken')); opaUnblockOnIgnorePage(); return true; }
     const idOf = (p) => (String(p).match(/\/profile\/(\d+)\./) || [])[1];
     if (isProfilePage() && o.phase === 'notes' && o.notes && o.notes[0] && idOf(location.pathname) === idOf(o.notes[0].path)) {
-      await acquireLock('Opa-Scan: Notiz'); opaNoteOnProfile(); return true;
+      await acquireLock(opaT('Opa-Scan: Notiz')); opaNoteOnProfile(); return true;
     }
     return false;
   }
@@ -2377,8 +2734,8 @@
   // ---------- „Profil einmalig anschauen“ ----------
   // { id: { id, path, url, name, tab, hb, state: 'opening'|'open'|'beacon', created, beaconTs } }
   const K_PEEK = 'jaf_peek';
-  const getPeeks = () => GM_getValue(K_PEEK, {});
-  const setPeeks = (p) => GM_setValue(K_PEEK, p);
+  const getPeeks = () => gmGet(K_PEEK, {});
+  const setPeeks = (p) => gmSet(K_PEEK, p);
   async function reblockPeek(e, why) {
     const p = getPeeks();
     if (!p[e.id]) return;
@@ -2461,10 +2818,10 @@
   async function noteJobInit() {
     if (!isProfilePage()) return false;
     const id = idOf(location.pathname);
-    const jobs = GM_getValue(K_NOTEJOBS, {});
+    const jobs = gmGet(K_NOTEJOBS, {});
     const j = jobs[id];
     if (!j) return false;
-    delete jobs[id]; GM_setValue(K_NOTEJOBS, jobs);
+    delete jobs[id]; gmSet(K_NOTEJOBS, jobs);
     const p = panel(); p.innerHTML = '<b>Whitelist-Notiz</b><br>';
     log(`${j.name}: Notiz wird angepasst …`);
     await waitFor(profileType, 8000);
@@ -2486,13 +2843,13 @@
     markUnblocked(logPath, info, `Whitelist: ${reason}`);
     addWhiteEntry(info, reason, (party.search || party.kind) ? null : party);
     removeWhitelistedFromWatch();
-    const jobs = GM_getValue(K_NOTEJOBS, {});
+    const jobs = gmGet(K_NOTEJOBS, {});
     const line = party.kind === 'Besucher' ? CONFIG.VISIT_NOTE_TEXT.replace('{datum}', party.date)
       : party.kind === 'Likes' ? CONFIG.LIKE_NOTE_TEXT.replace('{datum}', party.date)
         : party.search ? CONFIG.SEARCH_NOTE_TEXT.replace('{datum}', party.date)
           : CONFIG.PARTY_NOTE_TEXT.replace('{party}', party.name).replace('{datum}', party.date);
     jobs[info.id] = { line, name: info.name, created: Date.now() };
-    GM_setValue(K_NOTEJOBS, jobs);
+    gmSet(K_NOTEJOBS, jobs);
     if (w) w.location.href = info.url; else location.href = info.url;
     return true;
   }
@@ -2569,41 +2926,22 @@
       ages, num, type, anon, nonProfile, noLink: !a, extern: /(^|[^\p{L}])extern([^\p{L}]|$)/iu.test(text),
     };
   }
-  const isMixedCouple = (t) => isCoupleRuleType(t) && !/\|/.test(t || '');
-  const isManReg = (g) => normType(g.type) === normType('Mann');
 
-  // Farbe/Schild nach der ANMELDUNG (Punkte 25–27)
-  function guestStyle(g, ctx) {
-    if (!g.anon && (g.name || g.id) && isWhiteMember(g, ctx.white)) return { color: COLORS.white, txt: 'Whitelist', fg: '#000' };
-    const age = g.ages.length ? Math.max(...g.ages) : null;
-    if (isMixedCouple(g.type) || /paar/i.test(g.type)) {
-      if (isMixedCouple(g.type) && g.ages.length === 2) {
-        const gap = g.ages[1] - g.ages[0];
-        if (gap >= CONFIG.COUPLE_AGE_GAP) return { color: COLORS.red, txt: `Unterschied ${gap}` };
-        if (bothOld(g.ages)) return { color: COLORS.red, txt: 'Geronto-Paar' };
-        if (g.ages[1] > CONFIG.MAX_AGE) return { color: COLORS.dark, txt: `Unterschied ${gap} · Mann zu alt` };
-        return { color: COLORS.grey, txt: `Unterschied ${gap}`, dashed: true };
-      }
-      if (g.ages.length === 1 && isMixedCouple(g.type)) {
-        const acc = ctx.acc[g.path];
-        if (acc && normType(acc.type) === normType('Mann') && g.ages[0] > CONFIG.MAX_AGE) return { color: COLORS.dark, txt: 'Mann zu alt' };
-        return { color: COLORS.grey, txt: 'Paar (1 Alter)', dashed: true };
-      }
-      if (typeOkFor(g.type)) return { color: age > CONFIG.MAX_AGE ? COLORS.red : ageColor(g.ages), txt: g.type };
-      return { color: COLORS.grey, txt: g.type || 'Paar', dashed: true };
-    }
-    if (isManReg(g) || typeOkFor(g.type)) {
-      if (age == null || age > CONFIG.MAX_AGE) return { color: COLORS.red, txt: age == null ? 'Opa (ohne Alter)' : 'Opa' };
-      const c = ageColor(g.ages);
-      return { color: c, txt: '', fg: c === COLORS.light ? '#000' : '#fff' };
-    }
-    return { color: COLORS.grey, txt: g.type || '', dashed: true };
+  // Gruppe einer Anmeldung/Karte: zugeordneter Profiltyp, sonst nach Geschlechts-Nummer (1 Mann, 2 Frau, 3 Paar)
+  const groupOfReg = (g) => (isCoupleType(g.type) || g.num === '3' || g.gender === '3' ? 'p' : groupOfType(g.type) || ({ 1: 'm', 2: 'f' }[g.num || g.gender] || null));
+  // Farbe/Schild (nur mit „Visuelle Einstufung“ der Gruppe): { none } oder { color, txt, fg, dashed, group, j }
+  function guestStyle(g, ctx, src = 'Party') {
+    const j = judge({ type: g.type, ages: g.ages }, src);
+    const grp = j.group || groupOfReg(g);
+    if (!grp || !CONFIG.GROUPS[grp].visual) return { none: true, group: grp, j };
+    if (!g.anon && (g.name || g.id) && isWhiteMember(g, ctx.white)) return { color: COLORS.white, txt: 'Whitelist', fg: '#000', group: grp, j };
+    if (j.active) return { color: COLORS.red, txt: j.why, group: grp, j };
+    if (!j.stage) return { color: COLORS.grey, txt: j.why || '', dashed: true, group: grp, j };
+    const c = STAGE_COLORS[j.stage] || COLORS.grey;
+    return { color: c, txt: CONFIG.GROUPS[grp].names.one[j.stage - 1], fg: c === COLORS.light ? '#000' : '#fff', group: grp, j, dashed: !!j.unclear };
   }
-  function guestCategory(g) {
-    const age = g.ages.length ? Math.max(...g.ages) : null;
-    if (age == null || age > CONFIG.MAX_AGE) return 'opa';
-    return age <= CONFIG.WARN_AGE ? 'jung' : 'mid';
-  }
+  // rotes X nur, wenn für die Gruppe „Ignorieren aktiv“ ist (oder die Gruppe unbekannt)
+  const showX = (st) => !st.group || !!CONFIG.GROUPS[st.group].ignore;
 
   const X_SVG = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:4">' +
     '<line x1="4" y1="4" x2="96" y2="96" stroke="#e53935" stroke-width="7" stroke-linecap="round"/>' +
@@ -2625,21 +2963,24 @@
       if (g.name && g.path && !g.noLink && ctx.white.includes(norm(g.name))) learnWhiteUrl(g.name, g.path);
       const st = guestStyle(g, ctx);
       const card = li.querySelector('.card') || li;
-      card.style.outline = `${st.dashed ? 2 : 3}px ${st.dashed ? 'dashed' : 'solid'} ${st.color}`;
-      card.style.position = 'relative';
-      let b = li.querySelector('.jaf-badge');
-      if (!b) { b = document.createElement('div'); b.className = 'jaf-badge'; card.appendChild(b); }
-      // Schild: nur Alter (Originalinhalt) + Gründe fürs Ignorieren (rot)
-      const extra = [g.ages.join('+') || '?', st.color === COLORS.red ? st.txt : ''].filter(Boolean).join(' · ');
       const blk = g.id && ctx.blocked.get(g.id);
-      b.textContent = extra + (blk ? ' · ignoriert' : '');
-      b.style.cssText = `position:absolute;top:6px;left:6px;z-index:5;font:bold 11px system-ui;padding:2px 6px;border-radius:3px;pointer-events:none;` +
-        `background:${st.color};color:${st.fg || (st.color === COLORS.white ? '#000' : '#fff')}`;
-      // Kreuz über dem Bild + Popup statt Link
+      let b = li.querySelector('.jaf-badge');
+      if (st.none) { card.style.outline = ''; if (b) b.remove(); } else {
+        card.style.outline = `${st.dashed ? 2 : 3}px ${st.dashed ? 'dashed' : 'solid'} ${st.color}`;
+        card.style.position = 'relative';
+        if (!b) { b = document.createElement('div'); b.className = 'jaf-badge'; card.appendChild(b); }
+        // Schild: Alter + Gründe fürs Ignorieren (rot)
+        const extra = [g.ages.join('+') || '?', st.color === COLORS.red ? st.txt : ''].filter(Boolean).join(' · ');
+        b.textContent = extra + (blk ? ' · ignoriert' : '');
+        b.style.cssText = `position:absolute;top:6px;left:6px;z-index:5;font:bold 11px system-ui;padding:2px 6px;border-radius:3px;pointer-events:none;` +
+          `background:${st.color};color:${st.fg || (st.color === COLORS.white ? '#000' : '#fff')}`;
+      }
+      // Kreuz über dem Bild (nur bei aktivem Ignorieren der Gruppe) + Popup statt Link
       const av = li.querySelector('.date_avatar');
       const x = li.querySelector('.jaf-x');
-      if (blk && av && !x) { av.style.position = 'relative'; av.insertAdjacentHTML('beforeend', `<div class="jaf-x">${X_SVG}</div>`); }
-      if (!blk && x) x.remove();
+      const wantX = blk && showX(st);
+      if (wantX && av && !x) { av.style.position = 'relative'; av.insertAdjacentHTML('beforeend', `<div class="jaf-x">${X_SVG}</div>`); }
+      if (!wantX && x) x.remove();
       const clickEl = g.a || (g.id ? card : null);
       if (clickEl && !clickEl.__jafBound) {
         clickEl.__jafBound = true;
@@ -2657,9 +2998,7 @@
   // Grund aus dem Protokoll (= Text, den das Skript in die Profilnotiz schreibt)
   function logNoteText(e) {
     if (!e || !e.ts) return '';
-    const kind = (e.reason === 'Altersunterschied' || e.reason === 'Geronto-Paar') ? e.reason
-      : (isCoupleRuleType(e.type) ? (coupleReason(e.ages) || false) : false);
-    return noteText(e.source, kind, e.ts);
+    return noteText(e.source, entryKind(e), e.ts, e.type);
   }
   // Profilnotiz im Hintergrund lesen: eigene Zeile, sonst ganze Notiz, sonst ''
   async function fetchProfileNote(url) {
@@ -2669,7 +3008,7 @@
     const ta = host.querySelector('textarea');
     const txt = (host.getAttribute('value') || (ta && (ta.value || ta.textContent)) || host.textContent || '').trim();
     const lines = txt.split('\n').map((l) => l.trim()).filter(Boolean);
-    const own = lines.filter((l) => CONFIG.OWN_NOTE_RE.test(l));
+    const own = lines.filter((l) => ownNoteRe().test(l));
     return own.length ? own[own.length - 1] : lines.join(' · ');
   }
   // Button im Stil der JOYclub-Knöpfe („Event merken“), untereinander
@@ -2693,7 +3032,7 @@
   const POPUP_BOX_CSS = 'background:#1d2023;color:#fff;font:14px/1.5 system-ui,sans-serif;padding:18px 20px;border-radius:10px;' +
     'max-width:440px;width:calc(100% - 32px);max-height:calc(100vh - 32px);overflow:auto;box-sizing:border-box;box-shadow:0 8px 30px rgba(0,0,0,.5)';
   const opaIconSvg = (h = 22) => `<svg viewBox="0 0 640 1280" width="${Math.round(h * 0.58)}" height="${h}" style="fill:currentColor;flex:none" aria-hidden="true">` +
-    `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg>`;
+    `${nickG()}</svg>`;
 
   function ignoredPopup(g, blk, ev) {
     document.getElementById('jaf-popup')?.remove();
@@ -2743,12 +3082,12 @@
   // ---- Cache geprüfter Profile (Party-Scans): { id: { name, type, ages, ts } } ----
   const K_CHECKED = 'jaf_checked';
   const CHECK_MAX_AGE_MS = 365 * 86400000; // nach 1 Jahr neu prüfen
-  const getChecked = () => GM_getValue(K_CHECKED, {});
+  const getChecked = () => gmGet(K_CHECKED, {});
   function setChecked(id, info) {
     if (!id || !info || !info.type || !(info.ages || []).length) return;
     const m = getChecked();
     m[id] = { name: info.name || '', type: info.type, ages: info.ages, ts: Date.now() };
-    GM_setValue(K_CHECKED, m);
+    gmSet(K_CHECKED, m);
   }
   // Entscheidung aus dem Cache: 'block' | 'ok' | null (unbekannt/zu alt/Geburtstag dazwischen)
   // Clubs, Shops usw.: JOYclub verlinkt sie in nachgeladenen Gästelisten als /my/<id> – sieht aus wie ein Profil, ist aber keins
@@ -2756,7 +3095,7 @@
     if (!id) return;
     const m = getChecked();
     m[id] = { name: name || '', nonProfile: kind || 'kein Mitgliederprofil', ts: Date.now() };
-    GM_setValue(K_CHECKED, m);
+    gmSet(K_CHECKED, m);
   }
   function cachedNonProfile(id) {
     const e = id && getChecked()[id];
@@ -2779,12 +3118,12 @@
     }
     return '';
   }
-  function cachedDecision(g, white) {
+  function cachedDecision(g, white, src = 'Party') {
     const e = getChecked()[g.id];
     if (!e || e.nonProfile || !e.ages || Date.now() - e.ts > CHECK_MAX_AGE_MS) return null;
     const yrs = (Date.now() - e.ts) / (365.25 * 86400000);
     const lo = e.ages.map((a) => a + Math.floor(yrs)), hi = e.ages.map((a) => a + Math.ceil(yrs));
-    const c = (ages) => shouldBlock({ name: g.name, path: g.path, type: e.type, ages }, white);
+    const c = (ages) => shouldBlock({ name: g.name, path: g.path, type: e.type, ages }, white, src);
     if (c(lo)) return { r: 'block', type: e.type, ages: lo };
     if (!c(hi)) return { r: 'ok', type: e.type, ages: lo };
     return null;
@@ -2858,31 +3197,36 @@
     if (npk) return { kind: 'anon', why: `kein Mitgliederprofil (${npk})` };
     if (!ctx.ignoreWhite && isWhiteMember(g, ctx.white)) return { kind: 'white', why: whiteReason(g.name) || 'Whitelist' };
     if (ctx.blocked.get(g.id)) return { kind: 'blocked', why: 'steht auf der Ignorierliste' };
-    const src = sourceOf('Party-Gästeliste') || 'Party';
-    if (isMixedCouple(g.type) && g.ages.length === 2) {
-      const gap = g.ages[1] - g.ages[0];
-      const why = coupleReason(g.ages);
-      if (why) return { kind: 'ignore', why: why === 'Geronto-Paar' ? 'Geronto-Paar' : `Paar, Unterschied ${gap}`,
-        item: { path: g.path, url: g.url, name: g.name, ages: g.ages, type: g.type, source: src, reason: why } };
-      return { kind: 'skip', why: `Paar, Unterschied ${gap}` };
+    const src = 'Party';
+    const srcLbl = sourceOf('Party-Gästeliste') || src;
+    const grp = groupOfType(g.type) || groupOfReg(g);
+    // nur Profile prüfen, die für die aktuellen Einstellungen relevant sind
+    if (!grp) return { kind: 'skip', why: `Profiltyp ${g.type || '?'} nicht zugeordnet` };
+    if (!CONFIG.GROUPS[grp].ignore) return { kind: 'skip', why: `${GROUP_LABELS[grp]}: Ignorieren aus` };
+    const mk = (extra) => Object.assign({ path: g.path, url: g.url, name: g.name, source: srcLbl }, extra);
+    if (grp === 'p' && isCoupleType(g.type) && g.ages.length === 2) {
+      const j = judge({ type: g.type, ages: g.ages }, src);
+      if (j.active) return { kind: 'ignore', why: j.why, item: mk({ ages: g.ages, type: g.type, kind: j.kind, reason: KIND_REASON[j.kind] }) };
+      return { kind: 'skip', why: `Paar ${g.ages.join('+')}` };
     }
-    // Anmeldungen als Frau werden nicht geprüft (Scan würde sonst zu lange dauern)
-    if (normType(g.type) === normType('Frau')) return { kind: 'skip', why: 'Anmeldung als Frau' };
-    // Profil nur prüfen, wenn schon das Alter in der Anmeldung die Kriterien erfüllt (sonst überspringen)
-    const regAge = g.ages.length ? Math.max(...g.ages) : null;
-    if (regAge != null && regAge <= CONFIG.MAX_AGE) return { kind: 'skip', why: `Anmeldung ${g.ages.join('+')}` };
+    // Profil nur prüfen, wenn schon das Alter in der Anmeldung die Schwelle erreicht
+    if (grp !== 'p' && g.ages.length) {
+      const regAge = Math.max(...g.ages);
+      if (regAge < vals(grp, src)[2]) return { kind: 'skip', why: `Anmeldung ${g.ages.join('+')}` };
+    }
     const wl = ctx.ignoreWhite ? null : ctx.white;
-    const cd = cachedDecision(g, wl);
+    const cd = cachedDecision(g, wl, src);
     if (cd && cd.r === 'ok') return { kind: 'skip', why: `geprüft: ${cd.type}, ${cd.ages.join('+')}` };
     if (cd && cd.r === 'block') return { kind: 'ignore', why: `geprüft: ${cd.type}, ${cd.ages.join('+')}`, verified: true,
-      item: { path: g.path, url: g.url, name: g.name, ages: cd.ages, type: cd.type, source: src, verify: true } };
+      item: mk({ ages: cd.ages, type: cd.type, verify: true }) };
     const k = ctx.acc[g.path] || Object.entries(ctx.acc).find(([p]) => idOf(p) === g.id)?.[1];
     if (k && k.type && (k.persons || []).length) {
       const maxAges = k.persons.map((r) => { const [y, mo, d] = r.lo.split('-').map(Number); const now = new Date(); let a = now.getFullYear() - y; if (now < new Date(now.getFullYear(), mo - 1, d)) a--; return a; });
-      if (!shouldBlock({ name: g.name, path: g.path, type: k.type, ages: maxAges }, wl)) return { kind: 'skip', why: `bekannt: ${k.type}, höchstens ${maxAges.join('+')}` };
+      if (!shouldBlock({ name: g.name, path: g.path, type: k.type, ages: maxAges }, wl, src)) return { kind: 'skip', why: `bekannt: ${k.type}, höchstens ${maxAges.join('+')}` };
     }
-    return { kind: 'verify', why: 'wird auf dem Profil geprüft', item: { path: g.path, url: g.url, name: g.name, ages: [], type: (k && k.type) || '', source: src, verify: true } };
+    return { kind: 'verify', why: 'wird auf dem Profil geprüft', item: mk({ ages: [], type: (k && k.type) || '', verify: true }) };
   }
+
 
   // ---- Reiter „Opa-Liste“ (zwischen „Dates“ und „Kommentare“) ----
   // Beim Öffnen läuft der Opa-Scan dieser Party als Testlauf (nichts wird verändert); gelistet werden nur Gäste,
@@ -2896,8 +3240,8 @@
     const content = document.querySelector('.event_detail_tab_content > .tab-content') || (document.getElementById('information') || {}).parentElement;
     if (!anchorLi || !content) return false;
     const li = document.createElement('li');
-    li.setAttribute('role', 'presentation'); li.title = 'Opa-Liste'; li.className = 'jaf-opa-list-tab';
-    li.innerHTML = '<a href="#jaf_opa_list" data-toggle="tab" aria-controls="jaf_opa_list">Opa-Liste</a>';
+    li.setAttribute('role', 'presentation'); li.title = opaT('Opa-Liste'); li.className = 'jaf-opa-list-tab';
+    li.innerHTML = opaT('<a href="#jaf_opa_list" data-toggle="tab" aria-controls="jaf_opa_list">Opa-Liste</a>');
     if (dates) anchorLi.after(li); else anchorLi.before(li);
     const pane = document.createElement('div');
     pane.id = 'jaf_opa_list'; pane.className = 'tab-pane'; pane.setAttribute('role', 'tabpanel');
@@ -2923,7 +3267,7 @@
     const box = pane.querySelector('.jaf-ol');
     const hint = (t) => {
       box.innerHTML = '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:6px;background:#fff3e0;color:#5d4037">' +
-        '<span style="font-size:20px">⏳</span><div><b>Opa-Scan läuft (Testlauf)</b><br><span class="jaf-ol-step"></span></div></div>';
+        opaT('<span style="font-size:20px">⏳</span><div><b>Opa-Scan läuft (Testlauf)</b><br><span class="jaf-ol-step"></span></div></div>');
       box.querySelector('.jaf-ol-step').textContent = t;
     };
     try {
@@ -3009,7 +3353,7 @@
     for (const [k, e] of Object.entries(w)) {
       if (k === norm(g.name) || (g.id && (e.id || idOf(e.url)) === String(g.id))) { delete w[k]; ch = true; }
     }
-    if (ch) { GM_setValue(K_WHITE, w); _wIdCache.t = 0; }
+    if (ch) { gmSet(K_WHITE, w); _wIdCache.t = 0; }
     return ch;
   }
   const isStaticWhite = (g) => WHITELIST.some((e) => norm(e.name) === norm(g.name));
@@ -3022,7 +3366,7 @@
     if (other) { msg.textContent = lockNotice(other); return; }
     const nI = todo.filter((r) => r.sel.value === 'ignore').length, nW = todo.length - nI;
     if (!confirm(`${nI} ignorieren, ${nW} auf die Whitelist?${CONFIG.DRY_RUN && nI ? '\n\n[Testmodus: Ignorieren wird nur durchgespielt]' : ''}`)) return;
-    if (!(await acquireLock('Opa-Liste anwenden'))) { msg.textContent = lockNotice(getLock()); return; }
+    if (!(await acquireLock(opaT('Opa-Liste anwenden')))) { msg.textContent = lockNotice(getLock()); return; }
     const ev = eventInfo();
     const party = { name: ev.name || 'Party', date: ev.date || fmtDay(Date.now()) };
     const src = sourceOf('Party-Gästeliste') || 'Party';
@@ -3068,9 +3412,9 @@
     if (ed.error) return { ok: false, msg: ed.error };
     const old = (ed.ta.value || ed.host.getAttribute('value') || '');
     const lines = old.split(/\r?\n/);
-    const removed = lines.filter((l) => CONFIG.OWN_NOTE_RE.test(l));
+    const removed = lines.filter((l) => ownNoteRe().test(l));
     if (!removed.length) { await cancelNote(ed); return { ok: true, msg: 'keine Skript-Notiz vorhanden' }; }
-    const value = lines.filter((l) => !CONFIG.OWN_NOTE_RE.test(l)).join('\n').replace(/^\n+|\n+$/g, '');
+    const value = lines.filter((l) => !ownNoteRe().test(l)).join('\n').replace(/^\n+|\n+$/g, '');
     const marker = value.split('\n').filter((l) => l.trim())[0] || '';
     const r = await commitNote(ed, value, marker, removed.map((x) => x.trim()), true);
     if (r.ok) r.msg = `Notiz bereinigt (${removed.length} Zeile(n) entfernt)`;
@@ -3120,54 +3464,85 @@
   const htmlToItems = (html) => { const ul = document.createElement('ul'); ul.innerHTML = html.join(''); return [...ul.children]; };
 
   // ---- Aufteilung der Gästeliste (nur außerhalb des Opa-Scans), im Hintergrund gebildet ----
-  // „Männer“ → Jungschwänze / Schwänze / Opas;  „Paare“ → Paare / Geronto-Paare.
-  // Der Original-Reiter bleibt sichtbar, bis die neuen fertig sind.
-  // Geronto-Paar (Anzeige + AWO): beide ≥ COUPLE_BOTH_MIN_AGE, bei nur einer Angabe diese ≥ …, oder Sugar Daddy
-  function isGerontoReg(g) {
-    if (g.ages.length === 2) return bothOld(g.ages) || (isMixedCouple(g.type) && g.ages[1] - g.ages[0] >= CONFIG.COUPLE_AGE_GAP);
-    if (g.ages.length === 1) return g.ages[0] >= CONFIG.COUPLE_BOTH_MIN_AGE;
-    return false;
+  // Je Gruppe mit eingeschalteter „Visueller Einstufung“: Reiter nach den Mehrzahl-Bezeichnungen der Stufen
+  // (gleiche Bezeichnungen = ein Reiter). Trans/Non-binary wandern in die zugeordnete Gruppe;
+  // Paare (auch Männer-/Frauen-Paare) bleiben immer bei den Paaren. Der Original-Reiter bleibt sichtbar, bis die neuen fertig sind.
+  const GUEST_PANE = { m: 'm', f: 'w', p: 'p' };
+  // Gruppe einer Anmeldung für Reiter/AWO
+  const guestGroup = (g) => (isCoupleType(g.type) || g.num === '3' ? 'p' : groupOfType(g.type) || groupOfReg(g));
+  // Anzeige-Stufe einer Anmeldung (Werte „Partygäste“); ohne Alter → Stufe 3; Sugar Daddy/Mom → Stufe 3
+  function guestStage(g, grp, cfg = CONFIG, src = 'Party') {
+    const ages = (g.ages || []).filter((a) => a >= 18 && a <= 120);
+    if (!ages.length) return 3;
+    if (grp !== 'p') return stageOf(Math.max(...ages), vals(grp, src, null, cfg));
+    const k = knownType(String(g.type || '').split('|')[0]);
+    if (k === 'Männer-Paar' || k === 'Frauen-Paar' || ages.length < 2) {
+      const who = k === 'Frauen-Paar' ? 'f' : 'm';
+      const P = cfg.GROUPS.p, gap = ages.length === 2 ? Math.abs(ages[0] - ages[1]) : null;
+      const rule = who === 'm' ? P.sd : P.sm;
+      if (gap != null && rule && rule.on && gap >= rule.gap) return 3;
+      return stageOf(Math.max(...ages), vals('p', src, who, cfg));
+    }
+    const P = cfg.GROUPS.p, [fa, ma] = ages;
+    if ((P.sd && P.sd.on && ma - fa >= P.sd.gap) || (P.sm && P.sm.on && fa - ma >= P.sm.gap)) return 3;
+    return Math.min(stageOf(fa, vals('p', src, 'f', cfg)), stageOf(ma, vals('p', src, 'm', cfg)));
   }
-  const GUEST_SPLITS = [
-    { gender: 'm', tabs: CONFIG.GUEST_TABS, cat: (g) => guestCategory(g) },
-    { gender: 'p', tabs: [{ key: 'paare', label: 'Paare' }, { key: 'geronto', label: 'Geronto-Paare' }], cat: (g) => (isGerontoReg(g) ? 'geronto' : 'paare') },
-  ];
-  const guestSplit = { m: null, p: null }; // geladene Einträge je Liste (für den AWO-Faktor)
+  // Reiter einer Gruppe: [{ key, label, stages:[…] }] – gleiche Bezeichnungen zusammengefasst
+  function groupTabs(grp, cfg = CONFIG) {
+    const out = [];
+    cfg.GROUPS[grp].names.many.forEach((lbl, i) => {
+      const t = out.find((x) => x.label === lbl);
+      if (t) t.stages.push(i + 1); else out.push({ key: `${grp}${i + 1}`, label: lbl, stages: [i + 1] });
+    });
+    return out;
+  }
+  let guestAll = null; // geladene Anmeldungen (für den AWO-Faktor); false = nicht ladbar
 
   async function setupGuestTabs() {
     if (window.__jafSplits) return;
-    if (!document.querySelector('#guest_list a[href="#guest_m"], #guest_list a[href="#guest_p"]')) return;
+    if (!document.querySelector('#guest_list a[href="#guest_alle"], #guest_list a[href="#guest_m"], #guest_list a[href="#guest_p"]')) return;
     window.__jafSplits = 'loading';
     renderAwo();
-    for (const sp of GUEST_SPLITS) {
-      const oLink = document.querySelector(`#guest_list a[href="#guest_${sp.gender}"]`);
-      const oPane = document.getElementById('guest_' + sp.gender);
-      if (!oLink || !oPane) { guestSplit[sp.gender] = []; continue; } // z. B. keine Paare angemeldet
-      let items;
-      try { items = htmlToItems(await bgLoadGuests(sp.gender)); } catch (e) {
-        console.warn(`[Alter-Filter] Liste „${sp.gender}“ im Hintergrund nicht ladbar – Original-Reiter bleibt.`, e);
-        guestSplit[sp.gender] = false;
-        continue;
-      }
-      guestSplit[sp.gender] = items.map(parseGuest);
-      const oLi = oLink.closest('li');
-      const content = oPane.parentElement;
-      const groups = {};
-      sp.tabs.forEach((t) => { groups[t.key] = []; });
-      for (const li of items) groups[sp.cat(parseGuest(li))].push(li);
+    let items;
+    try { items = htmlToItems(await bgLoadGuests('alle')); } catch (e) {
+      console.warn('[Alter-Filter] Gästeliste im Hintergrund nicht ladbar – Original-Reiter bleiben.', e);
+      guestAll = false; window.__jafSplits = 'done'; renderAwo(); return;
+    }
+    guestAll = items.map(parseGuest);
+    // Original-Reiter je Gruppe (ohne eigenen Reiter: hinter „Alle“)
+    const allLink = document.querySelector('#guest_list a[href="#guest_alle"]');
+    for (const grp of GROUP_KEYS) {
+      if (!CONFIG.GROUPS[grp].visual) continue;
+      const oLink = document.querySelector(`#guest_list a[href="#guest_${GUEST_PANE[grp]}"]`);
+      const anchor = oLink || allLink;
+      if (!anchor) continue;
+      const oLi = anchor.closest('li');
+      const content = (document.getElementById('guest_' + GUEST_PANE[grp]) || document.getElementById('guest_alle') || {}).parentElement;
+      if (!content) continue;
+      const tabs = groupTabs(grp);
+      const buckets = {};
+      tabs.forEach((t) => { buckets[t.key] = []; });
+      items.forEach((li, i) => {
+        const g = guestAll[i];
+        if (g.extern || guestGroup(g) !== grp) return;
+        const st = guestStage(g, grp);
+        const t = tabs.find((x) => x.stages.includes(st)) || tabs[tabs.length - 1];
+        buckets[t.key].push(li.cloneNode(true));
+      });
+      if (!tabs.some((t) => buckets[t.key].length) && !oLink) continue;
       let after = oLi;
-      for (const t of sp.tabs) {
+      for (const t of tabs) {
         const id = `jaf_guest_${t.key}`;
         const pane = document.createElement('div');
         pane.id = id; pane.className = 'tab-pane cards user_cards ov_h mb5'; pane.setAttribute('role', 'tabpanel');
         const ul = document.createElement('ul');
         ul.className = 'date_list ov_h'; ul.setAttribute('data-max-columns', '4');
-        groups[t.key].forEach((li) => ul.appendChild(li));
+        buckets[t.key].forEach((li) => ul.appendChild(li));
         pane.appendChild(ul);
         content.appendChild(pane);
         const tli = document.createElement('li');
-        tli.className = 'jaf-guest-tab'; tli.setAttribute('role', 'presentation'); tli.title = t.label;
-        tli.innerHTML = `<a href="#${id}" data-toggle="tab" aria-controls="${id}">${t.label} <span>(${groups[t.key].length})</span></a>`;
+        tli.className = 'jaf-guest-tab'; tli.setAttribute('role', 'presentation'); tli.title = `${GROUP_LABELS[grp]}: ${t.label}`;
+        tli.innerHTML = `<a href="#${id}" data-toggle="tab" aria-controls="${id}">${escHtml(t.label)} <span>(${buckets[t.key].length})</span></a>`;
         tli.querySelector('a').addEventListener('click', (e) => {
           e.preventDefault();
           oLi.parentElement.querySelectorAll(':scope > li').forEach((x) => x.classList.remove('active'));
@@ -3177,33 +3552,47 @@
         });
         after.after(tli); after = tli;
       }
-      const wasActive = oLi.classList.contains('active');
-      oLi.style.display = 'none';
-      if (wasActive) oLi.nextElementSibling.querySelector('a').click();
+      if (oLink) {
+        const wasActive = oLi.classList.contains('active');
+        oLi.style.display = 'none';
+        if (wasActive) oLi.nextElementSibling.querySelector('a').click();
+      }
       decorateGuests();
-      renderAwo();
     }
     window.__jafSplits = 'done';
     renderAwo();
   }
 
   // ---- AWO-Faktor ----
-  // Männer: erwartete Erscheinende = ⌈Jung/3⌉ + ⌈Schwänze·2/3⌉ + alle Opas; Opa-Anteil = Opas / erwartet.
-  // Paare: Geronto-Anteil = Geronto-Paare / alle Paare. AWO = ⅔·Männer + ⅓·Paare (fehlt eine Gruppe: der andere Anteil allein).
-  function computeAwo(men, couples) {
-    const m = { jung: 0, mid: 0, opa: 0 };
-    (men || []).forEach((g) => { m[guestCategory(g)]++; });
-    const exp = Math.ceil(m.jung / 3) + Math.ceil(m.mid * 2 / 3) + m.opa;
-    const menN = m.jung + m.mid + m.opa;
-    const menShare = exp ? m.opa / exp : null;
-    const pN = (couples || []).length;
-    const ger = (couples || []).filter(isGerontoReg).length;
-    const pShare = pN ? ger / pN : null;
-    let value = null;
-    if (menN && pN) value = (2 / 3) * menShare + (1 / 3) * pShare;
-    else if (menN) value = menShare;
-    else if (pN) value = pShare;
-    return { value, m, exp, menShare, pN, ger, pShare };
+  // Je Gruppe: erwartete Erscheinende = Σ Anwesenheitsquote der Stufe; Anteil = erwartete Stufe-3 ÷ alle erwarteten.
+  // AWO = gewichtete Summe der Anteile; Gruppen ohne Anmeldungen geben ihr Gewicht anteilig an die anderen ab.
+  function computeAwo(guests, cfg = CONFIG) {
+    const out = { value: null, groups: {} };
+    for (const grp of GROUP_KEYS) out.groups[grp] = { n: 0, cnt: [0, 0, 0], exp: 0, exp3: 0, share: null, w: cfg.AWO.weight[grp] || 0 };
+    for (const g of guests || []) {
+      if (g.extern) continue;
+      const grp = guestGroup(g);
+      if (!grp) continue;
+      const st = guestStage(g, grp, cfg);
+      const G = out.groups[grp];
+      const q = (cfg.AWO.quota[grp][st - 1] || 0) / 100;
+      G.n++; G.cnt[st - 1]++; G.exp += q; if (st === 3) G.exp3 += q;
+    }
+    let wsum = 0, sum = 0;
+    for (const grp of GROUP_KEYS) {
+      const G = out.groups[grp];
+      if (G.n && G.exp > 0) { G.share = G.exp3 / G.exp; wsum += G.w; sum += G.w * G.share; }
+    }
+    if (wsum > 0) out.value = sum / wsum;
+    out.wsum = wsum;
+    return out;
+  }
+  function awoTitle(a) {
+    const lines = GROUP_KEYS.filter((grp) => a.groups[grp].n).map((grp) => {
+      const G = a.groups[grp], N = CONFIG.GROUPS[grp].names.many;
+      return `${GROUP_LABELS[grp]}: ${G.cnt.map((c, i) => `${c} ${N[i]}`).join(' · ')} → ${pct(G.share)} (Gewicht ${a.wsum ? Math.round(G.w / a.wsum * 100) : 0} %)`;
+    });
+    return (lines.join('\n') || 'keine Anmeldungen') + '\nAWO = gewichtete Summe der Anteile erwarteter Stufe-3-Gäste';
   }
   // Farbe des AWO-Faktors (Prozentwert 0–100): <10 hellgrün, <25 grün, <35 orange, ab 35 rot
   function awoColor(p) {
@@ -3225,22 +3614,20 @@
       li.style.cssText = 'float:right;margin-left:auto;padding:10px 6px;font-weight:bold;white-space:nowrap;pointer-events:auto;cursor:default';
       ul.appendChild(li);
     }
-    const ready = guestSplit.m !== null && guestSplit.p !== null && window.__jafSplits === 'done';
+    const ready = guestAll !== null && window.__jafSplits === 'done';
     if (!ready) { li.textContent = 'AWO …'; li.title = 'wird berechnet, sobald die Gästeliste im Hintergrund geladen ist'; return; }
-    if (guestSplit.m === false || guestSplit.p === false) { li.textContent = 'AWO ?'; li.title = 'Gästeliste konnte im Hintergrund nicht geladen werden'; return; }
-    const a = computeAwo(guestSplit.m, guestSplit.p);
+    if (guestAll === false) { li.textContent = 'AWO ?'; li.title = 'Gästeliste konnte im Hintergrund nicht geladen werden'; return; }
+    const a = computeAwo(guestAll);
     li.textContent = `AWO ${pct(a.value)}`;
     const ac = awoColor(a.value == null ? null : a.value * 100);
     Object.assign(li.style, { background: a.value == null ? '' : ac.bg, color: a.value == null ? '' : ac.fg, borderRadius: '6px', padding: '6px 10px', marginTop: '4px' });
-    li.title = `Männer: ${a.m.opa} Opas von ${a.exp} erwarteten (⌈${a.m.jung}/3⌉ + ⌈${a.m.mid}·2/3⌉ + ${a.m.opa}) = ${pct(a.menShare)}\n` +
-      `Paare: ${a.ger} Geronto-Paare von ${a.pN} = ${pct(a.pShare)}\n` +
-      (a.menShare != null && a.pShare != null ? 'AWO = ⅔ · Männer + ⅓ · Paare' : 'nur eine Gruppe angemeldet → deren Anteil');
+    li.title = awoTitle(a);
     // speichern (für spätere Auswertung/Export)
     const id = eventIdOf(location.pathname);
     if (id && a.value != null) {
       const ev = getEvents();
       ev[id] = Object.assign(ev[id] || {}, { awo: Math.round(a.value * 1000) / 10, awoTs: Date.now() });
-      GM_setValue(K_EVENTS, ev);
+      gmSet(K_EVENTS, ev);
     }
   }
 
@@ -3305,7 +3692,7 @@
 
   // gespeicherte Partys: { id: { name, url, date, start, location, status, hidden, doneTs } }
   const K_EVENTS = 'jaf_events';
-  const getEvents = () => GM_getValue(K_EVENTS, {});
+  const getEvents = () => gmGet(K_EVENTS, {});
   function saveEventsFromList(list) {
     const m = getEvents();
     for (const e of list) {
@@ -3314,7 +3701,7 @@
       for (const k of Object.keys(upd)) if (upd[k] === undefined || upd[k] === '') delete upd[k];
       m[e.id] = Object.assign(o, upd, { name: o.name || e.name || e.slugName });
     }
-    GM_setValue(K_EVENTS, m);
+    gmSet(K_EVENTS, m);
   }
   function updateEventBadges() {
     if (isRegistrationsPage()) updateRegAwo();
@@ -3333,9 +3720,9 @@
       const txt = d ? fmtDay(d) : '--.--.----';
       if (b.dataset.txt !== txt) {
         b.dataset.txt = txt;
-        b.innerHTML = `<svg viewBox="0 0 640 1280" width="10" height="12" style="fill:currentColor"><g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg><span></span>`;
+        b.innerHTML = `<svg viewBox="0 0 640 1280" width="10" height="12" style="fill:currentColor">${nickG()}</svg><span></span>`;
         b.querySelector('span').textContent = txt;
-        b.title = d ? `Opa-Scan zuletzt komplett: ${fmtTs(d)}` : 'Opa-Scan: noch nie komplett bearbeitet';
+        b.title = d ? opaT(`Opa-Scan zuletzt komplett: ${fmtTs(d)}`) : opaT('Opa-Scan: noch nie komplett bearbeitet');
       }
       // zweiter Badge darunter: gespeicherter AWO-Faktor
       const awo = m[e.id] && m[e.id].awo;
@@ -3366,8 +3753,8 @@
     b.setAttribute('role', '');
     b.style.cssText = 'margin-left:12px;vertical-align:middle';
     b.innerHTML = `<svg slot="icon-prepend" viewBox="0 0 640 1280" width="16" height="16" preserveAspectRatio="xMidYMid meet" ` +
-      `style="width:16px;height:16px;fill:currentColor" aria-hidden="true"><g transform="translate(0,1280) scale(0.1,-0.1)">` +
-      `<path d="${OPA_PATH}"/></g></svg> <span>Opa-Scan starten</span>`;
+      `style="width:16px;height:16px;fill:currentColor" aria-hidden="true">${nickG()}</svg>` +
+      opaT('<span>Opa-Scan starten</span>');
     b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); bgEvStart(); });
     h.appendChild(b);
     return true;
@@ -3464,10 +3851,10 @@
     if (!past) return false;
     const b = document.createElement('button');
     b.type = 'button';
-    b.title = 'Opa-Scan starten';
+    b.title = opaT('Opa-Scan starten');
     b.className = 'jaf-reg-opa-btn btn-flat-special-light btn btn-default';
     b.innerHTML = `<svg viewBox="0 0 640 1280" width="9" height="16" style="fill:currentColor;vertical-align:-2px" aria-hidden="true">` +
-      `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg> <span class="btn-text">Opa-Scan starten</span>`;
+      opaT(`${nickG()}</svg> <span class="btn-text">Opa-Scan starten</span>`);
     b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); bgEvStart(); });
     // vor die Button-Gruppe setzen (eigener Button mit Abstand, nicht angeklebt)
     const grp = past.closest('.btn-group') || past;
@@ -3496,14 +3883,14 @@
   // ---- Zustand des Party-Scans ----
   // { running, phase: 'collect'|'event'|'ignore'|'next'|'done', events:[{id,url,…}], ei, ownerTab, cur, curComplete, stats, log, ts }
   const K_EVSCAN = 'jaf_evscan';
-  const getEv = () => GM_getValue(K_EVSCAN, { running: false });
-  const setEv = (o) => GM_setValue(K_EVSCAN, Object.assign({}, o, { ts: Date.now() }));
+  const getEv = () => gmGet(K_EVSCAN, { running: false });
+  const setEv = (o) => gmSet(K_EVSCAN, Object.assign({}, o, { ts: Date.now() }));
   const evStale = (o) => !o.ts || Date.now() - o.ts > 10 * 60 * 1000;
-  const evLog = (msg) => { log(msg); const o = getEv(); o.log = (o.log || []).concat(`${fmtTs(Date.now())} ${msg}`).slice(-200); GM_setValue(K_EVSCAN, o); };
+  const evLog = (msg) => { log(msg); const o = getEv(); o.log = (o.log || []).concat(`${fmtTs(Date.now())} ${msg}`).slice(-200); gmSet(K_EVSCAN, o); };
   function evPanel(title) {
     const p = panel();
-    p.innerHTML = `<b>Opa-Scan Partys</b>${title ? ' – ' + title : ''}${CONFIG.DRY_RUN ? ' – <span style="color:#ffb300">Testmodus</span>' : ''}<br>`;
-    p.appendChild(btn('Opa-Scan stoppen', evStop));
+    p.innerHTML = opaT(`<b>Opa-Scan Partys</b>${title ? ' – ' + title : ''}${CONFIG.DRY_RUN ? ' – <span style="color:#ffb300">Testmodus</span>' : ''}<br>`);
+    p.appendChild(btn(opaT('Opa-Scan stoppen'), evStop));
     return p;
   }
   function evStop() {
@@ -3511,17 +3898,17 @@
     setEv(Object.assign(o, { running: false }));
     const st = getState();
     if (st.running && st.evscan) setState({ running: false, queue: [], count: 0 });
-    log('Opa-Scan gestoppt.');
+    log(opaT('Opa-Scan gestoppt.'));
     if (o.returnUrl && !isAppointmentsPage() && !isRegistrationsPage()) setTimeout(() => { location.href = o.returnUrl; }, 1500);
   }
 
   // normaler Scan mit Seitenwechsel (Rückfall, wenn der Hintergrund-Scan nicht geht) – ohne Browser-Meldungen
   async function evStart() {
-    const p = panel(); p.innerHTML = '<b>Opa-Scan Partys</b><br>';
+    const p = panel(); p.innerHTML = opaT('<b>Opa-Scan Partys</b><br>');
     const why = scanBlockedReason();
     if (why) { log(why); return; }
     if (!(await visGuard())) { log('Abgebrochen.'); return; }
-    if (!(await acquireLock('Opa-Scan Partys'))) { log('Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.'); return; }
+    if (!(await acquireLock(opaT('Opa-Scan Partys')))) { log('Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.'); return; }
     const list = await scanEventList((n) => log(`Lade alle Eventanmeldungen … ${n}`));
     if (!list.length) { log('Keine Eventanmeldungen gefunden.'); return; }
     saveEventsFromList(list);
@@ -3544,7 +3931,7 @@
     if (o.phase === 'next') {
       const e = o.events[o.ei];
       if (e && o.curComplete && !CONFIG.DRY_RUN) {
-        const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { doneTs: Date.now() }); GM_setValue(K_EVENTS, m);
+        const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { doneTs: Date.now() }); gmSet(K_EVENTS, m);
         evLog(`${(o.cur && o.cur.name) || e.name}: komplett bearbeitet ✔`);
       } else if (e) evLog(`${(o.cur && o.cur.name) || e.name}: nicht komplett bearbeitet.`);
       o = getEv(); o.ei++; o.phase = 'event'; o.cur = null; o.curComplete = false; setEv(o);
@@ -3561,7 +3948,7 @@
       setEv(Object.assign(o, { running: false, phase: 'done' }));
       const st = o.stats || {};
       evPanel('fertig');
-      evLog(`Opa-Scan Partys fertig: ${st.events || 0} Partys, ${st.vip || 0} VIP-Gäste, ${st.guests || 0} Anmeldungen gelesen, ${st.hits || 0} zum Prüfen/Ignorieren übergeben.`);
+      evLog(opaT(`Opa-Scan Partys fertig: ${st.events || 0} Partys, ${st.vip || 0} VIP-Gäste, ${st.guests || 0} Anmeldungen gelesen, ${st.hits || 0} zum Prüfen/Ignorieren übergeben.`));
       if (!isAppointmentsPage() && !isRegistrationsPage() && o.returnUrl) setTimeout(() => { location.href = o.returnUrl; }, 2000);
       return;
     }
@@ -3578,7 +3965,7 @@
     evPanel(`Party ${o.ei + 1}/${o.events.length}`);
     await waitFor(() => document.querySelector('#guest_list'), 10000);
     const info = eventInfo();
-    const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { name: info.name || e.name, start: info.start || (m[e.id] || {}).start }); GM_setValue(K_EVENTS, m);
+    const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { name: info.name || e.name, start: info.start || (m[e.id] || {}).start }); gmSet(K_EVENTS, m);
     const party = { name: info.name || e.name, date: info.date || e.date };
     // 0. Veranstalter: dauerhaft auf die Whitelist („Veranstalter“), ggf. entsperren – ohne Ablauf
     const orgs = eventOrganizers();
@@ -3594,7 +3981,7 @@
             markUnblocked(logPath, m, `Whitelist: ${CONFIG.ORGANIZER_REASON}`);
             orgUnblocked.push(Object.assign({}, m, { path: logPath, url: location.origin + logPath }));
           } else {
-            const ign = getIgnored(); for (const p of Object.keys(ign)) if (idOf(p) === String(m.id)) delete ign[p]; GM_setValue(K_IGNORED, ign);
+            const ign = getIgnored(); for (const p of Object.keys(ign)) if (idOf(p) === String(m.id)) delete ign[p]; gmSet(K_IGNORED, ign);
           }
           evLog(`${m.name}: Veranstalter – entsperrt ✔`);
         } else evLog(`${m.name}: Veranstalter – Entsperren fehlgeschlagen (${u.msg})`);
@@ -3691,35 +4078,35 @@
         saveEventsFromList(readAppointments());
       }
       updateEventBadges();
-      const nFail = GM_getValue(K_EVFAIL, []).length;
+      const nFail = gmGet(K_EVFAIL, []).length;
       if (nFail && !o.running) {
-        const p = panel(); p.innerHTML = '<b>Opa-Scan Partys</b><br>';
+        const p = panel(); p.innerHTML = opaT('<b>Opa-Scan Partys</b><br>');
         p.appendChild(btn(`Fehlschläge exportieren (${nFail})`, () => exportEvFailures()));
-        p.appendChild(btn('Fehlschläge löschen', () => { GM_setValue(K_EVFAIL, []); p.remove(); }));
+        p.appendChild(btn('Fehlschläge löschen', () => { gmSet(K_EVFAIL, []); p.remove(); }));
       }
       if (!window.__jafEvTimer) window.__jafEvTimer = setInterval(() => {
         if (isAppointmentsPage()) { insertEventOpaButton(); updateEventBadges(); }
         else if (isRegistrationsPage()) { insertRegOpaButton(); updateEventBadges(); }
       }, 3000);
       if (!o.running) {
-        if (o.phase === 'done' && o.log && o.log.length) { const p = panel(); if (!p.querySelector('button')) p.innerHTML = '<b>Opa-Scan Partys</b><br>'; log(o.log[o.log.length - 1]); }
+        if (o.phase === 'done' && o.log && o.log.length) { const p = panel(); if (!p.querySelector('button')) p.innerHTML = opaT('<b>Opa-Scan Partys</b><br>'); log(o.log[o.log.length - 1]); }
         return false;
       }
       if (getState().running) return false;
       const other = lockedByOther();
-      if (other) { const p = panel(); p.innerHTML = '<b>Opa-Scan Partys</b><br>'; log(lockNotice(other)); return true; }
+      if (other) { const p = panel(); p.innerHTML = opaT('<b>Opa-Scan Partys</b><br>'); log(lockNotice(other)); return true; }
       if (evStale(o) && o.phase !== 'ignore') {
         const p = panel();
-        p.innerHTML = `<b>Opa-Scan Partys</b> – unterbrochen bei Party ${(o.ei || 0) + 1}/${(o.events || []).length}<br>`;
+        p.innerHTML = opaT(`<b>Opa-Scan Partys</b> – unterbrochen bei Party ${(o.ei || 0) + 1}/${(o.events || []).length}<br>`);
         p.appendChild(btn('Fortsetzen', async () => {
-          if (!(await acquireLock('Opa-Scan Partys'))) { log(lockNotice(getLock())); return; }
+          if (!(await acquireLock(opaT('Opa-Scan Partys')))) { log(lockNotice(getLock())); return; }
           setEv(Object.assign(getEv(), { ownerTab: TAB_ID })); evStep();
         }));
-        p.appendChild(btn('Abbrechen', () => { setEv(Object.assign(getEv(), { running: false })); log('Opa-Scan abgebrochen.'); }));
-        log('Der Opa-Scan der Partys wurde unterbrochen.');
+        p.appendChild(btn('Abbrechen', () => { setEv(Object.assign(getEv(), { running: false })); log(opaT('Opa-Scan abgebrochen.')); }));
+        log(opaT('Der Opa-Scan der Partys wurde unterbrochen.'));
         return true;
       }
-      if (!(await acquireLock('Opa-Scan Partys'))) { log(lockNotice(getLock())); return true; }
+      if (!(await acquireLock(opaT('Opa-Scan Partys')))) { log(lockNotice(getLock())); return true; }
       setEv(Object.assign(getEv(), { ownerTab: TAB_ID }));
       evStep();
       return true;
@@ -3736,89 +4123,114 @@
         window.__jafGuestTimer = setInterval(() => { try { if (!owned) { setupGuestTabs(); setupOpaListTab(); } decorateGuests(); } catch (e) { /* weiter */ } }, 2500);
         syncIgnoreList().then(() => decorateGuests()).catch(() => {});
       }
-      if (owned) { await acquireLock('Opa-Scan Partys'); evScanEventPage(); return true; }
+      if (owned) { await acquireLock(opaT('Opa-Scan Partys')); evScanEventPage(); return true; }
       return false;
     }
     return false;
   }
 
-  // ---------- „Mann“ → Jungschwanz / Schwanz / Opa, Opa-Symbol statt Geschlechtssymbol ----------
-  const manLabel = (age) => (age == null || age > CONFIG.MAX_AGE ? 'Opa' : age <= CONFIG.WARN_AGE ? 'Jungschwanz' : 'Schwanz');
-  const OPA_ICON_SVG = (w, h) => `<svg class="jaf-opa-icon" viewBox="0 0 640 1280" width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet" ` +
-    `style="width:${w}px;height:${h}px;fill:currentColor" aria-hidden="true"><g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg>`;
-  // Geschlechtssymbol (<j-gender-icon>, Inhalt im Shadow DOM) beschriften und bei Opas austauschen
-  function labelGenderIcon(gi, label) {
+  // ---------- Bezeichnungen der Stufen statt „Mann“/„Frau“/„Paar“; Opa-/Oma-Symbol bei Stufe 3 ----------
+  // nur für Gruppen mit eingeschalteter „Visueller Einstufung“. Werte je nach Seite (Punkt 22).
+  const OPA_ICON_SVG = (w, h, oma) => `<svg class="jaf-opa-icon" viewBox="0 0 640 1280" width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet" ` +
+    `style="width:${w}px;height:${h}px;fill:currentColor" aria-hidden="true">${oma ? OMA_G : OPA_G}</svg>`;
+  // Quelle, deren Werte beim bloßen Ansehen gelten
+  function viewSrc(path) {
+    if (isEventPage()) return 'Party';
+    if (isGroupMembersPage()) return 'Gruppen';
+    if (isMemberSearchPage()) return 'Suche';
+    const mj = myJoyPage();
+    if (mj) return mj.src;
+    const acc = path ? (getAccounts()[path] || {}) : {};
+    const seen = Object.keys(acc.srcs || {}).filter((q) => SCAN_SOURCES.includes(q));
+    return seen.sort((x, y) => srcRankOf(x) - srcRankOf(y))[0] || ALTBESTAND;
+  }
+  // Bezeichnung + Symbol einer Anmeldung/Karte: null = nichts ändern
+  function stageLabel(type, ages, src) {
+    const grp = isCoupleType(type) ? (groupOfType(type) === 'p' ? 'p' : null) : groupOfType(type);
+    if (!grp || !CONFIG.GROUPS[grp].visual) return null;
+    const st = guestStage({ type, ages }, grp, CONFIG, src);
+    const word = knownType(String(type).split('|')[0]);
+    return { word: FIXED_TYPES[word] ? word : '', label: CONFIG.GROUPS[grp].names.one[st - 1], icon: grp !== 'p' && st === 3 ? (grp === 'f' ? 'oma' : 'opa') : '' };
+  }
+  // Geschlechtssymbol (<j-gender-icon>, Inhalt im Shadow DOM) beschriften und bei Stufe 3 austauschen
+  function labelGenderIcon(gi, label, icon) {
     const sr = gi && gi.shadowRoot;
     if (!sr) return;
     const box = sr.querySelector('.j-gender-icon');
     if (box && box.getAttribute('title') !== label) { box.setAttribute('title', label); box.setAttribute('aria-label', label); }
     const orig = sr.querySelector('svg:not(.jaf-opa-icon)');
-    const mine = sr.querySelector('svg.jaf-opa-icon');
-    if (label === 'Opa') {
+    let mine = sr.querySelector('svg.jaf-opa-icon');
+    if (mine && mine.getAttribute('data-k') !== icon) { mine.remove(); mine = null; }
+    if (icon) {
       if (orig && !mine) {
         const r = orig.getBoundingClientRect();
         const h = Math.round(r.height || +orig.getAttribute('height') || 16) || 16;
         orig.style.display = 'none';
-        orig.insertAdjacentHTML('afterend', OPA_ICON_SVG(Math.max(6, Math.round(h / 2)), h));
+        orig.insertAdjacentHTML('afterend', OPA_ICON_SVG(Math.max(6, Math.round(h / 2)), h, icon === 'oma'));
+        sr.querySelector('svg.jaf-opa-icon').setAttribute('data-k', icon);
       }
-    } else {
-      if (mine) mine.remove();
-      if (orig) orig.style.display = '';
-    }
+    } else if (orig) orig.style.display = '';
   }
-  // Text „Mann“ in einem Element ersetzen (nur Textknoten, ganze Wörter)
-  function replaceManText(el, label) {
-    if (!el) return;
+  // Text „Mann“/„Frau“/„Paar“ in einem Element ersetzen (nur Textknoten, ganze Wörter, nicht in „Männer-Paar“)
+  function replaceTypeText(el, word, label) {
+    if (!el || !word || word === label) return;
+    const re = new RegExp(`(^|[^\\p{L}-])${reEsc(word)}(?![\\p{L}-])`, 'gu');
     const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     const nodes = [];
-    while (w.nextNode()) if (/\bMann\b/.test(w.currentNode.nodeValue)) nodes.push(w.currentNode);
-    nodes.forEach((n) => { n.nodeValue = n.nodeValue.replace(/\bMann\b/g, label); });
+    while (w.nextNode()) { re.lastIndex = 0; if (re.test(w.currentNode.nodeValue)) nodes.push(w.currentNode); }
+    nodes.forEach((n) => { n.nodeValue = n.nodeValue.replace(re, (m0, p) => p + label); });
   }
-  // Karten in Gäste- und Gruppen-Mitgliederlisten (li.date_card) – nach der Anmeldung bzw. dem Listeneintrag
-  function relabelMenCards(root = document) {
+  // Karten in Gäste- und Gruppen-Mitgliederlisten (li.date_card)
+  function relabelCards(root = document) {
+    const src = viewSrc();
     root.querySelectorAll('li.date_card').forEach((li) => {
+      if (li.__jafLbl) return;
       const g = parseGuest(li);
-      if (!isManReg(g)) return;
-      const label = manLabel(g.ages.length ? Math.max(...g.ages) : null);
-      labelGenderIcon(li.querySelector('j-gender-icon'), label);
-      replaceManText(li.querySelector('.date_info'), label);
+      const l = stageLabel(g.type, g.ages, src);
+      if (!l) return;
+      li.__jafLbl = 1;
+      labelGenderIcon(li.querySelector('j-gender-icon'), l.label, l.icon);
+      replaceTypeText(li.querySelector('.date_info'), l.word, l.label);
     });
   }
-  // Profilkopf: „Mann“ → Einstufung nach dem Profil-Alter, Symbol(e) im Kopf tauschen
+  // Profilkopf: Typ → Bezeichnung der Stufe (Original in data-jaf-orig), Symbol(e) im Kopf tauschen
   function relabelProfile() {
-    const line2 = document.querySelector('.profile-base-info__line-2');
-    if (!line2) return;
-    const first = line2.querySelector('span');
-    const type = first ? first.textContent.trim() : '';
-    const ages = profileAges();
-    const known = ['Mann', 'Jungschwanz', 'Schwanz', 'Opa'];
-    if (!known.includes(type) || ages.length !== 1) return;
-    const label = manLabel(ages[0]);
-    document.querySelectorAll('.profile-base-info__line-2').forEach((l) => {
-      const sp = l.querySelector('span');
-      if (sp && known.includes(sp.textContent.trim()) && sp.textContent.trim() !== label) sp.textContent = label;
+    const first = document.querySelector('.profile-base-info__line-2 > span');
+    if (!first) return;
+    const type = first.getAttribute('data-jaf-orig') || first.textContent.trim();
+    const l = stageLabel(type, profileAges(), viewSrc(cleanPath(location.pathname)));
+    if (!l || !l.word) return;
+    document.querySelectorAll('.profile-base-info__line-2 > span').forEach((sp) => {
+      const t = sp.getAttribute('data-jaf-orig') || sp.textContent.trim();
+      if (t !== type) return;
+      if (!sp.hasAttribute('data-jaf-orig')) sp.setAttribute('data-jaf-orig', type);
+      if (sp.textContent.trim() !== l.label) sp.textContent = l.label;
     });
-    document.querySelectorAll('.profile-base-info j-gender-icon[universal-gender="1"], j-avatar j-gender-icon[universal-gender="1"]').forEach((gi) => labelGenderIcon(gi, label));
-    const own = document.querySelector('j-gender-icon.profile-sed-card__gender-icon[universal-gender="1"]');
-    if (own) labelGenderIcon(own, label);
+    const num = { Mann: '1', Frau: '2' }[l.word];
+    if (!num) return;
+    document.querySelectorAll(`.profile-base-info j-gender-icon[universal-gender="${num}"], j-avatar j-gender-icon[universal-gender="${num}"]`).forEach((gi) => labelGenderIcon(gi, l.label, l.icon));
+    const own = document.querySelector(`j-gender-icon.profile-sed-card__gender-icon[universal-gender="${num}"]`);
+    if (own) labelGenderIcon(own, l.label, l.icon);
   }
-  // Mitgliedersuche: <j-member-card> (Symbol im Shadow DOM der Karte)
+  // Mitgliedersuche, Profilbesuche, „Mögen mich“: <j-member-card> (Symbol im Shadow DOM der Karte)
   function relabelSearchCards() {
+    const src = viewSrc();
     document.querySelectorAll('j-member-card[age]').forEach((card) => {
-      const num = card.getAttribute('universal-gender');
-      if (card.getAttribute('age2')) return; // Paare nicht
-      const t = num === '1' ? 'Mann' : typeFromGender(num);
-      if (normType(t) !== normType('Mann')) return;
+      if (card.getAttribute('age2')) return; // Paare: Symbol bleibt
+      const t = typeFromGender(card.getAttribute('universal-gender'));
+      const age = Number(card.getAttribute('age')) || null;
+      const l = stageLabel(t, age ? [age] : [], src);
+      if (!l) return;
       const gi = card.shadowRoot && card.shadowRoot.querySelector('j-gender-icon');
-      labelGenderIcon(gi, manLabel(Number(card.getAttribute('age')) || null));
+      labelGenderIcon(gi, l.label, l.icon);
     });
   }
   const isGroupMembersPage = () => /^\/groups\/[^/]+\/mitglieder$/.test(cleanPath(location.pathname));
   setInterval(() => {
     try {
       if (isProfilePage()) relabelProfile();
-      if (isEventPage() || isGroupMembersPage()) relabelMenCards();
-      if (currentListPage() || isMemberSearchPage()) relabelSearchCards();
+      if (isEventPage() || isGroupMembersPage()) relabelCards();
+      if (currentListPage() || isMemberSearchPage() || myJoyPage()) relabelSearchCards();
     } catch (e) { /* weiter */ }
   }, 2000);
 
@@ -3836,7 +4248,6 @@
   // =====================================================================
   const K_GATE = 'jaf_gate';            // { type:'maint', until, text, since } – gilt für alle Tabs
   const K_LOGIN_TRY = 'jaf_login_try';  // Zeitpunkt des letzten automatischen Login-Versuchs
-  const K_PAUSES = 'jaf_pauses';        // [{ since, until, end, text }]
   const LOGIN_RETRY_MS = 30 * 60000;
   // Uhrzeit aus dem Wartungstext („bis voraussichtlich 17 Uhr“, „17:30 Uhr“, „until approximately 5 pm“) → Zeitstempel oder null
   function parseUntil(txt) {
@@ -3875,35 +4286,31 @@
   }
   // gespeicherte Wartungspause (auch aus anderem Tab) abwarten
   async function gateWaitStored() {
-    const g = GM_getValue(K_GATE, null);
+    const g = gmGet(K_GATE, null);
     if (!g || !g.until || g.until <= Date.now()) return;
     const head = 'JOYclub ist vorübergehend nicht erreichbar';
     const pop = document.getElementById('jaf-bg-popup');
     const oldTitle = pop && pop.querySelector('.jaf-bg-title').textContent;
-    if (pop) bgTitle('Opa-Scan pausiert', true);
+    if (pop) bgTitle(opaT('Opa-Scan pausiert'), true);
     while (Date.now() < g.until) {
       if (bgScan && bgScan.stop) throw new Error('abgebrochen');
       const left = Math.ceil((g.until - Date.now()) / 60000);
       gateNotice(`${head} – nächster Versuch um ${fmtHM(g.until)} (noch ${left} min). Bis dahin kein Zugriff auf JOYclub.`);
       await sleep(Math.min(15000, Math.max(500, g.until - Date.now())));
-      const g2 = GM_getValue(K_GATE, null);
+      const g2 = gmGet(K_GATE, null);
       if (!g2 || g2.until !== g.until) break; // anderer Tab hat neu entschieden
     }
-    if (pop && document.getElementById('jaf-bg-popup')) bgTitle(oldTitle || 'Opa-Scan läuft im Hintergrund', true);
+    if (pop && document.getElementById('jaf-bg-popup')) bgTitle(oldTitle || opaT('Opa-Scan läuft im Hintergrund'), true);
   }
   // Seite war Wartung/Login: warten bzw. einloggen. Wirft bei Abbruch oder gescheitertem Login.
   async function handleGate(g, url) {
     if (g.type === 'maint') {
       const base = g.until || (Date.now() + 30 * 60000);
       const until = base + rand(5 * 60000, 10 * 60000);
-      const prev = GM_getValue(K_GATE, null);
-      if (!prev || !prev.until || prev.until < until) GM_setValue(K_GATE, { type: 'maint', until, text: g.text || '', since: Date.now() });
-      const pauses = GM_getValue(K_PAUSES, []);
-      pauses.push({ since: Date.now(), until, text: g.text || '' });
-      GM_setValue(K_PAUSES, pauses.slice(-500));
+      const prev = gmGet(K_GATE, null);
+      if (!prev || !prev.until || prev.until < until) gmSet(K_GATE, { type: 'maint', until, text: g.text || '', since: Date.now() });
       console.log('[Alter-Filter] Wartungsseite erkannt – Pause bis', fmtTs(until), g.text);
       await gateWaitStored();
-      const pl = GM_getValue(K_PAUSES, []); if (pl.length) { pl[pl.length - 1].end = Date.now(); GM_setValue(K_PAUSES, pl); }
       return;
     }
     // abgemeldet → Login im kleinen Fenster (automatisch höchstens 1× in 30 min), dann warten, bis wieder angemeldet
@@ -3917,34 +4324,34 @@
   }
   async function loginViaWindow() {
     const token = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const last = GM_getValue(K_LOGIN_TRY, 0);
+    const last = gmGet(K_LOGIN_TRY, 0);
     const auto = Date.now() - last >= LOGIN_RETRY_MS;
-    if (auto) GM_setValue(K_LOGIN_TRY, Date.now());
-    GM_setValue(K_LOGIN_PENDING, { token, auto, ts: Date.now() });
+    if (auto) gmSet(K_LOGIN_TRY, Date.now());
+    gmSet(K_LOGIN_PENDING, { token, auto, ts: Date.now() });
     const back = `${location.origin}/my_joy/feed/friends/?jaf_login=${token}`;
     const w = window.open(loginUrlFor(back), 'jaf-login', 'width=520,height=760');
     const manual = `bitte im geöffneten Fenster bei JOYclub anmelden – danach geht es automatisch weiter.`;
     let msg = !w ? 'Abgemeldet – das Login-Fenster wurde vom Browser blockiert. Bitte Popups für joyclub.de erlauben oder in einem anderen Tab anmelden – danach geht es automatisch weiter.'
       : auto ? 'Abgemeldet – melde im kleinen Fenster mit den gespeicherten Zugangsdaten an …'
         : `Abgemeldet – automatischer Login erst wieder ab ${fmtHM(last + LOGIN_RETRY_MS)}; ${manual}`;
-    if (document.getElementById('jaf-bg-popup')) bgTitle('Opa-Scan pausiert', true);
+    if (document.getElementById('jaf-bg-popup')) bgTitle(opaT('Opa-Scan pausiert'), true);
     gateNotice(msg);
     const t0 = Date.now();
     let lastCheck = Date.now();
     for (;;) {
       if (bgScan && bgScan.stop) { try { if (w) w.close(); } catch (e) { /* egal */ } throw new Error('abgebrochen'); }
-      const r = GM_getValue(K_LOGIN_RESULT, null);
+      const r = gmGet(K_LOGIN_RESULT, null);
       if (r && r.token === token) {
         if (r.ok) break;
-        if (!r.shown) { GM_setValue(K_LOGIN_RESULT, Object.assign({}, r, { shown: true })); gateNotice(`Automatischer Login nicht möglich (${r.msg}) – ${manual}`); }
+        if (!r.shown) { gmSet(K_LOGIN_RESULT, Object.assign({}, r, { shown: true })); gateNotice(`Automatischer Login nicht möglich (${r.msg}) – ${manual}`); }
       }
       if (Date.now() - lastCheck > 60000) { lastCheck = Date.now(); if (!(await stillGuest())) break; }
       if (auto && Date.now() - t0 > 90000 && msg.startsWith('Abgemeldet – melde')) { msg = 'Automatischer Login nicht abgeschlossen – ' + manual; gateNotice(msg); }
       await sleep(3000);
     }
     try { if (w && !w.closed) w.close(); } catch (e) { /* egal */ }
-    GM_setValue(K_LOGIN_PENDING, null);
-    if (document.getElementById('jaf-bg-popup')) bgTitle('Opa-Scan läuft im Hintergrund', true);
+    gmSet(K_LOGIN_PENDING, null);
+    if (document.getElementById('jaf-bg-popup')) bgTitle(opaT('Opa-Scan läuft im Hintergrund'), true);
     gateNotice('Wieder angemeldet – weiter geht es.');
   }
 
@@ -3981,25 +4388,25 @@
     if (!g) {
       // Rückkehr aus dem Login-Fenster: Erfolg melden und Fenster schließen
       const tok = new URLSearchParams(location.search).get('jaf_login');
-      if (tok) { GM_setValue(K_LOGIN_RESULT, { token: tok, ok: true, ts: Date.now() }); if (window.name === 'jaf-login') setTimeout(() => window.close(), 500); }
+      if (tok) { gmSet(K_LOGIN_RESULT, { token: tok, ok: true, ts: Date.now() }); if (window.name === 'jaf-login') setTimeout(() => window.close(), 500); }
       return false;
     }
     if (!scanActive()) return false;
     if (/^\/webauth\//.test(location.pathname)) return true; // Login-Weiterleitung läuft gerade
     const p = panel(); p.innerHTML = '<b>Alter-Filter</b><br>';
     if (g.type === 'maint') {
-      const prev = GM_getValue(K_GATE, null);
+      const prev = gmGet(K_GATE, null);
       let until = prev && prev.until > Date.now() ? prev.until : 0;
-      if (!until) { until = (g.until || Date.now() + 30 * 60000) + rand(5 * 60000, 10 * 60000); GM_setValue(K_GATE, { type: 'maint', until, text: g.text || '', since: Date.now() }); }
+      if (!until) { until = (g.until || Date.now() + 30 * 60000) + rand(5 * 60000, 10 * 60000); gmSet(K_GATE, { type: 'maint', until, text: g.text || '', since: Date.now() }); }
       log(`JOYclub ist vorübergehend nicht erreichbar. Der laufende Scan pausiert – nächster Versuch um ${fmtHM(until)} (Seite lädt dann neu).`);
       setTimeout(() => location.reload(), until - Date.now());
       return true;
     }
     // abgemeldet während eines Scans mit Seitenwechsel: über die Login-Seite zurück auf diese Seite (automatisch max. 1× in 30 min)
-    const last = GM_getValue(K_LOGIN_TRY, 0);
+    const last = gmGet(K_LOGIN_TRY, 0);
     if (Date.now() - last < LOGIN_RETRY_MS) { log(`Abgemeldet – bitte bei JOYclub anmelden (automatischer Login erst wieder ab ${fmtHM(last + LOGIN_RETRY_MS)}). Danach geht der Scan weiter.`); return true; }
-    GM_setValue(K_LOGIN_TRY, Date.now());
-    GM_setValue(K_LOGIN_PENDING, { token: 'top', auto: true, ts: Date.now() });
+    gmSet(K_LOGIN_TRY, Date.now());
+    gmSet(K_LOGIN_PENDING, { token: 'top', auto: true, ts: Date.now() });
     log('Abgemeldet – melde mit den gespeicherten Zugangsdaten an …');
     setTimeout(() => { location.href = loginUrlFor(location.href); }, 1500);
     return true;
@@ -4056,7 +4463,7 @@
   // IM Frame: ein Profil bearbeiten (Notiz-Auftrag, prüfen, Notiz schreiben, ignorieren). Auftrag kommt aus GM-Speicher.
   async function bgActFrame() {
     const key = 'jaf_bg_job_' + (window.name || '').slice('jaf-bg-act-'.length);
-    const job = GM_getValue(key, null);
+    const job = gmGet(key, null);
     if (!job) { bgPost({ error: 'kein Auftrag' }); return; }
     const cur = job.item;
     let pt = '', pa = [];
@@ -4074,9 +4481,8 @@
       if (ages.length) { setChecked(idOf(location.pathname), { name: cur.name, type: ptype, ages }); recordAccounts([{ path: cleanPath(location.pathname), name: cur.name, ages, type: ptype, online: profileOnline(), signs: profileSigns(document, ages) }]); }
       // Sync: eigene Notizzeile durch die Zeile laut Skript-Speicher ersetzen, danach (wieder) sperren
       if (cur.action === 'sync') {
-        const kind = cur.kind || ((cur.reason === 'Altersunterschied' || cur.reason === 'Geronto-Paar') ? cur.reason
-          : (isCoupleRuleType(ptype) && ages.length === 2 ? (coupleReason(ages) || false) : false));
-        const line = noteText(cur.source || 'Sync', kind, cur.ts || Date.now());
+        const kind = cur.kind || judge({ type: ptype, ages }, cur.source || 'Sync').kind || toKind(cur.reason, ptype);
+        const line = noteText(cur.source || 'Sync', kind, cur.ts || Date.now(), ptype);
         const n = await writeWhitelistNote(line, true);
         if (!n.ok) return res('failed', n.msg);
         if (!cur.block) return res('note', n.msg);
@@ -4090,11 +4496,13 @@
       }
       if (isWhiteMember(cur)) return res('skipped', 'Whitelist');
       const c = { name: cur.name, path: cur.path, type: ptype || cur.type, ages: ages.length ? ages : cur.ages || [] };
-      if (cur.verify && (!c.ages.length || !shouldBlock(c))) return res('skipped', `Profil geprüft (${c.type}, ${c.ages.join('+') || '?'} Jahre) – erfüllt die Kriterien nicht`);
-      if (!cur.force && !typeOkFor(c.type) && !isCoupleRuleType(c.type)) return res('skipped', `Profiltyp „${c.type}“`);
+      const jj = judge(c, cur.source || job.source);
+      if (cur.verify && (!c.ages.length || !jj.active)) return res('skipped', `Profil geprüft (${c.type}, ${c.ages.join('+') || '?'} Jahre) – erfüllt die Kriterien nicht`);
+      if (!cur.force && !typeOkFor(c.type)) return res('skipped', `Profiltyp „${c.type}“`);
+      const kind = (cur.verify ? jj.kind : cur.kind) || jj.kind || toKind(cur.reason, c.type);
+      cur.kind = kind;
       if (CONFIG.WRITE_NOTE) {
-        const kind = (cur.reason === 'Altersunterschied' || cur.reason === 'Geronto-Paar') ? cur.reason : (isCoupleRuleType(c.type) ? coupleReason(c.ages) : false);
-        const note = await writeNote(cur.source || job.source, kind);
+        const note = await writeNote(cur.source || job.source, kind, c.type);
         if (!note.ok && CONFIG.NOTE_REQUIRED) { if (!CONFIG.DRY_RUN) setFailed(cur.path, note.msg); return res('failed', note.msg); }
         await sleep(800);
       }
@@ -4154,7 +4562,7 @@
     lastVis = { v: now, ts: Date.now() };
     return now === v;
   }
-  const visRun = () => GM_getValue(K_VIS_RUN, null);
+  const visRun = () => gmGet(K_VIS_RUN, null);
   const visRunFresh = (r = visRun()) => !!(r && r.ts && Date.now() - r.ts < 2 * 60000);
   // während eines Vorgangs „unsichtbar“: hat sich jemand sichtbar geschaltet → zurück auf den vorherigen Status, 15 s warten
   async function visEnforce(v = lastVis.v) {
@@ -4164,7 +4572,7 @@
     console.log('[Alter-Filter] Sichtbar geschaltet während eines Vorgangs – schalte zurück auf', back);
     let ok = false;
     try { ok = await setVisibility(back); } catch (e) { /* egal */ }
-    GM_setValue(K_VIS_RUN, Object.assign({}, r, { ts: Date.now() }));
+    gmSet(K_VIS_RUN, Object.assign({}, r, { ts: Date.now() }));
     if (ok) await sleep(15000);
     return ok;
   }
@@ -4211,12 +4619,12 @@
   async function visGuard() {
     let v = visibilityFromDoc(document);
     if (v == null) { try { v = await fetchVisibility(); } catch (e) { v = null; } }
-    if (v !== 1) { GM_setValue(K_VIS_RUN, { mode: 'invisible', prev: v === 5 ? 5 : 3, ts: Date.now() }); lastVis = { v, ts: Date.now() }; return true; }
+    if (v !== 1) { gmSet(K_VIS_RUN, { mode: 'invisible', prev: v === 5 ? 5 : 3, ts: Date.now() }); lastVis = { v, ts: Date.now() }; return true; }
     const c = await askPopup({ title: 'Achtung!', warn: true,
       lines: ['Du bist derzeit sichtbar eingeloggt.', 'Alle Mitglieder, deren Profile während dieses Vorgangs aufgerufen werden, sehen Dich als Besucher!', 'Trotzdem fortfahren?'],
       buttons: [{ label: 'Unsichtbar schalten und fortfahren', value: 'inv', primary: true }, { label: 'Sichtbar fortfahren', value: 'vis' }, { label: 'Abbrechen', value: null, focus: true }] });
     if (!c) return false;
-    if (c === 'vis') { GM_setValue(K_VIS_RUN, { mode: 'visible', ts: Date.now() }); return true; }
+    if (c === 'vis') { gmSet(K_VIS_RUN, { mode: 'visible', ts: Date.now() }); return true; }
     // unsichtbar schalten, dann 15 s warten
     const info = document.createElement('div');
     info.id = 'jaf-ask-popup';
@@ -4232,7 +4640,7 @@
       await askPopup({ title: 'Unsichtbar schalten fehlgeschlagen', warn: true, lines: ['Der Status ließ sich nicht ändern. Der Vorgang wird nicht gestartet.'], buttons: [{ label: 'Schließen', value: null, focus: true }] });
       return false;
     }
-    GM_setValue(K_VIS_RUN, { mode: 'invisible', prev: 3, ts: Date.now() });
+    gmSet(K_VIS_RUN, { mode: 'invisible', prev: 3, ts: Date.now() });
     for (let i = 15; i > 0; i--) { msg(`Du bist jetzt unsichtbar. Es geht in ${i} s weiter …`); await sleep(1000); }
     info.remove();
     updateTopButton();
@@ -4255,7 +4663,7 @@
         lines: ['Es laufen Vorgänge mit automatisierten Profilaufrufen.', 'Alle Mitglieder, deren Profile während dieser Vorgänge aufgerufen werden, sehen Dich als Besucher!', 'Trotzdem fortfahren?'],
         buttons: [{ label: 'Trotzdem sichtbar machen', value: 'vis' }, { label: 'Unsichtbar bleiben', value: null, focus: true }] });
       if (c !== 'vis') return;
-      GM_setValue(K_VIS_RUN, Object.assign({}, visRun(), { mode: 'visible', ts: Date.now() }));
+      gmSet(K_VIS_RUN, Object.assign({}, visRun(), { mode: 'visible', ts: Date.now() }));
       form.__jafPass = true;
       HTMLFormElement.prototype.submit.call(form);
     };
@@ -4279,17 +4687,10 @@
     const n = ignCount();
     return `Ignorierliste: ${n.toLocaleString('de-DE')}/${CONFIG.IGNORE_LIMIT.toLocaleString('de-DE')} (${Math.max(0, CONFIG.IGNORE_LIMIT - n).toLocaleString('de-DE')} frei)`;
   };
-  function itemKind(x) {
-    const reason = x && x.reason;
-    if (reason === 'Altersunterschied') return 'sd';
-    if (reason === 'Geronto-Paar') return 'geronto';
-    if (x && isCoupleRuleType(x.type) && (x.ages || []).length === 2) {
-      const r = coupleReason(x.ages);
-      if (r === 'Altersunterschied') return 'sd';
-      if (r === 'Geronto-Paar') return 'geronto';
-    }
-    return 'opa';
-  }
+  const itemKind = (x) => entryKind(x);
+  // Verdrängungs-Rangfolge der Arten (zuerst verdrängt): Oma → Sugar Mom → Geronto-Paar → Opa → Sugar Daddy
+  const KIND_ORDER = ['oma', 'sm', 'geronto', 'opa', 'sd'];
+  const kindRank = (k) => { const i = KIND_ORDER.indexOf(k); return i < 0 ? 3 : i; };
   function personsOf(path, e) {
     const acc = getAccounts()[path];
     if (acc && acc.persons && acc.persons.length) return acc.persons;
@@ -4305,59 +4706,59 @@
     if (n < new Date(n.getFullYear(), b.getMonth(), b.getDate())) a--;
     return a;
   }
-  // Tage seit Überschreiten der Grenze: Opa = (MAX_AGE+1). Geburtstag der ältesten Person, Geronto = COUPLE_BOTH_MIN_AGE. Geburtstag des Mannes
+  // Tage seit Erreichen der Ignorier-Schwelle (Werte der Quelle des Eintrags):
+  // Opa/Oma: älteste Person; Geronto-Paar: die Person, die ihre Schwelle zuletzt erreicht hat; Sugar Daddy/Mom: ohne Altersregel
   function daysOver(path, e, kind) {
+    if (kind === 'sd' || kind === 'sm') return Infinity;
     const ps = personsOf(path, e);
-    let p = null, lim;
-    if (kind === 'geronto') { p = ps[1] || ps[0]; lim = CONFIG.COUPLE_BOTH_MIN_AGE; } else {
+    const src = e.source || ALTBESTAND;
+    const cross = (p, lim) => { const m = midOf(p); if (m == null) return null; const b = new Date(m); return new Date(b.getFullYear() + lim, b.getMonth(), b.getDate()).getTime(); };
+    let t = null;
+    if (kind === 'geronto' && ps.length === 2) {
+      const tf = cross(ps[0], vals('p', src, 'f')[2]), tm = cross(ps[1], vals('p', src, 'm')[2]);
+      t = tf == null || tm == null ? null : Math.max(tf, tm);
+    } else {
+      let p = null;
       for (const x of ps) if (midOf(x) != null && (p == null || midOf(x) < midOf(p))) p = x;
-      lim = CONFIG.MAX_AGE + 1;
+      const grp = kind === 'geronto' ? 'p' : groupOfType(e.type) || (kind === 'oma' ? 'f' : 'm');
+      t = cross(p, grp === 'p' ? vals('p', src, knownType(e.type) === 'Frauen-Paar' ? 'f' : 'm')[2] : vals(grp, src)[2]);
     }
-    const m = midOf(p);
-    if (m == null) return Infinity; // ohne Alter ans Ende
-    const b = new Date(m);
-    return Math.floor((Date.now() - new Date(b.getFullYear() + lim, b.getMonth(), b.getDate()).getTime()) / 86400000);
+    if (t == null) return Infinity; // ohne Alter ans Ende
+    return Math.floor((Date.now() - t) / 86400000);
   }
+  // Wen verdrängen? Reihenfolge: niedrigste Quelle → Art → am längsten nicht gesehen (nur Vergangenheit) → kürzeste Zeit über der Schwelle.
+  // Aus einer niedrigeren Quelle darf jede Art weichen, aus derselben Quelle nur eine gleiche oder niedrigere Art.
+  // Von Hand oder über die Whitelist Gesperrte werden nie angefasst.
   function pickVictim(item) {
     const newRank = srcRank(item.source);
+    const newKind = kindRank(itemKind(item));
     const l = getLog(), ign = getIgnored();
     const ignIds = new Set(Object.keys(ign).map(idOf));
     const today = isoDay(new Date());
     const white = whiteList();
     const all = Object.entries(l)
-      .filter(([p, e]) => !e.unblocked && CONFIG.PROFILE_PATH_RE.test(p) && ignIds.has(idOf(p)) && srcRank(e.source) >= newRank && !isWhiteMember({ name: e.name, path: p }, white) &&
+      .filter(([p, e]) => !e.unblocked && CONFIG.PROFILE_PATH_RE.test(p) && ignIds.has(idOf(p)) && !isWhiteMember({ name: e.name, path: p }, white) &&
         !(!e.source && /JOYclub-Ignorierliste/.test(e.method || ''))) // ohne Quelle nur von JOYclub übernommen = vermutlich von Hand gesperrt
-      .map(([p, e]) => ({ p, e, r: srcRank(e.source), kind: itemKind(e) }));
-    const ranks = [...new Set(all.map((x) => x.r))].sort((a, b) => b - a); // niedrigste Quelle zuerst
-    const newKind = itemKind(item);
+      .map(([p, e]) => ({ p, e, r: srcRank(e.source), k: kindRank(itemKind(e)) }))
+      .filter((x) => x.r > newRank || (x.r === newRank && x.k <= newKind));
+    if (!all.length) return null;
     const seenOf = (x) => x.e.seen || '1970-01-01';
-    for (const r of ranks) {
-      const list = all.filter((x) => x.r === r);
-      const past = list.filter((x) => seenOf(x) < today).sort((a, b) => seenOf(a).localeCompare(seenOf(b)) || (a.e.ts || 0) - (b.e.ts || 0));
-      if (past.length) return Object.assign(past[0], { why: `am längsten nicht gesehen (${deDay(past[0].e.seen) || 'nie'})` });
-      const og = list.filter((x) => x.kind !== 'sd').map((x) => Object.assign(x, { d: daysOver(x.p, x.e, x.kind) }))
-        .sort((a, b) => a.d - b.d || (a.kind === 'geronto' ? -1 : 0) - (b.kind === 'geronto' ? -1 : 0));
-      if (og.length) return Object.assign(og[0], { why: 'kürzeste Zeit über der Altersgrenze' });
-      if (newKind === 'sd') {
-        const sds = list.filter((x) => x.kind === 'sd').map((x) => {
-          const ps = personsOf(x.p, x.e), a = x.e.ages || [];
-          return Object.assign(x, { m: ageNow(ps[1] || ps[0]) ?? (a[1] || a[0]), g: a.length === 2 ? a[1] - a[0] : 0 });
-        }).filter((x) => x.m != null).sort((a, b) => a.m - b.m || a.g - b.g);
-        const ia = item.ages || [];
-        const nm = ia.length === 2 ? ia[1] : null, ng = ia.length === 2 ? ia[1] - ia[0] : 0;
-        if (sds.length && nm != null && (nm > sds[0].m || (nm === sds[0].m && ng > sds[0].g))) return Object.assign(sds[0], { why: 'jüngerer Sugar Daddy' });
-      }
-    }
-    return null;
+    all.forEach((x) => { x.past = seenOf(x) < today; x.d = daysOver(x.p, x.e, KIND_ORDER[x.k]); });
+    all.sort((a, b) => b.r - a.r || a.k - b.k || (b.past - a.past) ||
+      (a.past && b.past ? seenOf(a).localeCompare(seenOf(b)) : 0) || a.d - b.d || (a.e.ts || 0) - (b.e.ts || 0));
+    const v = all[0];
+    v.kind = KIND_ORDER[v.k];
+    v.why = v.past ? `am längsten nicht gesehen (${deDay(v.e.seen) || 'nie'})` : 'kürzeste Zeit über der Altersgrenze';
+    return v;
   }
   // Profil im Hintergrund-Frame bearbeiten (Auftrag aus dem GM-Speicher); vorher Sichtbarkeit prüfen
   async function actJob(item, source) {
     await visEnforce();
     const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-    GM_setValue('jaf_bg_job_' + jobId, { item, source: item.source || source });
+    gmSet('jaf_bg_job_' + jobId, { item, source: item.source || source });
     try { return await bgFrameG(location.origin + item.path, 'jaf-bg-act-' + jobId, null, 120000); }
     catch (err) { if (err.fatal) throw err; return { result: 'failed', msg: err.message }; }
-    finally { GM_setValue('jaf_bg_job_' + jobId, null); }
+    finally { gmSet('jaf_bg_job_' + jobId, null); }
   }
   // vor einer neuen Sperre: Platz auf der Ignorierliste sicherstellen. cnt: { displaced, limitHit }
   async function ensureSlot(item, cnt) {
@@ -4377,7 +4778,9 @@
   // Treffer sperren (mit Limit-Prüfung): Ergebnis wie actJob, zusätzlich result 'limit'
   async function blockItem(it, source, cnt) {
     if (!it.action && !(await ensureSlot(Object.assign({ source }, it), cnt))) return { result: 'limit', msg: 'Limit erreicht, nicht gesperrt' };
-    return actJob(it, source);
+    const r = await actJob(it, source);
+    if (CONFIG.DRY_RUN && !it.action && r && r.result !== 'failed') memNote(it.path, 'would', Object.assign({ source }, it));
+    return r;
   }
 
   // ---- Popup ----
@@ -4388,7 +4791,7 @@
     ov = document.createElement('div');
     ov.id = 'jaf-bg-popup';
     ov.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center';
-    ov.innerHTML = `<div class="jaf-bg-box" role="dialog" aria-modal="true" style="${POPUP_BOX_CSS}">
+    ov.innerHTML = opaT(`<div class="jaf-bg-box" role="dialog" aria-modal="true" style="${POPUP_BOX_CSS}">
       <div style="display:flex;align-items:center;gap:10px;font-size:17px;font-weight:bold;margin-bottom:6px">${opaIconSvg(24)}<span class="jaf-bg-title">Opa-Scan</span></div>
       <div class="jaf-bg-warn" style="display:none;background:#ffb300;color:#000;border-radius:6px;padding:6px 10px;margin:8px 0 12px;font-weight:bold">
         ⚠ Bitte diese Seite nicht verlassen und den Tab nicht schließen, sonst bricht der Scan ab.</div>
@@ -4401,7 +4804,7 @@
       <div class="jaf-bg-stats" style="font-size:12px;opacity:.8;white-space:pre-line"></div>
       <div class="jaf-bg-body"></div>
       <div class="jaf-bg-btns" style="display:flex;flex-direction:column;gap:12px;margin-top:16px"></div>
-    </div>`;
+    </div>`);
     const canClose = () => !(bgScan && bgScan.running);
     ov.addEventListener('click', (e) => { if (e.target === ov && canClose()) closeBgPopup(); });
     ov.__esc = (e) => { if (e.key === 'Escape' && canClose()) { e.preventDefault(); closeBgPopup(); } };
@@ -4451,7 +4854,13 @@
     for (const d of defs) {
       const b = popupButton(d.label, d.fn, d);
       if (d.cls) b.classList.add(d.cls);
-      box.appendChild(b);
+      if (d.hint) {
+        const w = document.createElement('div');
+        const h = document.createElement('div');
+        h.style.cssText = 'font-size:12px;opacity:.7;margin:4px 4px 0';
+        h.textContent = d.hint;
+        w.appendChild(b); w.appendChild(h); box.appendChild(w);
+      } else box.appendChild(b);
       if (d.focus) focusEl = b;
     }
     if (focusEl) setTimeout(() => focusEl.focus(), 0);
@@ -4472,11 +4881,16 @@
     }
     if (stats != null) ov.querySelector('.jaf-bg-stats').textContent = stats;
   }
-  const beforeUnloadGuard = (e) => { e.preventDefault(); e.returnValue = 'Der Opa-Scan läuft noch.'; return e.returnValue; };
+  const beforeUnloadGuard = (e) => { e.preventDefault(); e.returnValue = opaT('Der Opa-Scan läuft noch.'); return e.returnValue; };
 
   // ---- bereits bearbeitete Anmeldungen je Party merken: erneute Scans prüfen nur Neuanmeldungen ----
   // Ändern sich die Regeln (Altersgrenzen, Typen, Paar-Regeln), wird automatisch wieder vollständig gescannt.
-  const rulesHash = () => JSON.stringify([CONFIG.MAX_AGE, CONFIG.ONLY_TYPES, CONFIG.COUPLE_RULE_TYPES, CONFIG.COUPLE_AGE_GAP, CONFIG.COUPLE_BOTH_MIN_AGE]);
+  // Fingerabdruck der fürs Ignorieren relevanten Regeln (Schwellen, Schalter, Typen, Sugar Daddy/Mom)
+  const rulesHash = (cfg = CONFIG) => JSON.stringify(GROUP_KEYS.map((g) => {
+    const G = cfg.GROUPS[g];
+    const th = Object.fromEntries(SCAN_SOURCES.map((q) => [q, g === 'p' ? [G.src[q].f[2], G.src[q].m[2]] : G.src[q][2]]));
+    return [G.ignore, (G.types || []).slice().sort(), th, g === 'p' ? [G.sd, G.sm] : 0];
+  }));
   const guestKey = (g) => g.id || '';
   function seenGuests(eventId) {
     const e = getEvents()[eventId] || {};
@@ -4489,18 +4903,18 @@
     e.seen = [...new Set(prev.concat(keys.filter(Boolean)))];
     e.seenRules = rulesHash();
     m[eventId] = e;
-    GM_setValue(K_EVENTS, m);
+    gmSet(K_EVENTS, m);
   }
 
   // ---- Fehlschläge des Party-Scans (Hintergrund) speichern und exportieren ----
   const K_EVFAIL = 'jaf_evscan_failures'; // [{ ts, party, partyDate, partyUrl, name, url, step, msg }]
   function addEvFailure(f) {
-    const l = GM_getValue(K_EVFAIL, []);
+    const l = gmGet(K_EVFAIL, []);
     l.push(Object.assign({ ts: Date.now() }, f));
-    GM_setValue(K_EVFAIL, l.slice(-3000));
+    gmSet(K_EVFAIL, l.slice(-3000));
   }
   function exportEvFailures() {
-    const l = GM_getValue(K_EVFAIL, []);
+    const l = gmGet(K_EVFAIL, []);
     downloadCsv('party-scan-fehlschlaege', ['Zeitpunkt', 'Party', 'Party-Datum', 'Party-Link', 'Name', 'Profil-Link', 'Schritt', 'Meldung'],
       l.map((f) => [fmtTs(f.ts), f.party || '', f.partyDate || '', f.partyUrl || '', f.name || '', f.url || '', f.step || '', f.msg || '']));
     return l.length;
@@ -4508,10 +4922,10 @@
 
   // Grund, warum gerade kein Scan starten kann (anderer Scan / anderer Tab) – sonst ''
   function scanBlockedReason() {
-    if (bgScan && bgScan.running) return 'Hier läuft bereits ein Opa-Scan.';
-    if (getOpa().running && !opaStale(getOpa())) return 'Der Gruppen-Opa-Scan läuft gerade. Bitte erst diesen beenden.';
+    if (bgScan && bgScan.running) return opaT('Hier läuft bereits ein Opa-Scan.');
+    if (getOpa().running && !opaStale(getOpa())) return opaT('Der Gruppen-Opa-Scan läuft gerade. Bitte erst diesen beenden.');
     const other = lockedByOther();
-    if (other) return lockNotice(other).replace(' – hier wird nur markiert.', '. Der Opa-Scan kann erst danach gestartet werden.');
+    if (other) return lockNotice(other).replace(' – hier wird nur markiert.', opaT('. Der Opa-Scan kann erst danach gestartet werden.'));
     return '';
   }
   // Klick auf „Opa-Scan starten“: Popup sofort öffnen, Partys sammeln, Start erst mit „Jetzt scannen …“
@@ -4520,8 +4934,8 @@
     bgScan = { stop: false, running: false };
     const startBtn = (fn) => ({ label: 'Jetzt scannen …', primary: true, focus: !!fn, disabled: !fn, fn });
     const closeBtn = (focus) => ({ label: 'Schließen', fn: closeBgPopup, focus });
-    const blocked = (msg) => { bgTitle('Opa-Scan Partys', false); bgUi('Scan zurzeit nicht möglich', msg, null, ''); bgButtons([startBtn(null), closeBtn(true)]); };
-    bgTitle('Opa-Scan Partys', false);
+    const blocked = (msg) => { bgTitle(opaT('Opa-Scan Partys'), false); bgUi('Scan zurzeit nicht möglich', msg, null, ''); bgButtons([startBtn(null), closeBtn(true)]); };
+    bgTitle(opaT('Opa-Scan Partys'), false);
     bgUi('Suche Eventanmeldungen …', '', null, '');
     bgButtons([startBtn(null), closeBtn(true)]);
     const why = scanBlockedReason();
@@ -4544,8 +4958,8 @@
       if (bgScan && bgScan.running) return;
       const why = scanBlockedReason();
       if (why) { bgUi('Scan zurzeit nicht möglich', why, null, ''); return; }
-      if (!(await acquireLock('Opa-Scan Partys (Hintergrund)'))) { bgUi('Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.', null, ''); return; }
-      bgTitle('Opa-Scan läuft im Hintergrund', true);
+      if (!(await acquireLock(opaT('Opa-Scan Partys (Hintergrund)')))) { bgUi('Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten. Bitte später erneut versuchen.', null, ''); return; }
+      bgTitle(opaT('Opa-Scan läuft im Hintergrund'), true);
       bgButtons([bgStopButton()]);
     }
     saveEventsFromList(list);
@@ -4581,7 +4995,7 @@
         const info = data.info || {};
         const party = { name: info.name || e.name, date: info.date || e.date };
         const partyDay = (info.start && isoDay(new Date(Date.parse(info.start)))) || dayOfDE(party.date) || null;
-        const ev = getEvents(); ev[e.id] = Object.assign(ev[e.id] || {}, { name: party.name, start: info.start || (ev[e.id] || {}).start }); GM_setValue(K_EVENTS, ev);
+        const ev = getEvents(); ev[e.id] = Object.assign(ev[e.id] || {}, { name: party.name, start: info.start || (ev[e.id] || {}).start }); gmSet(K_EVENTS, ev);
         // Veranstalter + VIP-Gäste
         const noteJobs = [];
         for (const m of data.orgs || []) {
@@ -4608,9 +5022,9 @@
         const guests = htmlToItems(data.html || []).map(parseGuest);
         // AWO-Faktor aus der vollständigen Gästeliste (Anmeldungen) – gilt bis zum nächsten Scan bzw. Einzelaufruf
         if (data.hasList) {
-          const awo = computeAwo(guests.filter((g) => isManReg(g)), guests.filter((g) => /paar/i.test(g.type || '')));
+          const awo = computeAwo(guests);
           if (awo.value != null) {
-            const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { awo: Math.round(awo.value * 1000) / 10, awoTs: Date.now() }); GM_setValue(K_EVENTS, m);
+            const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { awo: Math.round(awo.value * 1000) / 10, awoTs: Date.now() }); gmSet(K_EVENTS, m);
             note(`${party.name}: AWO ${pct(awo.value)}`);
           }
           updateEventBadges();
@@ -4665,23 +5079,23 @@
           rememberGuests(e.id, items.map((x) => guestKey(x.g)).filter((k) => k && !pending.has(k)));
         }
         if (bgScan.stop) break;
-        if (complete && !CONFIG.DRY_RUN) { const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { doneTs: Date.now() }); GM_setValue(K_EVENTS, m); }
+        if (complete && !CONFIG.DRY_RUN) { const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { doneTs: Date.now() }); gmSet(K_EVENTS, m); }
         st.done++;
         updateEventBadges();
         bgUi(null, `${party.name}: fertig`, (ei + 1) / events.length, stats());
         if (ei < events.length - 1) await sleep(rand(CONFIG.EVENT_DELAY_MIN_MS, CONFIG.EVENT_DELAY_MAX_MS));
       }
       if (emb) return st;
-      bgTitle(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', false);
-      bgUi(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', bgScan.stop ? (bgScan.stopMsg || 'Abgebrochen.') : 'Alle Partys bearbeitet.', bgScan.stop ? null : 1, stats());
+      bgTitle(bgScan.stop ? opaT('Opa-Scan abgebrochen') : opaT('Opa-Scan fertig'), false);
+      bgUi(bgScan.stop ? opaT('Opa-Scan abgebrochen') : opaT('Opa-Scan fertig'), bgScan.stop ? (bgScan.stopMsg || 'Abgebrochen.') : 'Alle Partys bearbeitet.', bgScan.stop ? null : 1, stats());
     } catch (err) {
       if (emb) { st.error = err.message; return st; }
-      bgTitle('Opa-Scan nicht möglich', false);
-      bgUi('Opa-Scan nicht möglich', err.message, null, stats());
+      bgTitle(opaT('Opa-Scan nicht möglich'), false);
+      bgUi(opaT('Opa-Scan nicht möglich'), err.message, null, stats());
       fallback = true;
     } finally {
       if (!emb) bgEvFinish(st, fallback, logLines);
-      else { const ev = getEv(); ev.log = (ev.log || []).concat(logLines).slice(-300); GM_setValue(K_EVSCAN, ev); }
+      else { const ev = getEv(); ev.log = (ev.log || []).concat(logLines).slice(-300); gmSet(K_EVSCAN, ev); }
     }
     return st;
   }
@@ -4696,7 +5110,7 @@
       if (st.failed) btns.push({ label: 'Fehlschläge exportieren (CSV)', fn: () => exportEvFailures() });
       btns.push({ label: 'Schließen', fn: closeBgPopup, focus: true });
       bgButtons(btns);
-      const ev = getEv(); ev.log = (ev.log || []).concat(logLines).slice(-300); GM_setValue(K_EVSCAN, ev);
+      const ev = getEv(); ev.log = (ev.log || []).concat(logLines).slice(-300); gmSet(K_EVSCAN, ev);
     }
   }
 
@@ -4709,15 +5123,18 @@
   // =====================================================================
   const isMemberSearchPage = () => /^\/member(\/|$)/.test(location.pathname);
   const K_MS_SET = 'jaf_ms_settings';       // gemerkte Einstellungen der systematischen Suche
-  const K_MS_LOG = 'jaf_ms_protocol';       // [{ ts, city, land, geoId, age, runs, found, fresh, limit, url, final }]
   const K_MS_FAIL = 'jaf_ms_failures';      // [{ ts, search, name, url, msg }]
   const K_MS_SINGLE = 'jaf_ms_single_age_couples'; // { path: { name, url, ages, ts, search } }
   const K_MS_RESUME = 'jaf_ms_resume';      // unterbrochene systematische Suche: { opt, ai, ageIdx, nAreas, city, age, ts }
   const MS_TYPES = [['f', 'Frauen', 'frau'], ['m', 'Männer', 'mann'], ['p', 'Paare', 'paar'], ['nb', 'Non-binary', 'nonbinary']];
   const msAreaGroups = () => Object.entries(CONFIG.AREAS || {}).filter(([, l]) => l.length);
   function msSettings() {
-    const d = { types: ['m', 'p', 'nb'], min: Math.min(70, CONFIG.MAX_AGE + 1), max: 70, lands: msAreaGroups().map(([n]) => n) };
-    const s = GM_getValue(K_MS_SET, null);
+    // Vorgabe: Typen der Gruppen mit „Ignorieren aktiv“, ab der niedrigsten Such-Schwelle
+    const on = GROUP_KEYS.filter((g) => CONFIG.GROUPS[g].ignore);
+    const types = [...new Set(on.flatMap((g) => (g === 'm' ? ['m'] : g === 'f' ? ['f'] : ['p']).concat((CONFIG.GROUPS[g].types || []).some((t) => /non-binary|trans/i.test(t)) ? ['nb'] : [])))];
+    const th = on.flatMap((g) => (g === 'p' ? [CONFIG.GROUPS.p.src.Suche.f[2], CONFIG.GROUPS.p.src.Suche.m[2]] : [CONFIG.GROUPS[g].src.Suche[2]]));
+    const d = { types: types.length ? types : ['m', 'p'], min: Math.min(70, th.length ? Math.min(...th) : 70), max: 70, lands: msAreaGroups().map(([n]) => n) };
+    const s = gmGet(K_MS_SET, null);
     if (!s) return d;
     return { types: Array.isArray(s.types) ? s.types : d.types, min: s.min || d.min, max: s.max || d.max,
       lands: Array.isArray(s.lands) ? s.lands.filter((n) => (CONFIG.AREAS || {})[n]) : d.lands };
@@ -4735,7 +5152,7 @@
       `<defs><mask id="${id}" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><rect width="24" height="24" fill="white"/>` +
       `<circle cx="15.5" cy="15" r="6.6" fill="black"/><line ${hs} stroke="black" stroke-width="4.9" stroke-linecap="round"/></mask></defs>` +
       `<g mask="url(#${id})"><svg x="0" y="0" width="12" height="24" viewBox="0 0 640 1280" preserveAspectRatio="xMidYMid meet">` +
-      `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg></g>` +
+      `${nickG()}</svg></g>` +
       `<circle cx="15.5" cy="15" r="4.6" fill="none" stroke="currentColor" stroke-width="1.8"/><line ${hs} stroke="currentColor" stroke-width="2.7" stroke-linecap="round"/></svg>`;
   }
   function insertMsButton() {
@@ -4746,8 +5163,8 @@
     b.className = 'jaf-ms-btn';
     b.setAttribute('icon-only', 'true');
     b.setAttribute('variant', 'transparent');
-    b.setAttribute('aria-label', 'Opa-Scan');
-    b.setAttribute('title', 'Opa-Scan');
+    b.setAttribute('aria-label', opaT('Opa-Scan'));
+    b.setAttribute('title', opaT('Opa-Scan'));
     b.setAttribute('role', '');
     b.style.color = 'white';
     b.innerHTML = `<span slot="icon-prepend" style="display:inline-flex;color:white">${opaLupeSvg(20)}</span>`;
@@ -4765,25 +5182,28 @@
     const ctx = { white: whiteList(), acc: getAccounts(), blocked: blockedIdMap() };
     for (const c of cards) {
       const g = Object.assign({ id: idOf(c.path) }, c);
-      const st = guestStyle(g, ctx);
+      const st = guestStyle(g, ctx, 'Suche');
       const a = c.a;
       const blk = g.id && ctx.blocked.get(g.id);
-      const sig = [st.color, st.dashed, st.txt, !!blk, g.ages.join('+')].join('|');
+      const sig = [st.none, st.color, st.dashed, st.txt, !!blk, g.ages.join('+'), showX(st)].join('|');
       if (a.__jafSig !== sig) {
         a.__jafSig = sig;
-        a.style.outline = `${st.dashed ? 2 : 3}px ${st.dashed ? 'dashed' : 'solid'} ${st.color}`;
-        a.style.outlineOffset = '-1px';
-        if (getComputedStyle(a).position === 'static') a.style.position = 'relative';
-        if (getComputedStyle(a).display === 'inline') a.style.display = 'block';
         let b = a.querySelector('.jaf-badge');
-        if (!b) { b = document.createElement('div'); b.className = 'jaf-badge'; a.appendChild(b); }
-        const extra = [g.ages.join('+') || '?', st.color === COLORS.red ? st.txt : ''].filter(Boolean).join(' · ');
-        b.textContent = extra + (blk ? ' · ignoriert' : '');
-        b.style.cssText = 'position:absolute;top:6px;left:6px;z-index:5;font:bold 11px system-ui;padding:2px 6px;border-radius:3px;pointer-events:none;' +
-          `background:${st.color};color:${st.fg || (st.color === COLORS.white ? '#000' : '#fff')}`;
+        if (st.none) { a.style.outline = ''; if (b) b.remove(); } else {
+          a.style.outline = `${st.dashed ? 2 : 3}px ${st.dashed ? 'dashed' : 'solid'} ${st.color}`;
+          a.style.outlineOffset = '-1px';
+          if (getComputedStyle(a).position === 'static') a.style.position = 'relative';
+          if (getComputedStyle(a).display === 'inline') a.style.display = 'block';
+          if (!b) { b = document.createElement('div'); b.className = 'jaf-badge'; a.appendChild(b); }
+          const extra = [g.ages.join('+') || '?', st.color === COLORS.red ? st.txt : ''].filter(Boolean).join(' · ');
+          b.textContent = extra + (blk ? ' · ignoriert' : '');
+          b.style.cssText = 'position:absolute;top:6px;left:6px;z-index:5;font:bold 11px system-ui;padding:2px 6px;border-radius:3px;pointer-events:none;' +
+            `background:${st.color};color:${st.fg || (st.color === COLORS.white ? '#000' : '#fff')}`;
+        }
         const x = a.querySelector('.jaf-x');
-        if (blk && !x) a.insertAdjacentHTML('beforeend', `<div class="jaf-x" style="position:absolute;inset:0;z-index:4;pointer-events:none">${X_SVG}</div>`);
-        if (!blk && x) x.remove();
+        const wantX = blk && showX(st);
+        if (wantX && !x) { if (getComputedStyle(a).position === 'static') a.style.position = 'relative'; a.insertAdjacentHTML('beforeend', `<div class="jaf-x" style="position:absolute;inset:0;z-index:4;pointer-events:none">${X_SVG}</div>`); }
+        if (!wantX && x) x.remove();
       }
       if (!a.__jafBound) {
         a.__jafBound = true;
@@ -4803,11 +5223,11 @@
     if (bgScan && bgScan.running) { bgPopup(); return; }
     closeBgPopup();
     bgScan = null;
-    bgTitle(CONFIG.SEARCH_IGNORE ? 'Opa-Scan Mitgliedersuche' : 'Opa-Scan Mitgliedersuche (nur Statistik)', false);
-    bgUi('', 'Wie soll gesucht werden?', null, CONFIG.SEARCH_IGNORE ? '' : 'Das Ignorieren in der Mitgliedersuche ist ausgeschaltet (Einstellung „Suche ignoriert“) – es wird nur gezählt, wer ignoriert würde.');
+    bgTitle(opaT('Opa-Scan Mitgliedersuche'), false);
+    bgUi('', 'Wie soll gesucht werden?', null, '');
     bgPopup().querySelector('.jaf-bg-barwrap').style.display = 'none';
     bgBody(null);
-    const res = GM_getValue(K_MS_RESUME, null);
+    const res = gmGet(K_MS_RESUME, null);
     const btns = [
       { label: 'Mit aktuellen Sucheinstellungen filtern', fn: () => msRun({ mode: 'current' }) },
       { label: 'Systematische Suche starten', fn: () => { closeBgPopup(); msSetup(); } },
@@ -4875,7 +5295,7 @@
       const nAreas = msAreaGroups().filter(([n]) => r.lands.includes(n)).reduce((s2, [, l]) => s2 + l.length, 0);
       wrap.querySelector('.jaf-ms-sum').textContent = `${nAreas} Umkreise à ${CONFIG.AREA_RADIUS_KM} km · je ${steps(r.min, r.max)} Altersstufe${steps(r.min, r.max) === 1 ? '' : 'n'}` +
         ` (${r.max >= 70 ? '70+' : r.max} bis ${r.min}) · Einstellungen werden gemerkt`;
-      GM_setValue(K_MS_SET, r);
+      gmSet(K_MS_SET, r);
       const ok = r.types.length && nAreas;
       bgButtons([
         { label: 'Systematische Suche starten', primary: true, disabled: !ok, fn: () => msRun(Object.assign({ mode: 'system' }, read())) },
@@ -4918,97 +5338,54 @@
   // gesehene Profile auch in der Konten-Liste / Vormerkliste festhalten
   function msRecord(cards, search) {
     try { recordAccounts(cards); updateWatch(cards, getLog(), getIgnored(), 'Suche'); upgradeSources(cards, 'Suche'); } catch (e) { /* egal */ }
-    const single = GM_getValue(K_MS_SINGLE, {});
+    const single = gmGet(K_MS_SINGLE, {});
     let ch = false;
     for (const c of cards) {
       if (isCoupleRuleType(c.type) && c.ages.length < 2 && !single[c.path]) { single[c.path] = { name: c.name, url: c.url, ages: c.ages, ts: Date.now(), search }; ch = true; }
     }
-    if (ch) GM_setValue(K_MS_SINGLE, single);
+    if (ch) gmSet(K_MS_SINGLE, single);
   }
   // Karte einordnen: { kind: 'ignore'|'verify'|'skip', why, item }
-  function msClassify(c, ctx) {
-    const id = idOf(c.path);
-    if (!CONFIG.PROFILE_PATH_RE.test(c.path)) return { kind: 'skip', why: 'kein Mitgliederprofil' };
-    if (ctx.blocked.get(id)) return { kind: 'skip', why: 'bereits ignoriert' };
-    if (isWhiteMember(c, ctx.white)) return { kind: 'skip', why: 'Whitelist' };
-    const item = { path: c.path, url: c.url, name: c.name, ages: c.ages, type: c.type, source: 'Suche' };
-    if (isCoupleRuleType(c.type)) {
-      if (c.ages.length === 2) {
-        const why = coupleReason(c.ages);
-        return why ? { kind: 'ignore', why, item: Object.assign(item, { reason: why }) } : { kind: 'skip', why: 'Paar erfüllt die Kriterien nicht' };
-      }
-      return { kind: 'verify', why: 'Paar mit nur einer Altersangabe', item: Object.assign(item, { verify: true }) };
-    }
-    if (normType(c.type) === normType('Frau')) return { kind: 'skip', why: 'Frau' };
-    return shouldBlock(c, ctx.white) ? { kind: 'ignore', why: 'Alter', item } : { kind: 'skip', why: 'erfüllt die Kriterien nicht' };
-  }
-  function msAddFailure(f) { const l = GM_getValue(K_MS_FAIL, []); l.push(Object.assign({ ts: Date.now() }, f)); GM_setValue(K_MS_FAIL, l.slice(-3000)); }
+  function msClassify(c, ctx) { return classifyCard(c, ctx, 'Suche'); }
+
+  function msAddFailure(f) { const l = gmGet(K_MS_FAIL, []); l.push(Object.assign({ ts: Date.now() }, f)); gmSet(K_MS_FAIL, l.slice(-3000)); }
   function exportMsFailures() {
-    const l = GM_getValue(K_MS_FAIL, []);
+    const l = gmGet(K_MS_FAIL, []);
     downloadCsv('mitgliedersuche-fehlschlaege', ['Zeitpunkt', 'Suche', 'Name', 'Profil-Link', 'Meldung'], l.map((f) => [fmtTs(f.ts), f.search || '', f.name || '', f.url || '', f.msg || '']));
     return l.length;
   }
-  function exportMsProtocol() {
-    const l = GM_getValue(K_MS_LOG, []);
-    downloadCsv('mitgliedersuche-protokoll', ['Zeitpunkt', 'Stadt', 'Bundesland', 'Orts-ID', 'Alter', 'Durchläufe ohne neue Treffer', 'Profile gefunden', 'davon neu ignoriert', 'Obergrenze erreicht', 'Such-Link', 'Link nach dem Laden'],
-      l.map((e) => [fmtTs(e.ts), e.city || '', e.land || '', e.geoId ? 'x' + e.geoId : '', e.age >= 70 ? '70+' : e.age, e.runs, e.found, e.ignored, e.limit ? 'ja' : 'nein', e.url || '', e.final || ''])
-        .concat(GM_getValue(K_PAUSES, []).map((pz) => [fmtTs(pz.since), 'PAUSE (JOYclub nicht erreichbar)', '', '', '', '', '', '', '',
-          `bis ${fmtTs(pz.until)}${pz.end ? ', weiter um ' + fmtTs(pz.end) : ''}`, pz.text || ''])));
-    return l.length;
-  }
   function exportMsSingleCouples() {
-    const m = GM_getValue(K_MS_SINGLE, {});
+    const m = gmGet(K_MS_SINGLE, {});
     downloadCsv('paare-mit-einer-altersangabe', ['Zeitpunkt', 'Name', 'Profil-Link', 'Alter', 'Suche'],
       Object.values(m).map((e) => [fmtTs(e.ts), e.name || '', e.url || '', (e.ages || []).join('+'), e.search || '']));
-    return Object.keys(m).length;
-  }
-
-  // ---- „würden ignoriert“ (SEARCH_IGNORE aus: Mitgliedersuche sammelt nur Statistik) ----
-  const K_MS_WOULD = 'jaf_ms_would'; // { path: { name, url, ages, type, why, ts, search } }
-  function exportMsWould() {
-    const m = GM_getValue(K_MS_WOULD, {});
-    downloadCsv('mitgliedersuche-wuerden-ignoriert', ['Zeitpunkt', 'Name', 'Profil-Link', 'Profiltyp', 'Alter', 'Grund', 'Suche'],
-      Object.values(m).map((e) => [fmtTs(e.ts), e.name || '', e.url || '', e.type || '', (e.ages || []).join('+'), e.why || '', e.search || '']));
     return Object.keys(m).length;
   }
 
   // ---- Lauf (beide Modi) ----
   // emb = true: als Teil des Opa-Scans (Hamburger-Menü) – Popup, Sperre und Abbruch gehören dem Aufrufer; Rückgabe: Statistik
   async function msRun(opt, emb = false) {
-    const statOnly = !CONFIG.SEARCH_IGNORE;
     if (!emb) {
       if (bgScan && bgScan.running) return;
       const why = scanBlockedReason();
       bgBody(null);
       bgPopup().querySelector('.jaf-bg-party').style.display = '';
       bgPopup().querySelector('.jaf-bg-step').style.display = '';
-      if (why) { bgTitle('Opa-Scan Mitgliedersuche', false); bgUi('Scan zurzeit nicht möglich', why, null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
+      if (why) { bgTitle(opaT('Opa-Scan Mitgliedersuche'), false); bgUi('Scan zurzeit nicht möglich', why, null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
       if (!(await visGuard())) { closeBgPopup(); return; }
-      if (!(await acquireLock('Opa-Scan Mitgliedersuche'))) { bgUi('Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten.', null, ''); return; }
+      if (!(await acquireLock(opaT('Opa-Scan Mitgliedersuche')))) { bgUi('Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten.', null, ''); return; }
       bgScan = { stop: false, running: true };
       window.__jafBgBusy = true;
       window.addEventListener('beforeunload', beforeUnloadGuard);
-      bgTitle(statOnly ? 'Opa-Scan (nur Statistik)' : 'Opa-Scan läuft im Hintergrund', true);
+      bgTitle(opaT('Opa-Scan läuft im Hintergrund'), true);
       bgButtons([bgStopButton()]);
     }
     const t0 = Date.now();
     const st = { seen: new Set(), ignored: 0, skipped: 0, failed: 0, single: 0, searches: 0, would: 0, displaced: 0, limitHit: 0 };
-    const would = statOnly ? {} : null;
-    const stats = () => (statOnly
-      ? `Profile gesehen: ${st.seen.size.toLocaleString('de-DE')} · würden ignoriert: ${st.would} · übersprungen: ${st.skipped} · nicht lesbar: ${st.failed}\n` +
-        `Paare mit nur einer Altersangabe: ${st.single}\nNur Statistik – das Ignorieren in der Mitgliedersuche ist ausgeschaltet.`
-      : `Profile gesehen: ${st.seen.size.toLocaleString('de-DE')} · ignoriert: ${st.ignored} · übersprungen: ${st.skipped} · fehlgeschlagen: ${st.failed}\n` +
+    const stats = () => `Profile gesehen: ${st.seen.size.toLocaleString('de-DE')} · ignoriert: ${st.ignored} · übersprungen: ${st.skipped} · fehlgeschlagen: ${st.failed}\n` +
         `Paare mit nur einer Altersangabe: ${st.single}\n${fillText()} · verdrängt: ${st.displaced} · Limit erreicht, nicht gesperrt: ${st.limitHit}` +
-        `${CONFIG.DRY_RUN ? '\nTestmodus: es wird nichts ignoriert' : ''}`);
+        `${CONFIG.DRY_RUN ? '\nTestmodus: es wird nichts ignoriert' : ''}`;
     let testLeft = CONFIG.DRY_RUN ? CONFIG.TEST_MAX_PROFILES : Infinity;
     const singleSeen = new Set();
-    const wouldKeys = new Set();
-    const addWould = (it, why, search) => {
-      const k = idOf(it.path) || it.path;
-      if (wouldKeys.has(k)) return;
-      wouldKeys.add(k); st.would++;
-      would[it.path] = { name: it.name, url: it.url || location.origin + it.path, ages: it.ages || [], type: it.type || '', why, ts: Date.now(), search: search.label };
-    };
     // eine Ergebnisliste laden (Frame)
     const load = async (url, onN) => bgFrameG(url, 'jaf-bg-ms' + Date.now().toString(36), onN, 15 * 60000);
     // neue Karten verarbeiten: einordnen, Treffer im Hintergrund ignorieren (bzw. nur zählen)
@@ -5022,30 +5399,7 @@
         const r = msClassify(c, ctx);
         if (r.kind === 'skip') st.skipped++; else hits.push(Object.assign(r.item, { _why: r.why }));
       }
-      return statOnly ? countHits(hits, search, fracOf) : ignoreHits(hits, search, fracOf);
-    };
-    // nur Statistik: Paare mit einer Altersangabe im Profil nachlesen (nur lesen), sonst direkt zählen
-    const countHits = async (hits, search, fracOf) => {
-      for (let qi = 0; qi < hits.length && !bgScan.stop; qi++) {
-        const it = hits[qi];
-        if (!it.verify) { addWould(it, it._why || it.reason || 'Alter', search); continue; }
-        bgUi(null, `${search.step} · prüfe Profil … ${qi + 1}/${hits.length} · ${it.name}`, fracOf(0.5 + 0.5 * qi / hits.length), stats());
-        const d = cachedDecision({ id: idOf(it.path), name: it.name, path: it.path }, whiteList());
-        if (d) { if (d.r === 'block') addWould(Object.assign({}, it, { ages: d.ages, type: d.type }), `Profil: ${d.ages.join('+')}`, search); else st.skipped++; continue; }
-        try {
-          await visEnforce();
-          await sleep(rand(600, 1300));
-          const r = await jfetch(location.origin + it.path);
-          const info = r.doc ? parseProfileDoc(r.doc) : null;
-          if (info) {
-            setChecked(idOf(it.path), Object.assign({ name: it.name }, info));
-            recordAccounts([{ path: it.path, name: info.name || it.name, ages: info.ages, type: info.type, signs: info.signs }]);
-            if (shouldBlock({ name: it.name, path: it.path, type: info.type, ages: info.ages })) addWould(Object.assign({}, it, info), `Profil: ${info.ages.join('+')}`, search); else st.skipped++;
-          } else st.failed++;
-        } catch (err) { if (err.fatal) throw err; st.failed++; }
-        bgUi(null, null, null, stats());
-      }
-      return 0;
+      return ignoreHits(hits, search, fracOf);
     };
     const ignoreHits = async (hits, search, fracOf) => {
       let done = 0;
@@ -5068,14 +5422,13 @@
     };
     let headline = '';
     try {
-      if (!statOnly) { bgUi('Ignorierliste', 'Lese die Ignorierliste …', null, null); try { await syncIgnoreList(true); } catch (e) { /* egal */ } }
-      // fällige Vorgemerkte (inzwischen über MAX_AGE) zuerst
+      bgUi('Ignorierliste', 'Lese die Ignorierliste …', null, null); try { await syncIgnoreList(true); } catch (e) { /* egal */ }
+      // fällige Vorgemerkte (inzwischen über der Schwelle) zuerst
       const due = dueFromWatch();
       if (due.length && !bgScan.stop) {
         bgUi('Vorgemerkte', `${due.length} vorgemerkte Mitglieder haben die Altersgrenze überschritten`, 0, stats());
         const dueItems = due.map((d) => Object.assign({}, d, { source: d.source || 'Suche' }));
-        if (statOnly) dueItems.forEach((d) => addWould(d, 'vorgemerkt, Altersgrenze überschritten', { label: 'Vorgemerkte' }));
-        else await ignoreHits(dueItems, { label: 'Vorgemerkte', step: 'Vorgemerkte' }, () => 0);
+        await ignoreHits(dueItems, { label: 'Vorgemerkte', step: 'Vorgemerkte' }, () => 0);
       }
       if (opt.mode === 'current') {
         const desc = 'Aktuelle Suche';
@@ -5089,10 +5442,10 @@
       } else {
         const groups = msAreaGroups().filter(([n]) => opt.lands.includes(n));
         const areas = groups.flatMap(([land, list]) => list.map((a) => ({ a, land })));
-        const ages = []; for (let x = opt.max; x >= opt.min; x--) ages.push(x);
+        // Schwellen über 70: JOYclub kennt nur „70+“ → diese Klasse durchsuchen, das genaue Alter prüft die Einordnung
+        const ages = []; for (let x = Math.min(70, opt.max); x >= Math.min(70, opt.min); x--) ages.push(x);
         const w = (age) => (age >= 70 ? 10 : 1);
         const wSum = ages.reduce((s2, x) => s2 + w(x), 0);
-        const proto = GM_getValue(K_MS_LOG, []);
         const optSave = { types: opt.types, min: opt.min, max: opt.max, lands: opt.lands };
         for (let ai = opt.startAi || 0; ai < areas.length && !bgScan.stop; ai++) {
           const { a, land } = areas[ai];
@@ -5101,14 +5454,14 @@
             const age = ages[gi];
             if (ai === opt.startAi && gi < (opt.startAgeIdx || 0)) { wDone += w(age); continue; } // beim Fortsetzen überspringen
             if (bgScan.stop) break;
-            GM_setValue(K_MS_RESUME, { opt: optSave, ai, ageIdx: gi, nAreas: areas.length, city: a[0], age, ts: Date.now() });
+            gmSet(K_MS_RESUME, { opt: optSave, ai, ageIdx: gi, nAreas: areas.length, city: a[0], age, ts: Date.now() });
             const url = msUrl(a, opt.types, age);
             const ageLbl = age >= 70 ? '70+' : String(age);
             const head = `Alter ${ageLbl} · Umkreis ${ai + 1}/${areas.length}: ${a[0]} (${land})`;
             const base = (ai + wDone / wSum) / areas.length, span = w(age) / wSum / areas.length;
             const maxRuns = age >= 70 ? 200 : 20;
             const seen = new Set();
-            let runs = 0, found = 0, ign = 0, limit = false, final = '';
+            let runs = 0;
             while (runs < maxRuns && !bgScan.stop) {
               runs++;
               const step = `Durchlauf ${runs}/${maxRuns}`;
@@ -5120,37 +5473,30 @@
                 if (err.fatal || bgScan.stop) { bgScan.stop = true; bgScan.stopMsg = bgScan.stopMsg || (err.fatal ? err.message : ''); break; }
                 st.failed++; msAddFailure({ search: `${a[0]} ${ageLbl}`, url, msg: 'Suche nicht ladbar: ' + err.message }); break;
               }
-              final = data.final || final;
               const fresh = (data.cards || []).filter((c) => { const k = idOf(c.path) || c.path; if (seen.has(k)) return false; seen.add(k); return true; });
               if (!fresh.length) break;
-              found += fresh.length;
-              ign += await process(fresh, { label: `${a[0]} (${land}), Alter ${ageLbl}`, step }, fracOf);
-              if (runs >= maxRuns) limit = true;
+              await process(fresh, { label: `${a[0]} (${land}), Alter ${ageLbl}`, step }, fracOf);
               await sleep(rand(1500, 3000));
             }
             st.searches++;
-            proto.push({ ts: Date.now(), city: a[0], land, geoId: a[4], age, runs, found, ignored: ign, limit, url, final });
-            GM_setValue(K_MS_LOG, proto.slice(-20000));
             wDone += w(age);
             bgUi(null, null, base + span, stats());
           }
         }
         headline = `${areas.length} Umkreise`;
-        if (!bgScan.stop) GM_setValue(K_MS_RESUME, null);
+        if (!bgScan.stop) gmSet(K_MS_RESUME, null);
       }
-      if (statOnly) { const m = GM_getValue(K_MS_WOULD, {}); Object.assign(m, would); GM_setValue(K_MS_WOULD, m); }
       if (emb) return st;
       const dur = Math.round((Date.now() - t0) / 60000);
       const durTxt = dur >= 60 ? `${Math.floor(dur / 60)}:${pad2(dur % 60)} h` : `${dur} min`;
       bgBar2(null);
-      bgTitle(bgScan.stop ? 'Opa-Scan abgebrochen' : (statOnly ? 'Opa-Scan fertig (nur Statistik)' : 'Opa-Scan fertig'), false);
+      bgTitle(bgScan.stop ? opaT('Opa-Scan abgebrochen') : opaT('Opa-Scan fertig'), false);
       bgUi(bgScan.stop ? (bgScan.stopMsg || 'Abgebrochen') : (opt.mode === 'current' ? 'Aktuelle Suche abgeschlossen' : 'Systematische Suche abgeschlossen'),
         `${headline}${opt.mode === 'system' ? ` · ${st.searches.toLocaleString('de-DE')} Einzelsuchen` : ''} · Dauer ${durTxt}`, bgScan.stop ? null : 1, stats());
     } catch (err) {
-      if (statOnly && would) { const m = GM_getValue(K_MS_WOULD, {}); Object.assign(m, would); GM_setValue(K_MS_WOULD, m); }
       if (emb) { st.error = err.message || String(err); return st; }
-      bgTitle('Opa-Scan nicht möglich', false);
-      bgUi('Opa-Scan nicht möglich', err.message || String(err), null, stats());
+      bgTitle(opaT('Opa-Scan nicht möglich'), false);
+      bgUi(opaT('Opa-Scan nicht möglich'), err.message || String(err), null, stats());
     } finally {
       if (!emb) {
         window.removeEventListener('beforeunload', beforeUnloadGuard);
@@ -5158,8 +5504,6 @@
         bgScan = null;
         releaseLock();
         const btns = [];
-        if (statOnly && st.would) btns.push({ label: `Liste „würden ignoriert“ exportieren (${st.would})`, fn: () => exportMsWould() });
-        if (opt.mode === 'system') btns.push({ label: 'Protokoll exportieren (CSV)', fn: () => exportMsProtocol() });
         if (st.single) btns.push({ label: 'Paare mit einer Altersangabe exportieren (CSV)', fn: () => exportMsSingleCouples() });
         if (st.failed) btns.push({ label: 'Fehlschläge exportieren (CSV)', fn: () => exportMsFailures() });
         btns.push({ label: 'Schließen', fn: closeBgPopup, focus: true });
@@ -5178,24 +5522,31 @@
   const K_SYNC_NOTES = 'jaf_sync_notes';
   const SYNC_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;vertical-align:-3px">' +
     '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 3v5h5"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 21v-5h-5"/></svg>';
-  const KIND_NAMES = { false: 'Alter Sack', Altersunterschied: 'Sugar Daddy', 'Geronto-Paar': 'Geronto-Paar' };
-  const kindArg = (name) => (name === 'Sugar Daddy' ? 'Altersunterschied' : name === 'Geronto-Paar' ? 'Geronto-Paar' : false);
-  // eigene Notizzeile zerlegen: { kind, source, ts }
-  function parseOwnLine(text) {
-    const lines = String(text || '').split(/\r?\n|\s·\s/).map((l) => l.trim()).filter((l) => CONFIG.OWN_NOTE_RE.test(l));
-    if (!lines.length) return null;
-    const m = lines[lines.length - 1].match(/^(Alter Sack|Sugar Daddy|Geronto-Paar)(?:\s*\(([^)]*)\))?\s+\S+\s+am\s+(\d{1,2})\.(\d{1,2})\.(\d{4})\s+um\s+(\d{1,2}):(\d{2})/i);
-    if (!m) return null;
-    const kind = /sugar/i.test(m[1]) ? 'Sugar Daddy' : /geronto/i.test(m[1]) ? 'Geronto-Paar' : 'Alter Sack';
-    return { kind, source: (m[2] || '').trim(), ts: new Date(+m[5], +m[4] - 1, +m[3], +m[6], +m[7]).getTime() };
+  // Bezeichnung in einer Notizzeile → Art (Kürzel)
+  function labelKind(label) {
+    const l = norm(label);
+    if (l === 'sugar daddy') return 'sd';
+    if (l === 'sugar mom') return 'sm';
+    if (l === 'geronto-paar' || l === norm(CONFIG.GROUPS.p.names.one[2])) return 'geronto';
+    if (l === 'oma' || l === norm(CONFIG.GROUPS.f.names.one[2])) return 'oma';
+    return 'opa';
   }
-  // Art laut Skript: aus Grund bzw. Paar-Regeln
+  const KIND_NAMES = { opa: 'Opa', oma: 'Oma', geronto: 'Geronto-Paar', sd: 'Sugar Daddy', sm: 'Sugar Mom' };
+  const kindArg = (k) => k;
+  // eigene Notizzeile zerlegen: { kind, label, source, ts }
+  function parseOwnLine(text) {
+    const lines = String(text || '').split(/\r?\n|\s·\s/).map((l) => l.trim()).filter((l) => ownNoteRe().test(l));
+    if (!lines.length) return null;
+    const labels = noteLabels().map(reEsc).sort((a, b) => b.length - a.length).join('|');
+    const m = lines[lines.length - 1].match(new RegExp(`^(${labels})(?:\\s*\\(([^)]*)\\))?\\s+\\S+\\s+am\\s+(\\d{1,2})\\.(\\d{1,2})\\.(\\d{4})\\s+um\\s+(\\d{1,2}):(\\d{2})`, 'i'));
+    if (!m) return null;
+    return { kind: labelKind(m[1]), label: m[1], source: (m[2] || '').trim(), ts: new Date(+m[5], +m[4] - 1, +m[3], +m[6], +m[7]).getTime() };
+  }
+  // Art laut Skript (Kürzel); ohne Typ unbekannt
   function kindOfEntry(e, type, ages) {
-    if (e && e.reason === 'Altersunterschied') return 'Sugar Daddy';
-    if (e && e.reason === 'Geronto-Paar') return 'Geronto-Paar';
-    const t = type || (e && e.type) || '', a = (ages && ages.length ? ages : (e && e.ages)) || [];
-    if (isCoupleRuleType(t) && a.length === 2) return KIND_NAMES[coupleReason(a) || false] || 'Alter Sack';
-    return t ? 'Alter Sack' : null; // ohne Typ unbekannt
+    const t = type || (e && e.type) || '';
+    if (!t && !(e && (e.kind || e.reason))) return null;
+    return entryKind(Object.assign({}, e || {}, { type: t, ages: (ages && ages.length ? ages : (e && e.ages)) || [] }));
   }
   // ganze Profilnotiz aus einer abgerufenen Profilseite
   function noteFromDoc(doc) {
@@ -5222,7 +5573,16 @@
     const status = document.createElement('div');
     status.className = 'jaf-sync-status';
     status.style.cssText = 'font-size:12px;opacity:.85;margin-top:6px';
-    wrap.appendChild(b); wrap.appendChild(status);
+    const rb = document.createElement('j-button');
+    rb.className = 'jaf-repair-btn';
+    rb.setAttribute('variant', 'secondary');
+    rb.setAttribute('role', '');
+    rb.setAttribute('type', 'button');
+    rb.style.marginLeft = '10px';
+    rb.textContent = 'Ignorierliste reparieren';
+    rb.title = 'Vom Skript gesperrte Mitglieder, die JOYclub (z. B. durch Überlauf) entfernt hat, wieder sperren – auf Kosten weniger wichtiger Einträge';
+    rb.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); repairOpen(); });
+    wrap.appendChild(b); wrap.appendChild(rb); wrap.appendChild(status);
     form.after(wrap);
     const align = () => { try { wrap.style.paddingLeft = Math.max(0, sperr.getBoundingClientRect().left - form.getBoundingClientRect().left) + 'px'; } catch (e) { /* egal */ } };
     align(); setTimeout(align, 800); window.addEventListener('resize', align);
@@ -5231,7 +5591,7 @@
   function syncStatus() {
     const el = document.querySelector('.jaf-sync-status');
     if (!el) return;
-    const l = GM_getValue(K_SYNC_LAST, null);
+    const l = gmGet(K_SYNC_LAST, null);
     el.textContent = l ? `Zuletzt synchronisiert: ${fmtTs(l.ts)} (${l.mode}${l.notes ? ', mit Notizen' : ''}) · ${l.n} auf der Ignorierliste${l.summary ? ' · ' + l.summary : ''}` : 'Noch nicht synchronisiert.';
   }
   function syncOpen() {
@@ -5246,8 +5606,8 @@
     lab.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer';
     lab.innerHTML = '<input type="checkbox" style="width:18px;height:18px;accent-color:#c71b1b;margin:0"> <span>Notizen abgleichen</span>';
     const cb = lab.querySelector('input');
-    cb.checked = !!GM_getValue(K_SYNC_NOTES, false);
-    cb.addEventListener('change', () => GM_setValue(K_SYNC_NOTES, cb.checked));
+    cb.checked = !!gmGet(K_SYNC_NOTES, false);
+    cb.addEventListener('change', () => gmSet(K_SYNC_NOTES, cb.checked));
     bgBody(lab);
     bgButtons([
       { label: 'JOYclub hat Vorrang', fn: () => runSync('joyclub', cb.checked) },
@@ -5328,7 +5688,7 @@
               type: pi.type || old.type || '', source: (own && own.source) || old.source || '', method: 'JOYclub-Ignorierliste (Sync)',
               ts: (own && own.ts) || Date.now() });
             delete x.unblocked;
-            if (own && own.kind !== 'Alter Sack') x.reason = kindArg(own.kind);
+            if (own) { x.kind = own.kind; if (KIND_REASON[own.kind] !== 'Alter') x.reason = KIND_REASON[own.kind]; }
             l[k || path] = x;
             st.added++;
           } else {
@@ -5339,7 +5699,7 @@
             if ((!x.ages || !x.ages.length) && pi.ages && pi.ages.length) x.ages = pi.ages;
           }
         }
-        GM_setValue(K_LOG, l);
+        gmSet(K_LOG, l);
         show(1);
       } else {
         // a) auf JOYclub gesperrt, aber dem Skript nicht als gesperrt bekannt oder auf der Whitelist → entsperren
@@ -5360,7 +5720,7 @@
             if (!x.ts) x.ts = ts;
             if (!x.type && pi.type) x.type = pi.type;
             if ((!x.ages || !x.ages.length) && pi.ages && pi.ages.length) x.ages = pi.ages;
-            if (!pi.own || !kind || pi.own.kind !== kind || pi.own.source !== source) changes.push({ op: 'fix', path, e, k, kind, source, ts });
+            if (!pi.own || !kind || pi.own.kind !== kind || pi.own.label !== kindLabel(kind) || pi.own.source !== source) changes.push({ op: 'fix', path, e, k, kind, source, ts });
           }
         }
         // b) im Skript gesperrt, auf JOYclub nicht → nachsperren (Whitelist geht vor: dann im Skript entsperren)
@@ -5371,12 +5731,12 @@
           changes.push({ op: 'reblock', path: k, e: { name: x.name, url: x.url || location.origin + k, id: idOf(k) }, k,
             kind: kindOfEntry(x), source: x.source || 'Sync', ts: x.ts || Date.now() });
         }
-        GM_setValue(K_LOG, l);
+        gmSet(K_LOG, l);
         // 2. Änderungen
         const base = show(readUnits / (readUnits + 3 * changes.length));
         for (let ci = 0; ci < changes.length && !bgScan.stop; ci++) {
           const c = changes[ci];
-          const label = c.op === 'unblock' ? `Entsperren${c.clean ? ' + Notiz bereinigen' : ''}` : c.op === 'fix' ? `Notiz angleichen (entsperren, „${c.kind || '…'} (${c.source})“, wieder sperren)` : `Nachsperren mit Notiz „${c.kind || '…'} (${c.source})“`;
+          const label = c.op === 'unblock' ? `Entsperren${c.clean ? ' + Notiz bereinigen' : ''}` : c.op === 'fix' ? `Notiz angleichen (entsperren, „${c.kind ? kindLabel(c.kind) : '…'} (${c.source})“, wieder sperren)` : `Nachsperren mit Notiz „${c.kind ? kindLabel(c.kind) : '…'} (${c.source})“`;
           bgUi(`Änderungen ${ci + 1}/${changes.length}`, `${label}: ${c.e.name}`, show(base + (1 - base) * ci / Math.max(1, changes.length)), stats());
           if (CONFIG.DRY_RUN) { st.plannedOnly++; continue; }
           try {
@@ -5406,8 +5766,8 @@
               if (x) {
                 if (r3.type && !x.type) x.type = r3.type;
                 if (r3.ages && r3.ages.length && (!x.ages || !x.ages.length)) x.ages = r3.ages;
-                if (!x.reason && isCoupleRuleType(r3.type) && r3.ages && r3.ages.length === 2) { const cr = coupleReason(r3.ages); if (cr) x.reason = cr; }
-                delete x.unblocked; GM_setValue(K_LOG, L);
+                if (!x.kind && r3.type) { const jk = judge({ type: r3.type, ages: r3.ages || [] }, x.source || 'Sync').kind; if (jk) { x.kind = jk; if (KIND_REASON[jk] !== 'Alter') x.reason = KIND_REASON[jk]; } }
+                delete x.unblocked; gmSet(K_LOG, L);
               }
             } else st.failed++;
           } catch (err) { if (err.fatal) throw err; st.failed++; }
@@ -5418,7 +5778,7 @@
       const dur = Math.max(1, Math.round((Date.now() - t0) / 60000));
       const summary = mode === 'joyclub' ? `ergänzt ${st.added}, Quelle ${st.srcSet}, entsperrt ${st.markedUnblocked}`
         : `entsperrt ${st.unblocked}, nachgesperrt ${st.reblocked}, Notizen ${st.noteFixed}`;
-      if (!bgScan.stop) GM_setValue(K_SYNC_LAST, { ts: Date.now(), mode: modeName, notes, n: st.n, summary });
+      if (!bgScan.stop) gmSet(K_SYNC_LAST, { ts: Date.now(), mode: modeName, notes, n: st.n, summary });
       bgTitle(bgScan.stop ? 'Synchronisierung abgebrochen' : 'Synchronisierung fertig', false);
       bgUi(`${modeName}${notes ? ' · mit Notizen' : ''}`, `${st.n} auf der Ignorierliste · Dauer ${dur} min` +
         (st.whiteBlocked.length ? `\nAuf der Whitelist, aber gesperrt (bleiben gesperrt): ${st.whiteBlocked.slice(0, 15).join(', ')}${st.whiteBlocked.length > 15 ? ' …' : ''}` : ''),
@@ -5512,25 +5872,28 @@
     for (const c of cards) {
       if (!c.gender || !c.path) continue; // Clubs, Veranstalter usw. bleiben ungefärbt
       const g = Object.assign({}, c);
-      const st = guestStyle(g, ctx);
+      const st = guestStyle(g, ctx, pg.src);
       const host = c.card;
       const cell = host.parentElement || host;
       const blk = g.id && ctx.blocked.get(g.id);
-      const sig = [st.color, st.dashed, st.txt, !!blk, g.ages.join('+')].join('|');
+      const sig = [st.none, st.color, st.dashed, st.txt, !!blk, g.ages.join('+'), showX(st)].join('|');
       if (host.__jafSig !== sig) {
         host.__jafSig = sig;
-        host.style.outline = `${st.dashed ? 2 : 3}px ${st.dashed ? 'dashed' : 'solid'} ${st.color}`;
-        host.style.outlineOffset = '-1px';
         if (getComputedStyle(cell).position === 'static') cell.style.position = 'relative';
         let b = cell.querySelector(':scope > .jaf-badge');
-        if (!b) { b = document.createElement('div'); b.className = 'jaf-badge'; cell.appendChild(b); }
-        const extra = [g.ages.join('+') || '?', st.color === COLORS.red ? st.txt : ''].filter(Boolean).join(' · ');
-        b.textContent = extra + (blk ? ' · ignoriert' : '');
-        b.style.cssText = 'position:absolute;top:6px;left:6px;z-index:5;font:bold 11px system-ui;padding:2px 6px;border-radius:3px;pointer-events:none;' +
-          `background:${st.color};color:${st.fg || (st.color === COLORS.white ? '#000' : '#fff')}`;
+        if (st.none) { host.style.outline = ''; if (b) b.remove(); } else {
+          host.style.outline = `${st.dashed ? 2 : 3}px ${st.dashed ? 'dashed' : 'solid'} ${st.color}`;
+          host.style.outlineOffset = '-1px';
+          if (!b) { b = document.createElement('div'); b.className = 'jaf-badge'; cell.appendChild(b); }
+          const extra = [g.ages.join('+') || '?', st.color === COLORS.red ? st.txt : ''].filter(Boolean).join(' · ');
+          b.textContent = extra + (blk ? ' · ignoriert' : '');
+          b.style.cssText = 'position:absolute;top:6px;left:6px;z-index:5;font:bold 11px system-ui;padding:2px 6px;border-radius:3px;pointer-events:none;' +
+            `background:${st.color};color:${st.fg || (st.color === COLORS.white ? '#000' : '#fff')}`;
+        }
         const x = cell.querySelector(':scope > .jaf-x');
-        if (blk && !x) cell.insertAdjacentHTML('beforeend', `<div class="jaf-x" style="position:absolute;inset:0;z-index:4;pointer-events:none">${X_SVG}</div>`);
-        if (!blk && x) x.remove();
+        const wantX = blk && showX(st);
+        if (wantX && !x) cell.insertAdjacentHTML('beforeend', `<div class="jaf-x" style="position:absolute;inset:0;z-index:4;pointer-events:none">${X_SVG}</div>`);
+        if (!wantX && x) x.remove();
       }
       if (!host.__jafBound) {
         host.__jafBound = true;
@@ -5552,12 +5915,12 @@
     if (!box) return;
     const b = document.createElement('button');
     b.type = 'button';
-    b.title = 'Opa-Scan starten';
+    b.title = opaT('Opa-Scan starten');
     b.dataset.src = pg.src;
     b.className = 'jaf-mj-btn btn-flat-special-light btn btn-default';
     b.style.cssText = 'display:inline-flex;align-items:center;gap:6px;white-space:nowrap';
     b.innerHTML = `<svg viewBox="0 0 640 1280" width="9" height="16" style="fill:currentColor;vertical-align:-2px" aria-hidden="true">` +
-      `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g></svg> <span class="btn-text">Opa-Scan starten</span>`;
+      opaT(`${nickG()}</svg> <span class="btn-text">Opa-Scan starten</span>`);
     b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); mjOpen(pg.src); });
     box.appendChild(b);
   }
@@ -5604,20 +5967,9 @@
   // Karte einordnen: { kind: 'ignore'|'verify'|'skip', why, item }
   function mjClassify(c, ctx, src) {
     if (!c.gender) return { kind: 'skip', why: 'kein Mitgliederprofil (Club/Business)' };
-    if (!CONFIG.PROFILE_PATH_RE.test(c.path || '')) return { kind: 'skip', why: 'kein Mitgliederprofil' };
-    if (ctx.blocked.get(idOf(c.path))) return { kind: 'skip', why: 'bereits ignoriert' };
-    if (isWhiteMember(c, ctx.white)) return { kind: 'skip', why: 'Whitelist' };
-    const item = { path: c.path, url: c.url, name: c.name, ages: c.ages, type: c.type, source: src, seen: c.day || null };
-    if (isCoupleRuleType(c.type)) {
-      if (c.ages.length === 2) {
-        const why = coupleReason(c.ages);
-        return why ? { kind: 'ignore', why, item: Object.assign(item, { reason: why }) } : { kind: 'skip', why: 'Paar erfüllt die Kriterien nicht' };
-      }
-      return { kind: 'verify', why: 'Paar mit nur einer Altersangabe', item: Object.assign(item, { verify: true }) };
-    }
-    if (normType(c.type) === normType('Frau')) return { kind: 'skip', why: 'Frau' };
-    return shouldBlock(c, ctx.white) ? { kind: 'ignore', why: 'Alter', item } : { kind: 'skip', why: 'erfüllt die Kriterien nicht' };
+    return classifyCard(Object.assign({}, c), ctx, src);
   }
+
   // Start-Popup („Jetzt scannen …“) wie beim Party-Scan
   function mjOpen(src) {
     const pg = MYJOY_BY_SRC[src];
@@ -5626,8 +5978,8 @@
     bgScan = null;
     bgBar2(null);
     bgBody(null);
-    const last = (GM_getValue(K_MJ, {}) || {})[src];
-    bgTitle(`Opa-Scan ${pg.label}`, false);
+    const last = (gmGet(K_MJ, {}) || {})[src];
+    bgTitle(opaT(`Opa-Scan ${pg.label}`), false);
     bgUi(`„${pg.tab}“ scannen`, last ? `Letzter vollständiger Scan: ${deDay(last.lastDay)} – geprüft werden alle Einträge ab diesem Tag.`
       : `Noch nie vollständig gescannt – geprüft werden höchstens die neuesten ${CONFIG.MYJOY_FIRST_MAX.toLocaleString('de-DE')} Einträge.`, null,
     (CONFIG.DRY_RUN ? 'Testmodus: es wird nichts ignoriert.\n' : '') +
@@ -5645,11 +5997,11 @@
       const why = scanBlockedReason();
       if (why) { bgUi('Scan zurzeit nicht möglich', why, null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
       if (!(await visGuard())) { closeBgPopup(); return; }
-      if (!(await acquireLock(`Opa-Scan ${pg.label}`))) { bgUi('Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten.', null, ''); return; }
+      if (!(await acquireLock(opaT(`Opa-Scan ${pg.label}`)))) { bgUi('Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten.', null, ''); return; }
       bgScan = { stop: false, running: true };
       window.__jafBgBusy = true;
       window.addEventListener('beforeunload', beforeUnloadGuard);
-      bgTitle('Opa-Scan läuft im Hintergrund', true);
+      bgTitle(opaT('Opa-Scan läuft im Hintergrund'), true);
       bgButtons([bgStopButton()]);
     }
     const st = { checked: 0, ignored: 0, skipped: 0, failed: 0, displaced: 0, limitHit: 0 };
@@ -5660,7 +6012,7 @@
     try {
       bgUi(`„${pg.tab}“`, 'Lese die Ignorierliste …', 0, stats());
       try { await syncIgnoreList(true); } catch (e) { if (e.fatal) throw e; }
-      const last = (GM_getValue(K_MJ, {}) || {})[src];
+      const last = (gmGet(K_MJ, {}) || {})[src];
       const stopDay = last && last.lastDay ? last.lastDay : '';
       const max = stopDay ? 100000 : CONFIG.MYJOY_FIRST_MAX;
       bgUi(null, 'Lade die Liste im Hintergrund …', 0.02, stats());
@@ -5700,14 +6052,14 @@
         if (qi < queue.length - 1) await sleep(rand(CONFIG.DELAY_MIN_MS, CONFIG.DELAY_MAX_MS));
       }
       if (bgScan.stop) complete = false;
-      if (complete && !CONFIG.DRY_RUN) { const m = GM_getValue(K_MJ, {}) || {}; m[src] = { lastDay: today, ts: Date.now() }; GM_setValue(K_MJ, m); }
+      if (complete && !CONFIG.DRY_RUN) { const m = gmGet(K_MJ, {}) || {}; m[src] = { lastDay: today, ts: Date.now() }; gmSet(K_MJ, m); }
       if (emb) return st;
-      bgTitle(bgScan.stop ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', false);
+      bgTitle(bgScan.stop ? opaT('Opa-Scan abgebrochen') : opaT('Opa-Scan fertig'), false);
       bgUi(bgScan.stop ? (bgScan.stopMsg || 'Abgebrochen') : `„${pg.tab}“ fertig`, complete ? 'Alle Einträge bearbeitet.' : 'Nicht alles bearbeitet – der nächste Scan prüft diese Einträge erneut.', bgScan.stop ? null : 1, stats());
     } catch (err) {
       if (emb) { st.error = err.message || String(err); return st; }
-      bgTitle('Opa-Scan nicht möglich', false);
-      bgUi('Opa-Scan nicht möglich', err.message || String(err), null, stats());
+      bgTitle(opaT('Opa-Scan nicht möglich'), false);
+      bgUi(opaT('Opa-Scan nicht möglich'), err.message || String(err), null, stats());
     } finally {
       if (!emb) {
         window.removeEventListener('beforeunload', beforeUnloadGuard);
@@ -5790,8 +6142,8 @@
         updateWatch(members, getLog(), getIgnored(), 'Gruppen');
         const white = whiteList(), log_ = getLog(), ign = getIgnored();
         st.checked += members.length;
-        let hits = members.filter((m) => shouldBlock(m, white) && !isBlocked(m.path, log_, ign))
-          .map((m) => ({ path: m.path, url: m.url, name: m.name, ages: m.ages, type: m.type, source: 'Gruppen', reason: isCoupleRuleType(m.type) ? coupleReason(m.ages) : 'Alter' }));
+        const gctx = { white, blocked: blockedIdMap() };
+        let hits = members.map((m) => classifyCard(m, gctx, 'Gruppen')).filter((r) => r.kind !== 'skip').map((r) => r.item);
         st.skipped += members.length - hits.length;
         const due = dueFromWatch();
         if (due.length) { const inDue = new Set(due.map((d) => d.path)); hits = due.concat(hits.filter((h) => !inDue.has(h.path))); }
@@ -5841,20 +6193,20 @@
   }
   function comboSel() {
     const d = {};
-    for (const k of Object.keys(COMBO_SCANS)) d[k] = k === 'Suche' ? !!CONFIG.SEARCH_IGNORE : true;
-    return Object.assign(d, GM_getValue(K_COMBO_SEL, null) || {});
+    for (const k of Object.keys(COMBO_SCANS)) d[k] = k !== 'Suche';
+    return Object.assign(d, gmGet(K_COMBO_SEL, null) || {});
   }
   function comboOpen() {
     if (bgScan && bgScan.running) { bgPopup(); return; }
     closeBgPopup();
     bgScan = null;
     bgBar2(null);
-    bgTitle('Opa-Scan', false);
+    bgTitle(opaT('Opa-Scan'), false);
     bgUi('', '', null, '');
     const wrap = document.createElement('div');
-    wrap.innerHTML = '<p style="margin:0 0 8px">Der Opa-Scan führt alle ausgewählten Scans nacheinander durch – in der Reihenfolge, in der die Quellen unter ' +
-      '<i>Opa-Schutz › Rangfolge der Quellen</i> eingestellt sind.</p>' +
-      '<p style="margin:0 0 12px;opacity:.75">Gefundene Opas, Sugar Daddys und Geronto-Paare werden mit Notiz ignoriert. Ist die Ignorierliste voll, ' +
+    wrap.innerHTML = opaT('<p style="margin:0 0 8px">Der Opa-Scan führt alle ausgewählten Scans nacheinander durch – in der Reihenfolge, in der die Quellen unter ') +
+      opaT('<i>Opa-Schutz › Rangfolge der Quellen</i> eingestellt sind.</p>') +
+      `<p style="margin:0 0 12px;opacity:.75">Treffer (${escHtml(ignoredKindsText())}) werden mit Notiz ignoriert. Ist die Ignorierliste voll, ` +
       'verdrängen sie nur Einträge aus gleich- oder niedrigerrangigen Quellen.</p><div class="jaf-combo-list"></div>' +
       '<div style="font-size:12px;opacity:.6;margin:6px 0 0">Deine Auswahl wird gemerkt.</div>';
     const list = wrap.querySelector('.jaf-combo-list');
@@ -5867,19 +6219,13 @@
       cb.checked = !!sel[k]; cb.value = k;
       l.querySelector('b').textContent = `${i + 1}. ${SOURCE_LABELS[k] || k}`;
       l.querySelector('.jaf-d').textContent = COMBO_SCANS[k].desc;
-      if (k === 'Suche' && !CONFIG.SEARCH_IGNORE) {
-        const w = document.createElement('span');
-        w.style.cssText = 'display:block;color:#ff8a80;font-size:12px';
-        w.textContent = 'Sammelt nur Statistiken, da das Ignorieren in der Mitgliederliste inaktiv ist!';
-        l.querySelector('span').appendChild(w);
-      }
-      cb.addEventListener('change', () => { const s2 = comboSel(); s2[k] = cb.checked; GM_setValue(K_COMBO_SEL, s2); refresh(); });
+      cb.addEventListener('change', () => { const s2 = comboSel(); s2[k] = cb.checked; gmSet(K_COMBO_SEL, s2); refresh(); });
       list.appendChild(l);
     });
     const refresh = () => {
       const any = [...list.querySelectorAll('input:checked')].length;
       bgButtons([
-        { label: 'Opa-Scan starten', primary: true, disabled: !any, fn: () => comboRun() },
+        { label: opaT('Opa-Scan starten'), primary: true, disabled: !any, fn: () => comboRun() },
         { label: 'Abbrechen', fn: closeBgPopup, focus: !wrap.__init },
       ]);
       wrap.__init = true;
@@ -5898,13 +6244,13 @@
     bgPopup().querySelector('.jaf-bg-party').style.display = '';
     bgPopup().querySelector('.jaf-bg-step').style.display = '';
     const why = scanBlockedReason();
-    if (why) { bgUi('Opa-Scan zurzeit nicht möglich', why, null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
+    if (why) { bgUi(opaT('Opa-Scan zurzeit nicht möglich'), why, null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
     if (!(await visGuard())) { closeBgPopup(); return; }
-    if (!(await acquireLock('Opa-Scan (alle)'))) { bgUi('Opa-Scan zurzeit nicht möglich', 'Ein anderer Tab hat gerade begonnen zu arbeiten.', null, ''); return; }
+    if (!(await acquireLock(opaT('Opa-Scan (alle)')))) { bgUi(opaT('Opa-Scan zurzeit nicht möglich'), 'Ein anderer Tab hat gerade begonnen zu arbeiten.', null, ''); return; }
     bgScan = { stop: false, running: true };
     window.__jafBgBusy = true;
     window.addEventListener('beforeunload', beforeUnloadGuard);
-    bgTitle('Opa-Scan läuft im Hintergrund', true);
+    bgTitle(opaT('Opa-Scan läuft im Hintergrund'), true);
     bgButtons([bgStopButton()]);
     const t0 = Date.now();
     const rows = [];
@@ -5927,9 +6273,8 @@
         } else if (k === 'Gruppen') r = await grpRun();
         else r = await msRun(Object.assign({ mode: 'system' }, msSettings()), true);
         r = r || {};
-        const statOnly = k === 'Suche' && !CONFIG.SEARCH_IGNORE;
         rows.push({ k, label, checked: k === 'Suche' ? (r.seen ? r.seen.size : 0) : (r.checked || 0), ignored: r.ignored || 0, displaced: r.displaced || 0,
-          limitHit: r.limitHit || 0, would: statOnly ? (r.would || 0) : null, failed: r.failed || 0, error: r.error || '' });
+          limitHit: r.limitHit || 0, failed: r.failed || 0, error: r.error || '' });
       }
     } catch (err) {
       rows.push({ k: '', label: 'Fehler', error: err.message || String(err) });
@@ -5942,7 +6287,7 @@
       bgScan = null;
       releaseLock();
       const dur = Math.max(1, Math.round((Date.now() - t0) / 60000));
-      bgTitle(stopped ? 'Opa-Scan abgebrochen' : 'Opa-Scan fertig', false);
+      bgTitle(stopped ? opaT('Opa-Scan abgebrochen') : opaT('Opa-Scan fertig'), false);
       bgUi(stopped ? (stopMsg || 'Abgebrochen') : 'Alle ausgewählten Scans abgeschlossen', `Dauer ${dur >= 60 ? `${Math.floor(dur / 60)}:${pad2(dur % 60)} h` : `${dur} min`} · ${fillText()}`, stopped ? null : 1, '');
       const tbl = document.createElement('div');
       tbl.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px"><thead><tr style="opacity:.7;text-align:right">' +
@@ -5953,7 +6298,7 @@
         const tr = document.createElement('tr');
         tr.style.cssText = 'border-top:1px solid #2e3236;text-align:right';
         const cells = r.error && !r.checked ? [r.label, { t: r.error, span: 4 }]
-          : [r.label, r.checked, r.would != null ? `würden ignoriert: ${r.would}` : r.ignored, r.would != null ? '–' : r.displaced, r.would != null ? '–' : r.limitHit];
+          : [r.label, r.checked, r.ignored, r.displaced, r.limitHit];
         cells.forEach((c, ci) => {
           const td = document.createElement('td');
           td.style.cssText = `padding:3px 4px;${ci === 0 ? 'text-align:left;font-weight:bold' : ''}`;
@@ -5964,11 +6309,10 @@
       }
       bgBody(tbl);
       const btns = [];
-      if (rows.some((r) => r.would)) btns.push({ label: 'Liste „würden ignoriert“ exportieren (CSV)', fn: () => exportMsWould() });
       if (rows.some((r) => r.failed && r.k === 'Party')) btns.push({ label: 'Fehlschläge (Partys) exportieren (CSV)', fn: () => exportEvFailures() });
       btns.push({ label: 'Schließen', fn: closeBgPopup, focus: true });
       bgButtons(btns);
-      GM_setValue(K_VIS_RUN, Object.assign({}, visRun() || {}, { ts: 0 }));
+      gmSet(K_VIS_RUN, Object.assign({}, visRun() || {}, { ts: 0 }));
       updateTopButton();
     }
   }
@@ -6001,13 +6345,13 @@
     if (menu) {
       if (!menu.querySelector('.jaf-menu-scan')) {
         const pv = [...menu.querySelectorAll('a[href]')].find((a) => pathOfHref(a) === '/edit');
-        const li = menuLi('jaf-menu-scan', opaLupeSvg(20), 'Opa-Scan', '#', () => { closeMainMenu(); comboOpen(); });
+        const li = menuLi('jaf-menu-scan', opaLupeSvg(20), opaT('Opa-Scan'), '#', () => { closeMainMenu(); comboOpen(); });
         if (pv) pv.closest('li').before(li);
         else { const t = menu.querySelector('li.menu_title'); if (t) t.after(li); else menu.prepend(li); }
       }
       if (!menu.querySelector('.jaf-menu-schutz')) {
         const inv = [...menu.querySelectorAll('a[href]')].find((a) => pathOfHref(a) === '/edit/invisible');
-        const li = menuLi('jaf-menu-schutz', opaIconSvg(18), 'Opa-Schutz', settingsUrl(), null);
+        const li = menuLi('jaf-menu-schutz', opaIconSvg(18), opaT('Opa-Schutz'), settingsUrl(), null);
         if (inv) inv.closest('li').before(li); else menu.appendChild(li);
       }
     }
@@ -6018,7 +6362,7 @@
       if (inv) {
         const li = document.createElement('li');
         li.className = 'jaf-sn-schutz';
-        li.innerHTML = `<a href="${settingsUrl()}" class="sn">Opa-Schutz</a>`;
+        li.innerHTML = opaT(`<a href="${settingsUrl()}" class="sn">Opa-Schutz</a>`);
         inv.closest('li').before(li);
       }
     }
@@ -6044,7 +6388,7 @@
       li = document.createElement('li');
       li.id = 'jaf-top-opa';
       li.className = 'hidden-xs hidden-sm';
-      li.title = 'Opa-Schutz';
+      li.title = opaT('Opa-Schutz');
       li.innerHTML = `<a href="${settingsUrl()}"><span class="nav_link_icon" aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center">${opaIconSvg(20)}</span><span class="item_text"></span></a>`;
       if (kontakte && kontakte.parentElement === links) kontakte.after(li); else links.appendChild(li);
     }
@@ -6059,11 +6403,263 @@
   // Aufbau wie JOYclubs Seite „Account“: Abschnitte (div.h2 > h2), Tabellenzeilen (th.td_fh / td.td_fc), Hinweise (c_hint_lo),
   // Buttons „Speichern“ / „Abbrechen“. Ein Teil steht unter „Experten-Einstellungen“ (immer zugeklappt).
   // =====================================================================
-  const ALL_TYPES = ['Mann', 'Transmann', 'Non-binary', 'Transvestit', 'Männer-Paar', 'Frau', 'Transfrau', 'Paar', 'Frauen-Paar'];
   let settingsDraft = null;   // Arbeitskopie der Einstellungen + autoDel (zu löschende automatische Whitelist-Einträge)
   let settingsDirty = false;
   const cloneJ = (x) => JSON.parse(JSON.stringify(x));
   const sortDe = (arr) => arr.slice().sort((a, b) => a.localeCompare(b, 'de', { sensitivity: 'base' }));
+  // =====================================================================
+  // ---------- Regeln anwenden: Plan, Anwenden, Ignorierliste reparieren ----------
+  // =====================================================================
+  const handMade = (e) => !e || (!e.source && /JOYclub-Ignorierliste/.test(e.method || ''));
+  // Alter heute: aus den Geburtszeiträumen, sonst aus dem gespeicherten Alter
+  function agesNow(path, acc, e, m) {
+    const a = acc[path];
+    if (a && a.persons && a.persons.length) { const x = a.persons.map(ageNow); if (x.every((v) => v != null)) return x; }
+    return (e && e.ages && e.ages.length ? e.ages : (m && m.ages)) || [];
+  }
+  // Wichtigkeit (zum Behalten): kleinere Zahl = wichtiger – Umkehrung der Verdrängungs-Reihenfolge
+  function prioCmp(a, b) {
+    const today = isoDay(new Date());
+    const past = (x) => (x.seen || '1970-01-01') < today;
+    return srcRank(a.src) - srcRank(b.src) || kindRank(b.kind) - kindRank(a.kind) || (past(a) - past(b)) ||
+      (past(a) && past(b) ? (b.seen || '').localeCompare(a.seen || '') : 0) || (b.d || 0) - (a.d || 0);
+  }
+  // Was würden die Einstellungen cfg bewirken? (ohne etwas zu ändern)
+  function planRules(cfg = CONFIG) {
+    const acc = getAccounts(), log_ = getLog(), ign = getIgnored(), mem = getMem();
+    const white = whiteList();
+    const ignIds = new Set(Object.keys(ign).map(idOf));
+    const managed = new Map();
+    for (const [p, e] of Object.entries(log_)) if (!e.unblocked && ignIds.has(idOf(p)) && !handMade(e)) managed.set(p, e);
+    const managedIds = new Set([...managed.keys()].map(idOf));
+    const hand = Object.keys(ign).filter((p) => !managedIds.has(idOf(p))).length; // von Hand / Whitelist gesperrt: belegen Plätze
+    const want = new Map(), unclear = [];
+    const paths = new Set([...Object.keys(acc), ...Object.keys(log_), ...Object.keys(mem)].filter((p) => CONFIG.PROFILE_PATH_RE.test(p)));
+    for (const p of paths) {
+      const a = acc[p], e = log_[p], m = mem[p];
+      const type = (a && a.type) || (e && e.type) || (m && m.type) || '';
+      const name = (a && a.name) || (e && e.name) || (m && m.name) || '';
+      if (!type || isWhiteMember({ name, path: p }, white)) continue;
+      const ages = agesNow(p, acc, e, m);
+      const srcs = [...new Set(Object.keys((a && a.srcs) || {}).concat([e && e.source, m && m.src]).filter((q) => q && q !== 'Sync'))];
+      const c = { type, ages, name, path: p };
+      const bs = bestSource(c, srcs.length ? srcs : [ALTBESTAND], cfg);
+      const seen = (e && e.seen) || (a && a.seen) || '';
+      if (bs) {
+        const it = { path: p, url: (a && a.url) || (e && e.url) || location.origin + p, name, type, ages, src: bs.src, kind: bs.j.kind, seen };
+        it.d = daysOver(p, Object.assign({}, e || {}, { source: bs.src, type, ages }), bs.j.kind);
+        want.set(p, it);
+      } else if (srcs.concat(srcs.length ? [] : [ALTBESTAND]).some((q) => { const j = judge(c, q, cfg); return j.unclear && j.group && cfg.GROUPS[j.group].ignore; })) unclear.push(p);
+    }
+    const unclearSet = new Set(unclear);
+    const removed = [...managed.keys()].filter((p) => !want.has(p) && !unclearSet.has(p));
+    const added = [...want.keys()].filter((p) => !ignIds.has(idOf(p)));
+    const notes = [...managed.entries()].filter(([p, e]) => want.has(p) && kindLabel(want.get(p).kind, cfg) !== kindLabel(entryKind(e), CONFIG)).map(([p]) => p);
+    return { cur: Object.keys(ign).length, hand, managed, want, removed, added, notes, unclear, total: hand + want.size };
+  }
+  // nach dem Speichern: Scan-Gedächtnis zurücksetzen (Partys, Gruppen, Profilbesucher/„Mögen mich“)
+  function resetScanMemory() {
+    const ev = getEvents(); for (const e of Object.values(ev)) { delete e.seen; delete e.seenRules; } gmSet(K_EVENTS, ev);
+    gmSet(K_GROUP_DONE, {});
+    gmSet(K_MJ, {});
+  }
+  // Neue Regeln anwenden. mode: 'all' | 'unblock' | 'block'; recheck = unklare Mitglieder auf dem Profil nachlesen
+  async function applyRules(mode, recheck) {
+    if (bgScan && bgScan.running) return;
+    const why = scanBlockedReason();
+    closeBgPopup();
+    bgTitle('Neue Einstellungen anwenden', false);
+    if (why) { bgUi('Zurzeit nicht möglich', why, null, 'Die Einstellungen sind gespeichert. Anwenden kannst Du sie später über „Ignorierliste reparieren“ oder den nächsten Opa-Scan.'); bgButtons([{ label: 'Schließen', fn: () => location.reload(), focus: true }]); return; }
+    if (!(await visGuard())) { location.reload(); return; }
+    if (!(await acquireLock('Einstellungen anwenden'))) { bgUi('Zurzeit nicht möglich', 'Ein anderer Tab arbeitet gerade.', null, ''); bgButtons([{ label: 'Schließen', fn: () => location.reload(), focus: true }]); return; }
+    bgScan = { stop: false, running: true };
+    window.__jafBgBusy = true;
+    window.addEventListener('beforeunload', beforeUnloadGuard);
+    bgTitle('Neue Einstellungen anwenden', true);
+    bgButtons([bgStopButton()]);
+    const st = { checked: 0, unblocked: 0, ignored: 0, notes: 0, displaced: 0, limitHit: 0, failed: 0, trimmed: 0 };
+    const stats = () => `Profile nachgelesen: ${st.checked} · entsperrt: ${st.unblocked} · gesperrt: ${st.ignored} · Notizen angepasst: ${st.notes}\n` +
+      `verdrängt: ${st.displaced} · Limit erreicht: ${st.limitHit} · Limit verringert, entsperrt: ${st.trimmed} · fehlgeschlagen: ${st.failed}\n${fillText()}` +
+      (CONFIG.DRY_RUN ? '\nTestmodus: auf JOYclub wird nichts verändert' : '');
+    try {
+      bgUi('Ignorierliste', 'Lese die Ignorierliste …', 0, stats());
+      try { await syncIgnoreList(true); } catch (e) { /* egal */ }
+      let plan = planRules();
+      if (recheck && plan.unclear.length) {
+        for (let i = 0; i < plan.unclear.length && !bgScan.stop; i++) {
+          const p = plan.unclear[i];
+          bgUi('Unklare Mitglieder prüfen', `${i + 1}/${plan.unclear.length}`, 0.05 + 0.25 * i / plan.unclear.length, stats());
+          try {
+            await visEnforce();
+            await sleep(rand(600, 1300));
+            const r = await jfetch(location.origin + p);
+            const info = r.doc ? parseProfileDoc(r.doc) : null;
+            if (info && info.ages && info.ages.length) recordAccounts([{ path: p, name: info.name, ages: info.ages, type: info.type, signs: info.signs }]);
+            st.checked++;
+          } catch (err) { if (err.fatal) throw err; st.failed++; }
+        }
+        plan = planRules();
+      }
+      const log_ = getLog();
+      // 1. entsperren, was die Regeln nicht mehr erfüllt
+      if ((mode === 'all' || mode === 'unblock') && !bgScan.stop) {
+        for (let i = 0; i < plan.removed.length && !bgScan.stop; i++) {
+          const p = plan.removed[i], e = log_[p] || {};
+          bgUi('Entsperren', `${i + 1}/${plan.removed.length} · ${e.name || p}`, 0.3 + 0.2 * i / plan.removed.length, stats());
+          if (CONFIG.DRY_RUN) { st.unblocked++; continue; }
+          let r;
+          try { r = await bgUnignore(idOf(p)); } catch (err) { if (err.fatal) throw err; r = { ok: false }; }
+          if (!r.ok) { st.failed++; continue; }
+          markUnblocked(p, e, 'entsperrt (Einstellungen geändert)');
+          st.unblocked++;
+          if (CONFIG.WRITE_NOTE) { try { await actJob({ path: p, url: e.url || location.origin + p, name: e.name, action: 'clean' }, 'Einstellungen'); } catch (err) { if (err.fatal) throw err; } }
+        }
+      }
+      // 2. Limit verringert → überzählige in Verdrängungs-Reihenfolge entsperren
+      if (mode !== 'block' && !CONFIG.DRY_RUN) {
+        while (ignCount() > CONFIG.IGNORE_LIMIT && !bgScan.stop) {
+          const v = pickVictim({ source: CONFIG.SOURCE_RANK[0], kind: 'sd', type: 'Paar' });
+          if (!v) break;
+          bgUi('Limit', `entsperre ${v.e.name} (${v.why})`, 0.5, stats());
+          let r;
+          try { r = await bgUnignore(idOf(v.p)); } catch (err) { if (err.fatal) throw err; r = { ok: false }; }
+          if (!r.ok) { st.failed++; break; }
+          markUnblocked(v.p, v.e, 'entsperrt (Platz, Limit verringert)');
+          st.trimmed++;
+        }
+      }
+      // 3. sperren, was neu dazukommt (wichtigste zuerst)
+      if ((mode === 'all' || mode === 'block') && !bgScan.stop) {
+        const add = plan.added.map((p) => plan.want.get(p)).sort(prioCmp);
+        for (let i = 0; i < add.length && !bgScan.stop; i++) {
+          const w = add[i];
+          bgUi('Sperren', `${i + 1}/${add.length} · ${w.name}`, 0.5 + 0.3 * i / add.length, stats());
+          const it = { path: w.path, url: w.url, name: w.name, ages: w.ages, type: w.type, kind: w.kind, source: w.src, seen: w.seen, verify: true };
+          let r;
+          try { r = await blockItem(it, w.src, st); } catch (err) { if (err.fatal) throw err; r = { result: 'failed' }; }
+          if (r.result === 'ignored') st.ignored++; else if (r.result !== 'limit' && r.result !== 'skipped') st.failed++;
+          await sleep(rand(CONFIG.DELAY_MIN_MS, CONFIG.DELAY_MAX_MS));
+        }
+      }
+      // 4. Notizen an die neuen Bezeichnungen angleichen
+      if (mode === 'all' && CONFIG.WRITE_NOTE && !bgScan.stop) {
+        for (let i = 0; i < plan.notes.length && !bgScan.stop; i++) {
+          const p = plan.notes[i], e = log_[p] || {}, w = plan.want.get(p);
+          bgUi('Notizen', `${i + 1}/${plan.notes.length} · ${e.name || p}`, 0.8 + 0.1 * i / plan.notes.length, stats());
+          if (CONFIG.DRY_RUN) { st.notes++; continue; }
+          let r;
+          try { r = await actJob({ path: p, url: e.url || location.origin + p, name: e.name, action: 'sync', kind: w.kind, source: e.source || w.src, ts: e.ts || Date.now(), block: false }, 'Einstellungen'); }
+          catch (err) { if (err.fatal) throw err; r = { result: 'failed' }; }
+          if (r.result === 'note') { st.notes++; const L = getLog(); if (L[p]) { L[p].kind = w.kind; gmSet(K_LOG, L); } } else st.failed++;
+        }
+      }
+      // 5. JOYclub-Liste gegen die erwarteten Einträge prüfen und reparieren
+      if (!bgScan.stop) {
+        bgUi('Ignorierliste prüfen', 'Lese die Ignorierliste …', 0.9, stats());
+        await syncIgnoreList(true);
+        const rp = repairPlan();
+        if (rp.missing.length) await runRepair(rp, st, stats);
+      }
+      bgTitle(bgScan.stop ? 'Anwenden abgebrochen' : 'Neue Einstellungen angewendet', false);
+      bgUi(bgScan.stop ? (bgScan.stopMsg || 'Abgebrochen') : 'Fertig', '', bgScan.stop ? null : 1, stats());
+    } catch (err) {
+      bgTitle('Anwenden nicht möglich', false);
+      bgUi('Fehler', err.message || String(err), null, stats());
+    } finally {
+      window.removeEventListener('beforeunload', beforeUnloadGuard);
+      window.__jafBgBusy = false;
+      bgScan = null;
+      releaseLock();
+      bgButtons([{ label: 'Schließen', fn: () => location.reload(), focus: true }]);
+    }
+  }
+  // ---- „Ignorierliste reparieren“ ----
+  // fehlend = vom Skript gesperrt, steht aber nicht (mehr) auf JOYclub (z. B. Überlauf);
+  // weniger wichtig = gesperrte Einträge, die für wichtigere fehlende weichen würden; von Hand gesperrte bleiben unberührt.
+  function repairPlan() {
+    const acc = getAccounts(), log_ = getLog(), ign = getIgnored(), mem = getMem();
+    const ignIds = new Set(Object.keys(ign).map(idOf));
+    const white = whiteList();
+    const toItem = (p, e) => {
+      const type = e.type || (acc[p] || {}).type || '';
+      const ages = agesNow(p, acc, e, mem[p]);
+      const kind = entryKind(Object.assign({}, e, { type, ages }));
+      const it = { path: p, url: e.url || location.origin + p, name: e.name || (acc[p] || {}).name || '', type, ages, kind, src: e.source || ALTBESTAND, seen: e.seen || '' };
+      it.d = daysOver(p, e, kind);
+      return it;
+    };
+    const missing = [], present = [];
+    for (const [p, e] of Object.entries(log_)) {
+      if (e.unblocked || handMade(e) || isWhiteMember({ name: e.name, path: p }, white)) continue;
+      (ignIds.has(idOf(p)) ? present : missing).push(toItem(p, e));
+    }
+    missing.sort(prioCmp);
+    const presentIds = new Set(present.map((x) => idOf(x.path)));
+    const hand = Object.keys(ign).filter((p) => !presentIds.has(idOf(p))).length;
+    const free = Math.max(0, CONFIG.IGNORE_LIMIT - Object.keys(ign).length);
+    // wie viele vorhandene müssten für fehlende weichen? (nur weniger wichtige)
+    const asc = present.slice().sort((a, b) => prioCmp(b, a)); // unwichtigste zuerst
+    let less = 0, k = 0;
+    for (const m of missing.slice(free)) { if (k < asc.length && prioCmp(m, asc[k]) < 0) { less++; k++; } }
+    return { missing, present, hand, free, less };
+  }
+  async function runRepair(rp, st, stats) {
+    for (let i = 0; i < rp.missing.length && !bgScan.stop; i++) {
+      const m = rp.missing[i];
+      bgUi('Reparieren', `${i + 1}/${rp.missing.length} · ${m.name}`, 0.9 + 0.1 * i / rp.missing.length, stats());
+      const e = getLog()[m.path] || {};
+      markUnblocked(m.path, e, 'von JOYclub entfernt (Überlauf)');
+      if (CONFIG.DRY_RUN) continue;
+      const it = { path: m.path, url: m.url, name: m.name, ages: m.ages, type: m.type, kind: m.kind, source: m.src === ALTBESTAND ? '' : m.src, seen: m.seen };
+      let r;
+      try { r = await blockItem(it, it.source, st); } catch (err) { if (err.fatal) throw err; r = { result: 'failed' }; }
+      if (r.result === 'ignored') { st.ignored++; st.repaired = (st.repaired || 0) + 1; } else if (r.result !== 'limit') st.failed++;
+      await sleep(rand(CONFIG.DELAY_MIN_MS, CONFIG.DELAY_MAX_MS));
+    }
+  }
+  async function repairOpen() {
+    if (bgScan && bgScan.running) { bgPopup(); return; }
+    closeBgPopup();
+    bgTitle('Ignorierliste reparieren', false);
+    bgUi('Lese die Ignorierliste …', '', null, '');
+    bgButtons([{ label: 'Abbrechen', fn: closeBgPopup, focus: true }]);
+    try { await syncIgnoreList(true); } catch (e) { /* egal */ }
+    const rp = repairPlan();
+    bgUi('Abgleich mit JOYclub', '', null,
+      `Fehlen auf JOYclub (vom Skript gesperrt, z. B. durch Überlauf herausgefallen): ${rp.missing.length}\n` +
+      `Weniger wichtige Einträge, die dafür weichen würden: ${rp.less}\n` +
+      `Von Hand gesperrt (bleiben unberührt): ${rp.hand}\n${fillText()}`);
+    bgButtons([
+      { label: 'Jetzt reparieren', disabled: !rp.missing.length, fn: () => repairRun() },
+      { label: 'Abbrechen', fn: closeBgPopup, focus: true },
+    ]);
+  }
+  async function repairRun() {
+    const why = scanBlockedReason();
+    if (why) { bgUi('Zurzeit nicht möglich', why, null, ''); bgButtons([{ label: 'Schließen', fn: closeBgPopup, focus: true }]); return; }
+    if (!(await visGuard())) { closeBgPopup(); return; }
+    if (!(await acquireLock('Ignorierliste reparieren'))) { bgUi('Zurzeit nicht möglich', 'Ein anderer Tab arbeitet gerade.', null, ''); return; }
+    bgScan = { stop: false, running: true };
+    window.__jafBgBusy = true;
+    window.addEventListener('beforeunload', beforeUnloadGuard);
+    bgTitle('Ignorierliste reparieren', true);
+    bgButtons([bgStopButton()]);
+    const st = { ignored: 0, repaired: 0, displaced: 0, limitHit: 0, failed: 0 };
+    const stats = () => `wieder gesperrt: ${st.repaired} · verdrängt: ${st.displaced} · Limit erreicht: ${st.limitHit} · fehlgeschlagen: ${st.failed}\n${fillText()}`;
+    try {
+      await runRepair(repairPlan(), st, stats);
+      bgTitle(bgScan.stop ? 'Reparatur abgebrochen' : 'Ignorierliste repariert', false);
+      bgUi(bgScan.stop ? 'Abgebrochen' : 'Fertig', '', bgScan.stop ? null : 1, stats());
+    } catch (err) {
+      bgTitle('Reparatur nicht möglich', false); bgUi('Fehler', err.message || String(err), null, stats());
+    } finally {
+      window.removeEventListener('beforeunload', beforeUnloadGuard);
+      window.__jafBgBusy = false;
+      bgScan = null;
+      releaseLock();
+      bgButtons([{ label: 'Schließen', fn: () => location.reload(), focus: true }]);
+    }
+  }
   function settingsGuardClick(e) {
     if (!settingsDirty) return;
     const a = e.target && e.target.closest && e.target.closest('a[href]');
@@ -6089,13 +6685,334 @@
     const vals = {};
     for (const k of SETTING_KEYS) vals[k] = d[k];
     saveSettings(vals);
+    for (const k of SETTING_KEYS) CONFIG[k] = cloneJ(d[k]);
+    rememberNoteLabels();
     // automatische Whitelist: gelöschte Einträge und solche, die jetzt auf der eigenen Whitelist stehen, entfernen
     const own = new Set(Object.values(d.WHITELIST || {}).flat().map(norm));
     const w = getDynWhite();
     let ch = false;
     for (const k of Object.keys(w)) if (d.autoDel.includes(k) || own.has(k)) { delete w[k]; ch = true; }
-    if (ch) { GM_setValue(K_WHITE, w); _wIdCache.t = 0; }
+    if (ch) { gmSet(K_WHITE, w); _wIdCache.t = 0; }
     settingsDirty = false;
+  }
+  // ---------- Bausteine der Einstellungsseite (Regler, Schalter) ----------
+  const SET_CSS = '.jaf-sl{position:relative;height:30px;margin-top:12px;touch-action:none;min-width:120px}' +
+    '.jaf-sl .tr{position:absolute;top:13px;left:0;right:0;height:4px;background:rgba(127,127,127,.35);border-radius:2px}' +
+    '.jaf-sl .seg{position:absolute;top:13px;height:4px;border-radius:2px}' +
+    '.jaf-sl .kn{position:absolute;top:6px;width:18px;height:18px;margin-left:-9px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.7);cursor:grab;outline:none}' +
+    '.jaf-sl .kn:focus{box-shadow:0 0 0 2px #c71b1b}.jaf-sl .kn span{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-size:11px;opacity:.85;pointer-events:none}' +
+    '.jaf-sl.w .kn.k1{margin-left:-18px}.jaf-sl.w .kn.k2{margin-left:0}' +
+    '.jaf-wl{position:relative;height:16px;font-size:12px;opacity:.85}.jaf-wl span{position:absolute;text-align:center;white-space:nowrap;overflow:hidden}' +
+    '.jaf-tg{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;cursor:pointer;user-select:none;font-weight:normal}' +
+    '.jaf-tg i{position:relative;width:38px;height:22px;border-radius:11px;background:#7a7f84;display:inline-block;transition:background .15s}' +
+    '.jaf-tg i:after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}' +
+    '.jaf-tg.on i{background:#43a047}.jaf-tg.on i:after{left:19px}' +
+    'table.jaf-src{width:100%;border-collapse:collapse}table.jaf-src th{font-weight:normal;opacity:.7;font-size:12px;text-align:left;padding:2px 6px}' +
+    'table.jaf-src td{padding:4px 6px;border-top:1px solid rgba(127,127,127,.2);font-size:13px;white-space:nowrap;vertical-align:middle}' +
+    'table.jaf-src td.v{width:48%}table.jaf-src td.i{width:30%}table.jaf-src tr.sw td{border-top:0}.jaf-who{display:inline-block;margin-left:6px;opacity:.6;font-size:11px}' +
+    'table.jaf-nm{border-collapse:collapse}table.jaf-nm th{font-weight:normal;opacity:.7;font-size:12px;text-align:left;padding:0 6px}table.jaf-nm td{padding:2px 6px 2px 0;font-size:12px}' +
+    'table.jaf-nm input{width:120px;display:inline-block}.jaf-num{width:64px!important;display:inline-block!important}' +
+    '.jaf-info{display:grid;grid-template-columns:auto auto;gap:4px 18px;background:rgba(127,127,127,.12);border-radius:8px;padding:10px 14px;margin:6px 0 4px;width:max-content;max-width:100%}' +
+    '.jaf-info b{font-variant-numeric:tabular-nums}.jaf-cb{display:inline-flex;align-items:center;gap:6px;margin:2px 14px 2px 0;font-weight:normal;cursor:pointer}';
+  function ensureSetCss() {
+    if (document.getElementById('jaf-set-css')) return;
+    const st = document.createElement('style'); st.id = 'jaf-set-css'; st.textContent = SET_CSS; document.head.appendChild(st);
+  }
+  function mkToggle(on, label, fn) {
+    const t = document.createElement('label');
+    t.className = 'jaf-tg' + (on ? ' on' : '');
+    t.tabIndex = 0;
+    t.innerHTML = '<i></i><span></span>';
+    t.querySelector('span').textContent = label;
+    const flip = (e) => { e.preventDefault(); fn(!t.classList.contains('on')); };
+    t.addEventListener('click', flip);
+    t.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') flip(e); });
+    return t;
+  }
+  // Regler 18–100: kind 'vis' (zwei Griffe: Stufe 1 bis · Stufe 2 bis), 'ign' (ein Griff: ignorieren ab), 'w' (Gewichtung 0–100, zwei Griffe)
+  function mkSlider(kind, vals, onInput, onDone) {
+    const MIN = kind === 'w' ? 0 : 18, MAX = 100;
+    const el = document.createElement('div');
+    el.className = 'jaf-sl' + (kind === 'w' ? ' w' : '');
+    el.innerHTML = '<div class="tr"></div>';
+    const segs = (kind === 'vis' ? ['#43a047', '#ffb74d', '#e53935'] : kind === 'ign' ? ['rgba(127,127,127,.6)', '#e53935'] : ['#5c8dd6', '#e0a33c', '#b06ad6'])
+      .map((c) => { const s = document.createElement('div'); s.className = 'seg'; s.style.background = c; el.appendChild(s); return s; });
+    let v = vals.slice();
+    const knobs = v.map((x, i) => {
+      const k = document.createElement('div');
+      k.className = 'kn k' + (i + 1); k.tabIndex = 0; k.setAttribute('role', 'slider');
+      if (kind !== 'w') k.innerHTML = '<span></span>';
+      el.appendChild(k);
+      return k;
+    });
+    const pos = (x) => ((x - MIN) / (MAX - MIN)) * 100;
+    const clampI = (i, x) => {
+      x = Math.round(Math.max(MIN, Math.min(MAX, x)));
+      const gap = kind === 'w' ? 0 : 1;
+      if (i === 0 && v.length > 1) x = Math.min(x, v[1] - gap);
+      if (i === 1) x = Math.max(x, v[0] + gap);
+      return x;
+    };
+    const tip = () => {
+      if (kind !== 'w') return;
+      knobs[0].title = `Männer = ${v[0]} % / Frauen = ${v[1] - v[0]} %`;
+      knobs[1].title = `Frauen = ${v[1] - v[0]} % / Paare = ${100 - v[1]} %`;
+    };
+    const render = () => {
+      const p = v.map(pos);
+      const cuts = [0].concat(p, [100]);
+      segs.forEach((s, i) => { s.style.left = cuts[i] + '%'; s.style.width = Math.max(0, cuts[i + 1] - cuts[i]) + '%'; });
+      knobs.forEach((k, i) => { k.style.left = p[i] + '%'; if (k.firstChild) k.firstChild.textContent = v[i]; k.setAttribute('aria-valuenow', v[i]); });
+      tip();
+    };
+    const setI = (i, x) => { const n = clampI(i, x); if (n === v[i]) return; v[i] = n; render(); onInput(v.slice(), i); };
+    knobs.forEach((k, i) => {
+      k.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); k.setPointerCapture(e.pointerId); k.focus();
+        const mv = (ev) => { const r = el.getBoundingClientRect(); setI(i, MIN + ((ev.clientX - r.left) / r.width) * (MAX - MIN)); };
+        const up = () => { k.removeEventListener('pointermove', mv); k.removeEventListener('pointerup', up); k.removeEventListener('pointercancel', up); if (onDone) onDone(v.slice()); };
+        k.addEventListener('pointermove', mv); k.addEventListener('pointerup', up); k.addEventListener('pointercancel', up);
+      });
+      k.addEventListener('keydown', (e) => {
+        const d = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+        if (!d) return;
+        e.preventDefault(); setI(i, v[i] + d); if (onDone) onDone(v.slice());
+      });
+    });
+    render();
+    return { el, set: (nv) => { v = nv.slice(); render(); }, get: () => v.slice() };
+  }
+  // Werte einer Quelle/Person im Entwurf: [Stufe 1 bis, Stufe 2 bis, ignorieren ab]
+  const draftVals = (d, g, q, who) => (g === 'p' ? d.GROUPS.p.src[q][who] : d.GROUPS[g].src[q]);
+  function setDraftVals(d, g, q, who, v) { if (g === 'p') d.GROUPS.p.src[q][who] = v; else d.GROUPS[g].src[q] = v; }
+  // Änderung relevant fürs Ignorieren? (Popup beim Speichern)
+  function rulesRelevantChange(d) {
+    if (rulesHash(d) !== rulesHash(CONFIG) || d.IGNORE_LIMIT !== CONFIG.IGNORE_LIMIT) return true;
+    return ['opa', 'oma', 'geronto'].some((k) => kindLabel(k, d) !== kindLabel(k, CONFIG));
+  }
+  // Popup beim Speichern regelrelevanter Änderungen
+  function saveRulesPopup() {
+    const d = settingsDraft;
+    closeBgPopup();
+    bgTitle('Einstellungen speichern', false);
+    bgUi('Berechne die Auswirkungen …', '', null, '');
+    bgButtons([]);
+    setTimeout(() => {
+      const plan = planRules(d);
+      const lim = d.IGNORE_LIMIT;
+      const nA = plan.added.length, nR = plan.removed.length, nN = plan.notes.length, nU = plan.unclear.length;
+      bgUi('Auswirkungen der neuen Einstellungen', '', null,
+        `Derzeit ignoriert: ${plan.cur.toLocaleString('de-DE')} / ${lim.toLocaleString('de-DE')}\n` +
+        `Nach Anwenden: ${plan.total.toLocaleString('de-DE')}${nU ? '+' : ''} / ${lim.toLocaleString('de-DE')}\n` +
+        `Fallen weg: ${nR} · Kommen dazu: ${nA} · Notizen weichen ab: ${nN} · Unklar: ${nU}` +
+        (plan.total > lim ? `\nÜber dem Limit: ${(plan.total - lim).toLocaleString('de-DE')} Treffer werden nicht gesperrt bzw. verdrängen weniger wichtige.` : ''));
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:12px;cursor:pointer';
+      lab.innerHTML = `<input type="checkbox" style="width:18px;height:18px;accent-color:#c71b1b;margin:0"> <span>Unklare Mitglieder erneut prüfen (${nU})</span>`;
+      const cb = lab.querySelector('input');
+      if (!nU) { cb.disabled = true; lab.style.opacity = '.5'; }
+      const verb = nA && nR ? 'gesperrt oder entsperrt' : nA ? 'gesperrt' : nR ? 'entsperrt' : '';
+      const go = (mode) => () => {
+        commitSettings(); resetScanMemory();
+        try { sessionStorage.setItem('jaf_settings_saved', '1'); } catch (e) { /* egal */ }
+        if (mode) applyRules(mode, cb.checked); else location.reload();
+      };
+      const btns = [{ label: 'Änderungen speichern und anwenden', fn: go('all'),
+        hint: verb ? `Speichert und gleicht die Ignorierliste an: Mitglieder werden ${verb}${nN ? ', Notizen angepasst' : ''}. Von Hand Gesperrte bleiben unberührt.`
+          : `Speichert${nN ? ' und passt die Notizen an' : ''}; danach wird die Ignorierliste geprüft.` }];
+      if (nR) btns.push({ label: 'Änderungen speichern und Mitglieder entsperren', fn: go('unblock'), hint: `Speichert und entsperrt ${nR} Mitglieder, die die Regeln nicht mehr erfüllen. Neue Treffer werden erst beim nächsten Scan gesperrt.` });
+      if (nA) btns.push({ label: 'Änderungen speichern und Mitglieder sperren', fn: go('block'), hint: `Speichert und sperrt ${nA} neue Treffer (bei vollem Limit verdrängen sie weniger wichtige). Niemand wird entsperrt.` });
+      btns.push({ label: 'Änderungen nur speichern', fn: go(null), hint: 'Die Ignorierliste bleibt, wie sie ist; die neuen Regeln gelten ab dem nächsten Scan.' });
+      btns.push({ label: 'Änderungen verwerfen', focus: true, hint: 'Alle Änderungen auf dieser Seite werden verworfen.',
+        fn: () => { closeBgPopup(); settingsDraft = null; settingsDirty = false; renderSettingsPage(); } });
+      bgBody(lab);
+      bgButtons(btns);
+      const bx = bgPopup().querySelector('.jaf-bg-btns'); bx.after(lab); // Haken unter den Buttons
+    }, 30);
+  }
+  // Abschnitte je Gruppe (Männer, Frauen, Paare) und AWO-Faktor
+  function renderGroupSettings(c, d, section, row, changed, refresh) {
+    const sliders = {};
+    const awoLabels = {};
+    const updAwo = () => { for (const g of GROUP_KEYS) if (awoLabels[g]) awoLabels[g].textContent = awoRowLabel(d, g); };
+    for (const g of GROUP_KEYS) {
+      const G = d.GROUPS[g];
+      const reset = document.createElement('a');
+      reset.href = '#'; reset.style.cssText = 'font-size:12px;font-weight:normal';
+      reset.textContent = JSON.stringify(G) !== JSON.stringify(SOURCE_DEFAULTS.GROUPS[g]) ? 'Quelltext-Werte' : '';
+      reset.title = 'Alle Werte dieser Gruppe auf die Werte aus dem Quelltext zurücksetzen';
+      reset.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); d.GROUPS[g] = cloneJ(SOURCE_DEFAULTS.GROUPS[g]); changed(); });
+      const tb = section(GROUP_LABELS[g], reset);
+      // 1+2: Schalter und Altersgrenzen je Quelle
+      const t = document.createElement('table');
+      t.className = 'jaf-src';
+      const sw = document.createElement('tr'); sw.className = 'sw';
+      sw.innerHTML = '<td></td><td class="v"></td><td class="i"></td>';
+      sw.children[1].appendChild(mkToggle(G.visual, 'Visuelle Einstufung', (on) => { G.visual = on; changed(); }));
+      sw.children[2].appendChild(mkToggle(G.ignore, 'Ignorieren aktiv', (on) => { G.ignore = on; changed(); }));
+      t.appendChild(sw);
+      const hd = document.createElement('tr');
+      hd.innerHTML = '<th>Quelle</th><th>Visuell (Stufe 1 bis · Stufe 2 bis)</th><th>Ignorieren ab</th>';
+      t.appendChild(hd);
+      for (const q of SCAN_SOURCES) {
+        for (const who of g === 'p' ? ['f', 'm'] : [null]) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = '<td></td><td class="v"></td><td class="i"></td>';
+          tr.children[0].textContent = who === 'm' ? '' : SOURCE_LABELS[q] || q;
+          tr.children[0].title = SOURCE_TIPS[q] || '';
+          if (who) { const w = document.createElement('span'); w.className = 'jaf-who'; w.textContent = who === 'f' ? 'Frau' : 'Mann'; tr.children[0].appendChild(w); }
+          const key = `${q}|${who || ''}`;
+          const upd = (vv, part) => {
+            const old = draftVals(d, g, q, who);
+            const nv = part === 'vis' ? [vv[0], vv[1], old[2]] : [old[0], old[1], vv[0]];
+            setDraftVals(d, g, q, who, nv);
+            // Paare ohne „getrenntes Alter“: der andere Balken wandert mit (gleiche Verschiebung)
+            if (g === 'p' && !G.split) {
+              const ow = who === 'f' ? 'm' : 'f', o = draftVals(d, g, q, ow).slice();
+              const idx = part === 'vis' ? [0, 1] : [2];
+              idx.forEach((ix) => { o[ix] = Math.max(18, Math.min(100, o[ix] + nv[ix] - old[ix])); });
+              if (o[0] >= o[1]) o[1] = Math.min(100, o[0] + 1);
+              setDraftVals(d, g, q, ow, o);
+              const os = sliders[g][`${q}|${ow}`];
+              if (os) { os.vis.set([o[0], o[1]]); os.ign.set([o[2]]); }
+            }
+            settingsDirty = true;
+            if (q === 'Party') updAwo();
+            refresh();
+          };
+          const v = draftVals(d, g, q, who);
+          const vis = mkSlider('vis', [v[0], v[1]], (vv) => upd(vv, 'vis'));
+          const ign = mkSlider('ign', [v[2]], (vv) => upd(vv, 'ign'));
+          (sliders[g] = sliders[g] || {})[key] = { vis, ign };
+          tr.children[1].appendChild(vis.el); tr.children[2].appendChild(ign.el);
+          t.appendChild(tr);
+        }
+      }
+      const cell = row(tb, 'Altersgrenzen je Quelle:', t, 'Visuell = Farben, Umbenennen, eigene Reiter · Ignorieren = Sperren mit Notiz, rotes X. Unter dem ersten Griff Stufe 1, dazwischen Stufe 2, darüber Stufe 3.');
+      const cp = document.createElement('button');
+      cp.type = 'button'; cp.className = 'btn btn-default btn-xs jaf-copy-first';
+      cp.style.cssText = 'margin-top:6px;border-radius:14px;padding:3px 12px;font-size:12px';
+      cp.textContent = 'Werte der ersten Zeile für alle Quellen übernehmen';
+      cp.addEventListener('click', (e) => {
+        e.preventDefault();
+        const q0 = SCAN_SOURCES[0];
+        for (const q of SCAN_SOURCES.slice(1)) {
+          if (g === 'p') G.src[q] = cloneJ(G.src[q0]); else G.src[q] = G.src[q0].slice();
+        }
+        changed();
+      });
+      cell.insertBefore(cp, cell.querySelector('.c_hint_lo'));
+      if (g === 'p') {
+        const sp = document.createElement('label'); sp.className = 'jaf-cb';
+        sp.innerHTML = '<input type="checkbox"> <span>Frau und Mann getrennt einstellen</span>';
+        sp.querySelector('input').checked = !!G.split;
+        sp.querySelector('input').addEventListener('change', (e) => { G.split = e.target.checked; changed(); });
+        row(tb, 'Getrenntes Alter:', sp, 'Aus: beide Balken verschieben sich gemeinsam. Ignoriert wird ein Paar erst, wenn beide ihre Schwelle erreichen.');
+        for (const [k, lbl, txt] of [['sd', 'Sugar Daddy:', 'Mann älter'], ['sm', 'Sugar Mom:', 'Frau älter']]) {
+          const w = document.createElement('span');
+          w.style.cssText = 'display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap';
+          w.appendChild(mkToggle(G[k].on, '', (on) => { G[k].on = on; changed(); }));
+          const n = document.createElement('input');
+          n.type = 'number'; n.min = 1; n.max = 80; n.className = 'form-control jaf-num'; n.value = G[k].gap;
+          n.addEventListener('change', () => { const x = Math.round(+n.value); if (x >= 1 && x <= 80) G[k].gap = x; changed(); });
+          w.append('ab ', n, ` Jahren Altersunterschied (${txt})`);
+          row(tb, lbl, w, k === 'sd' ? 'Zählt zu den Paaren: sichtbar mit „Visuelle Einstufung“, gesperrt mit „Ignorieren aktiv“.' : '');
+        }
+      }
+      // 3: Bezeichnungen
+      const nm = document.createElement('table'); nm.className = 'jaf-nm';
+      nm.innerHTML = '<tr><th></th><th>Stufe 1</th><th>Stufe 2</th><th>Stufe 3</th></tr>';
+      for (const [k, lbl] of [['one', 'Einzahl'], ['many', 'Mehrzahl']]) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${lbl}</td>`;
+        for (let i = 0; i < 3; i++) {
+          const td = document.createElement('td');
+          const inp = document.createElement('input'); inp.className = 'form-control'; inp.value = G.names[k][i];
+          inp.addEventListener('input', () => { G.names[k][i] = inp.value.trim() || G.names[k][i]; settingsDirty = true; refresh(); });
+          td.appendChild(inp); tr.appendChild(td);
+        }
+        nm.appendChild(tr);
+      }
+      row(tb, 'Bezeichnungen:', nm, 'Stufe 3 erscheint in der Profilnotiz („… ignoriert am …“). Gleiche Mehrzahl-Bezeichnungen ergeben einen gemeinsamen Reiter in der Gästeliste.');
+      // 4: Profiltypen (jeder Typ höchstens in einer Gruppe)
+      const types = document.createElement('div');
+      const unknown = Object.keys(getTypes()).filter((x) => !knownType(x));
+      const list = Object.keys(KNOWN_TYPES).filter((x) => KNOWN_TYPES[x].includes(g)).concat(unknown);
+      for (const ty of list) {
+        const l = document.createElement('label'); l.className = 'jaf-cb';
+        l.innerHTML = '<input type="checkbox"> <span></span>';
+        l.querySelector('span').textContent = ty;
+        const cb = l.querySelector('input');
+        const fixed = FIXED_TYPES[ty] === g;
+        cb.checked = fixed || (G.types || []).includes(ty);
+        cb.disabled = fixed;
+        if (!KNOWN_TYPES[ty]) l.title = 'Unbekannter Profiltyp (vom Skript gefunden)';
+        cb.addEventListener('change', () => {
+          for (const x of GROUP_KEYS) d.GROUPS[x].types = (d.GROUPS[x].types || []).filter((y) => y !== ty);
+          if (cb.checked) d.GROUPS[g].types.push(ty);
+          changed();
+        });
+        types.appendChild(l);
+      }
+      row(tb, 'Profiltypen:', types, 'Ein Typ gehört zu höchstens einer Gruppe; ein Haken hier entfernt ihn aus den anderen. Nicht zugeordnete Typen werden nicht bearbeitet.');
+    }
+    return { awoLabels, updAwo };
+  }
+  function awoRowLabel(d, g) {
+    const v = g === 'p' ? d.GROUPS.p.src.Party.m : d.GROUPS[g].src.Party;
+    return `Anwesenheitsquote der ${GROUP_LABELS[g]} bis ${v[0]} / ${v[1]} / ab ${v[1] + 1}:`;
+  }
+  function renderAwoSettings(d, section, row, refs) {
+    const tb = section('AWO-Faktor');
+    for (const g of GROUP_KEYS) {
+      const w = document.createElement('span');
+      for (let i = 0; i < 3; i++) {
+        const n = document.createElement('input');
+        n.type = 'number'; n.min = 0; n.max = 100; n.step = 1; n.className = 'form-control jaf-num jaf-awo-q';
+        n.value = d.AWO.quota[g][i];
+        n.addEventListener('input', () => { const x = Math.round(+n.value); if (Number.isFinite(x) && x >= 0 && x <= 100) { d.AWO.quota[g][i] = x; settingsDirty = true; } });
+        w.append(n, ' % ');
+        if (i < 2) w.append(' ');
+      }
+      const td = row(tb, awoRowLabel(d, g), w, '');
+      refs.awoLabels[g] = td.previousElementSibling;
+    }
+    // Gewichtung: zwei volle Griffe; bei Frauen 0 % liegen sie bündig nebeneinander
+    const W = d.AWO.weight;
+    const box = document.createElement('div');
+    const lbl = document.createElement('div'); lbl.className = 'jaf-wl';
+    const showL = (v) => {
+      lbl.innerHTML = '';
+      const parts = [['Männer', 0, v[0]], ['Frauen', v[0], v[1]], ['Paare', v[1], 100]];
+      for (const [n, a, b] of parts) {
+        if (b - a < 14) continue; // nur, wenn Platz ist
+        const s = document.createElement('span'); s.style.left = a + '%'; s.style.width = (b - a) + '%'; s.textContent = `${n} ${b - a} %`;
+        lbl.appendChild(s);
+      }
+    };
+    const v0 = [W.m, W.m + W.f];
+    const sl = mkSlider('w', v0, (v) => { d.AWO.weight = { m: v[0], f: v[1] - v[0], p: 100 - v[1] }; settingsDirty = true; showL(v); });
+    showL(v0);
+    box.appendChild(lbl); box.appendChild(sl.el);
+    row(tb, 'Gewichtung Männer / Frauen / Paare:', box, 'Anteil am gesamten Balken (zusammen immer 100 %). Anteil je Gruppe = erwartete Anwesende der Stufe 3 ÷ alle erwarteten Anwesenden; AWO = gewichtete Summe. Gruppen ohne Anmeldungen geben ihr Gewicht anteilig ab.');
+  }
+  // Kopfzeile: derzeit ignoriert / nach Anwenden (live aus dem Entwurf)
+  let _infoTimer = 0;
+  function renderSetInfo(c, d) {
+    const box = document.createElement('div'); box.className = 'jaf-info';
+    box.innerHTML = '<span>Derzeit ignoriert:</span><b class="jaf-i-cur"></b><span>Nach Anwenden der neuen Einstellungen zu ignorieren:</span><b class="jaf-i-new">…</b>';
+    c.appendChild(box);
+    const upd = () => {
+      const lim = d.IGNORE_LIMIT;
+      box.querySelector('.jaf-i-cur').textContent = `${ignCount().toLocaleString('de-DE')} / ${lim.toLocaleString('de-DE')}`;
+      const p = planRules(d);
+      const el = box.querySelector('.jaf-i-new');
+      el.textContent = `${p.total.toLocaleString('de-DE')}${p.unclear.length ? '+' : ''} / ${lim.toLocaleString('de-DE')}`;
+      el.style.color = p.total > lim ? '#e53935' : lim - p.total < 50 ? '#ffb020' : '';
+      el.title = `kommen dazu: ${p.added.length} · fallen weg: ${p.removed.length} · unklar: ${p.unclear.length} · von Hand gesperrt: ${p.hand}`;
+    };
+    upd();
+    return () => { clearTimeout(_infoTimer); _infoTimer = setTimeout(() => { try { upd(); } catch (e) { /* egal */ } }, 250); };
   }
   function renderSettingsPage() {
     if (!isSettingsPage()) return false;
@@ -6106,9 +7023,9 @@
       for (const k of SETTING_KEYS) settingsDraft[k] = cloneJ(CONFIG[k]);
       settingsDraft.autoDel = [];
     }
-    document.title = 'Opa-Schutz - JOYclub';
+    document.title = opaT('Opa-Schutz - JOYclub');
     const tb = document.querySelector('.navigation_title_bar_title');
-    if (tb) tb.textContent = 'Opa-Schutz';
+    if (tb) tb.textContent = opaT('Opa-Schutz');
     if (!window.__jafSettingsGuard) {
       window.__jafSettingsGuard = true;
       document.addEventListener('click', settingsGuardClick, true);
@@ -6118,10 +7035,10 @@
     const expOpen = !!c.__jafExp;
     c.innerHTML = '';
     c.className = c.className || 'col-lg-6 col-md-8 sp_bb clearfix';
-    const h1 = document.createElement('h1'); h1.className = 'hide_for_mobile sp_bs'; h1.textContent = 'Opa-Schutz'; c.appendChild(h1);
+    const h1 = document.createElement('h1'); h1.className = 'hide_for_mobile sp_bs'; h1.textContent = opaT('Opa-Schutz'); c.appendChild(h1);
     const bc = document.createElement('ol');
     bc.className = 'breadcrumb breadcrumb_ui';
-    bc.innerHTML = `<li class="forelast"><a href="${location.origin}/edit/"><span>Profil verwalten</span></a></li><li class="last"><div><span>Opa-Schutz</span></div></li>`;
+    bc.innerHTML = opaT(`<li class="forelast"><a href="${location.origin}/edit/"><span>Profil verwalten</span></a></li><li class="last"><div><span>Opa-Schutz</span></div></li>`);
     c.appendChild(bc);
     let saved = false;
     try { saved = sessionStorage.getItem('jaf_settings_saved') === '1'; sessionStorage.removeItem('jaf_settings_saved'); } catch (e) { /* egal */ }
@@ -6134,6 +7051,8 @@
       c.appendChild(ok);
     }
     const changed = () => { settingsDirty = true; renderSettingsPage(); };
+    ensureSetCss();
+    const refreshInfo = renderSetInfo(c, d);
     const deviates = (k) => JSON.stringify(d[k]) !== JSON.stringify(SOURCE_DEFAULTS[k]);
     const section = (title, extraBtn) => {
       const h = document.createElement('div');
@@ -6187,30 +7106,9 @@
       i.addEventListener('change', () => { const v = Math.round(+i.value); if (Number.isFinite(v) && v >= min && v <= max) d[k] = v; changed(); });
       return w;
     };
-    // ---- Regeln ----
-    let tb2 = section('Regeln');
-    row(tb2, 'Höchstalter Männer:', num('MAX_AGE', 'Jahre', 18, 99), 'Mitglieder, die älter sind, werden ignoriert.', { key: 'MAX_AGE' });
-    row(tb2, 'Warnalter:', num('WARN_AGE', 'Jahre', 18, 99), 'Farbmarkierung: bis hier grün, darüber orange.', { key: 'WARN_AGE' });
-    const types = document.createElement('div');
-    for (const t of ALL_TYPES.concat(d.ONLY_TYPES.filter((x) => !ALL_TYPES.includes(x)))) {
-      const l = document.createElement('label');
-      l.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin:2px 14px 2px 0;font-weight:normal;cursor:pointer';
-      l.innerHTML = '<input type="checkbox"> <span></span>';
-      l.querySelector('span').textContent = t;
-      const cb = l.querySelector('input');
-      cb.checked = d.ONLY_TYPES.includes(t);
-      cb.addEventListener('change', () => { d.ONLY_TYPES = ALL_TYPES.concat(d.ONLY_TYPES.filter((x) => !ALL_TYPES.includes(x))).filter((x) => (x === t ? cb.checked : d.ONLY_TYPES.includes(x))); changed(); });
-      types.appendChild(l);
-    }
-    row(tb2, 'Profiltypen:', types, 'Nur diese Profiltypen werden nach Höchstalter ignoriert.', { key: 'ONLY_TYPES' });
-    const cm = document.createElement('select');
-    cm.className = 'f_select';
-    cm.innerHTML = '<option value="any">eine Person zu alt reicht</option><option value="all">beide Personen müssen zu alt sein</option>';
-    cm.value = d.COUPLE_MODE;
-    cm.addEventListener('change', () => { d.COUPLE_MODE = cm.value; changed(); });
-    row(tb2, 'Paar-Modus:', cm, 'Gilt für Paar-Profiltypen aus der Liste oben (z. B. Männer-Paar).', { key: 'COUPLE_MODE' });
-    row(tb2, 'Altersunterschied Sugar Daddy:', num('COUPLE_AGE_GAP', 'Jahre', 1, 80), 'Gemischte Paare, bei denen die Frau so viel oder mehr jünger ist.', { key: 'COUPLE_AGE_GAP' });
-    row(tb2, 'Mindestalter Geronto-Paar:', num('COUPLE_BOTH_MIN_AGE', 'Jahre', 18, 120), 'Paare, bei denen beide so alt oder älter sind.', { key: 'COUPLE_BOTH_MIN_AGE' });
+    // ---- Gruppen: Männer, Frauen, Paare ----
+    const grpRefs = renderGroupSettings(c, d, section, row, changed, refreshInfo);
+    let tb2;
     // ---- Whitelist ----
     const wlBtn = document.createElement('j-button');
     wlBtn.setAttribute('variant', 'secondary'); wlBtn.setAttribute('role', ''); wlBtn.setAttribute('type', 'button');
@@ -6224,6 +7122,8 @@
     sum.className = 'jaf-wl-sum';
     sum.textContent = `Eigene Whitelist: ${ownN} Namen in ${Object.keys(d.WHITELIST).length} Gruppen · Automatisch gefunden: ${autoN} Namen`;
     row(tb2, 'Nie ignorieren:', sum, '', { key: 'WHITELIST' });
+    // ---- AWO-Faktor ----
+    renderAwoSettings(d, section, row, grpRefs);
     // ---- Experten-Einstellungen ----
     const exp = document.createElement('div');
     exp.className = 'jaf-exp-toggle';
@@ -6235,8 +7135,6 @@
       tb2 = section('Betrieb');
       row(tb2, 'Debug-Ausgaben:', onOff('DEBUG'), 'Zusätzliche Meldungen in der Browser-Konsole; jedes Element wird vor dem Klick markiert.', { key: 'DEBUG' });
       row(tb2, 'Testlauf:', onOff('DRY_RUN'), 'Spielt alles durch, ignoriert aber niemanden.', { key: 'DRY_RUN' });
-      const si = row(tb2, 'Suche ignoriert:', onOff('SEARCH_IGNORE'), 'Aus = die Mitgliedersuche erstellt nur Statistiken.', { key: 'SEARCH_IGNORE' });
-      if (d.SEARCH_IGNORE) { const w = document.createElement('div'); w.className = 'c_hint_lo'; w.style.color = '#e53935'; w.textContent = 'Diese Einstellung führt zu sehr vielen Sperrungen, die das JOYclub-Limit überschreiten würden!'; si.appendChild(w); }
       row(tb2, 'Erster Scan Profilbesucher/Interaktionen:', num('MYJOY_FIRST_MAX', 'Einträge', 10, 100000), 'Beim ersten Scan von „Profilbesuche“ bzw. „Mögen mich“ höchstens so viele Einträge prüfen.', { key: 'MYJOY_FIRST_MAX' });
       tb2 = section('Ignorierliste');
       row(tb2, 'Limit:', num('IGNORE_LIMIT', 'Einträge', 10, 100000), `JOYclub behält nur die letzten ${Number(d.IGNORE_LIMIT).toLocaleString('de-DE')} Sperren.`, { key: 'IGNORE_LIMIT', red: true });
@@ -6271,6 +7169,7 @@
     save.innerHTML = '<span class="glyphicons glyphicons-floppy-disk" aria-hidden="true"></span>Speichern';
     save.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
+      if (rulesRelevantChange(d)) { saveRulesPopup(); return; }
       commitSettings();
       try { sessionStorage.setItem('jaf_settings_saved', '1'); } catch (err) { /* egal */ }
       location.reload();
@@ -6290,7 +7189,7 @@
   }
   window.addEventListener('hashchange', () => {
     if (isSettingsPage()) { settingsDraft = null; renderSettingsPage(); }
-    else if (cleanPath(location.pathname) === cleanPath(SETTINGS_PATH) && document.querySelector('#c h1') && document.querySelector('#c h1').textContent === 'Opa-Schutz') location.reload();
+    else if (cleanPath(location.pathname) === cleanPath(SETTINGS_PATH) && document.querySelector('#c h1') && document.querySelector('#c h1').textContent === opaT('Opa-Schutz')) location.reload();
   });
 
   // ---- Popup „Whitelist bearbeiten“ ----
@@ -6432,6 +7331,8 @@
 
   // ---------- Start ----------
   async function init() {
+    detectOwnType();
+    await storeMigrationInit();
     if (await topGate()) return;
     if (isSettingsPage()) { await waitFor(() => document.getElementById('c'), 10000); renderSettingsPage(); }
     await peekInit();
@@ -6481,8 +7382,6 @@
       saveIgnored(list);
       const p = panel();
       p.innerHTML = '<b>Alter-Filter</b> – Ignorierliste<br>';
-      p.appendChild(btn('Export (CSV)', () => log(`${exportList()} Einträge exportiert.`)));
-      p.appendChild(btn('Alle Konten (CSV)', () => log(`${exportAccounts()} Konten exportiert.`)));
       log(`${Object.keys(list).length} Mitglieder auf der Ignorierliste, ${getDone().length} vom Skript ignoriert.`);
       insertSyncButton();
       if (!window.__jafSyncTimer) window.__jafSyncTimer = setInterval(() => { if (isIgnorePage()) insertSyncButton(); }, 2000);
@@ -6495,34 +7394,31 @@
   if (BG_FRAME) { bgFrameDispatch(); return; }
 
   try {
-    GM_registerMenuCommand('Alter-Filter: Liste exportieren (CSV)', () => exportList());
-    GM_registerMenuCommand('Alter-Filter: alle Konten mit Geburtsjahr exportieren (CSV)', () => exportAccounts());
-    GM_registerMenuCommand('Alter-Filter: Vorgemerkte exportieren (CSV)', () => exportWatch());
+    GM_registerMenuCommand('Alter-Filter: Alle Daten sichern (JSON)', () => downloadBackup());
+    GM_registerMenuCommand('Alter-Filter: Alle Daten wiederherstellen (JSON)', () => restoreBackup());
+    // nur zur Fehlersuche (nicht in der Sicherung, werden später entfernt)
+    GM_registerMenuCommand('Alter-Filter: Unbekannte Profiltypen exportieren (CSV)', () => exportTypes());
     GM_registerMenuCommand('Alter-Filter: Online-Angaben exportieren (CSV)', () => exportOnlineTexts());
-    GM_registerMenuCommand('Alter-Filter: Whitelist exportieren (CSV)', () => exportWhitelist());
-    GM_registerMenuCommand('Alter-Filter: Gruppen (zuletzt bearbeitet) exportieren (CSV)', () => exportGroups());
     GM_registerMenuCommand('Alter-Filter: Fehlschläge des Party-Scans exportieren (CSV)', () => exportEvFailures());
-    GM_registerMenuCommand('Alter-Filter: Protokoll der Mitgliedersuche exportieren (CSV)', () => exportMsProtocol());
     GM_registerMenuCommand('Alter-Filter: Paare mit nur einer Altersangabe exportieren (CSV)', () => exportMsSingleCouples());
     GM_registerMenuCommand('Alter-Filter: Fehlschläge der Mitgliedersuche exportieren (CSV)', () => exportMsFailures());
-    GM_registerMenuCommand('Alter-Filter: Mitgliedersuche – „würden ignoriert“ exportieren (CSV)', () => exportMsWould());
-    GM_registerMenuCommand('Alter-Filter: Einstellungen (Opa-Schutz) öffnen', () => { location.href = settingsUrl(); });
-    GM_registerMenuCommand('Alter-Filter: Fehlschläge des Party-Scans löschen', () => { GM_setValue(K_EVFAIL, []); alert('Fehlschlag-Liste gelöscht.'); });
+    GM_registerMenuCommand(opaT('Alter-Filter: Einstellungen (Opa-Schutz) öffnen'), () => { location.href = settingsUrl(); });
+    GM_registerMenuCommand('Alter-Filter: Fehlschläge des Party-Scans löschen', () => { gmSet(K_EVFAIL, []); alert('Fehlschlag-Liste gelöscht.'); });
     GM_registerMenuCommand('Alter-Filter: Partys beim nächsten Scan vollständig prüfen', () => {
-      const m = getEvents(); for (const e of Object.values(m)) { delete e.seen; delete e.seenRules; } GM_setValue(K_EVENTS, m);
+      const m = getEvents(); for (const e of Object.values(m)) { delete e.seen; delete e.seenRules; } gmSet(K_EVENTS, m);
       alert('Gemerkte Anmeldungen gelöscht – der nächste Party-Scan prüft wieder alle Gäste.');
     });
     GM_registerMenuCommand('Alter-Filter: Erledigt-Liste leeren', () => {
-      if (!confirm('Liste der vom Skript ignorierten Mitglieder (inkl. Datum/Uhrzeit, Quelle) wirklich löschen?\nVorher über „Liste exportieren“ sichern!')) return;
-      GM_setValue(K_LOG, {}); GM_setValue(K_DONE, []); GM_setValue(K_FAILED, {}); alert('Erledigt-Liste geleert.');
+      if (!confirm('Liste der vom Skript ignorierten Mitglieder (inkl. Datum/Uhrzeit, Quelle) wirklich löschen?\nVorher über „Alle Daten sichern“ sichern!')) return;
+      gmSet(K_LOG, {}); gmSet(K_DONE, []); gmSet(K_FAILED, {}); alert('Erledigt-Liste geleert.');
     });
     GM_registerMenuCommand('Alter-Filter: Fehlschläge leeren', () => {
       if (!confirm('Alle gespeicherten Fehlschläge (Profile, Party-Scan, Mitgliedersuche) löschen?')) return;
-      GM_setValue(K_FAILED, {}); GM_setValue(K_EVFAIL, []); GM_setValue(K_MS_FAIL, []); alert('Fehlschläge geleert.');
+      gmSet(K_FAILED, {}); gmSet(K_EVFAIL, []); gmSet(K_MS_FAIL, []); alert('Fehlschläge geleert.');
     });
     GM_registerMenuCommand('Alter-Filter: Typen-Info leeren', () => {
       if (!confirm('Gesammelte Infos zu anderen Profiltypen löschen?')) return;
-      GM_setValue(K_TYPES, {}); alert('Typen-Info geleert.');
+      gmSet(K_TYPES, {}); alert('Typen-Info geleert.');
     });
     GM_registerMenuCommand('Alter-Filter: Lauf zurücksetzen', () => { resetAll(); alert('Alle laufenden Vorgänge und die Tab-Sperre wurden zurückgesetzt. Seite wird neu geladen.'); location.reload(); });
   } catch (e) { /* ältere Tampermonkey-Version */ }
@@ -6536,8 +7432,8 @@
     const fresh = (x, ms) => x && x.running && x.ts && Date.now() - x.ts < ms;
     const busy = loading || window.__jafBgBusy || fresh(st, 3 * 60 * 1000) || fresh(getOpa(), 10 * 60 * 1000) || fresh(getEv(), 10 * 60 * 1000);
     if (busy) {
-      GM_setValue(K_LOCK, Object.assign(l, { ts: Date.now(), url: location.href }));
-      const vr = visRun(); if (vr) GM_setValue(K_VIS_RUN, Object.assign(vr, { ts: Date.now() })); // Lebenszeichen für die Sichtbarkeits-Wache
+      gmSet(K_LOCK, Object.assign(l, { ts: Date.now(), url: location.href }));
+      const vr = visRun(); if (vr) gmSet(K_VIS_RUN, Object.assign(vr, { ts: Date.now() })); // Lebenszeichen für die Sichtbarkeits-Wache
     }
     else releaseLock();
   }, 5000);
@@ -6545,9 +7441,9 @@
   // Notfall: alle Läufe (Suche, Gruppen- und Party-Scan), Sperre und Einmal-Ansichten zurücksetzen – Listen bleiben erhalten
   function resetAll() {
     resetState();
-    GM_setValue(K_OPA, Object.assign(getOpa(), { running: false }));
-    GM_setValue(K_EVSCAN, Object.assign(getEv(), { running: false }));
-    GM_setValue(K_LOCK, null);
+    gmSet(K_OPA, Object.assign(getOpa(), { running: false }));
+    gmSet(K_EVSCAN, Object.assign(getEv(), { running: false }));
+    gmSet(K_LOCK, null);
   }
 
   // Fehler beim Start sichtbar machen statt still zu scheitern
@@ -6568,7 +7464,7 @@
     const st = getState();
     if (st.running && (!st.ts || Date.now() - st.ts > 10 * 60 * 1000)) resetState();
     const o = getOpa(); if (o.running && opaStale(o) && o.phase !== 'ignore' && !getState().running) { /* bleibt: wird auf /groups/ zum Fortsetzen angeboten */ }
-    const l = getLock(); if (l && Date.now() - l.ts > LOCK_TTL) GM_setValue(K_LOCK, null);
+    const l = getLock(); if (l && Date.now() - l.ts > LOCK_TTL) gmSet(K_LOCK, null);
   })();
 
   // einmalig: Links der Whitelist-Mitglieder aus bereits bekannten Konten übernehmen

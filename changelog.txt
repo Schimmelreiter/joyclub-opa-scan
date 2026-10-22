@@ -1,6 +1,23 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.74 (22.10.2026)
+- WICHTIG: Alle Schalter sind nach Installation und Update AUS. Einschalten auf der Seite „Opa-Schutz“ je Gruppe: „Visuelle Einstufung“ und „Ignorieren aktiv“
+- Regeln je Gruppe (Männer, Frauen, Paare) und Quelle: drei Anzeigestufen (zwei Grenzen) und eine Ignorier-Schwelle, Bezeichnungen frei wählbar; Mitgliedersuche standardmäßig ab 100
+- Frauen können ignoriert werden („Oma“); neue Regel Sugar Mom; Paare werden erst ignoriert, wenn beide ihre Schwelle erreichen
+- Profiltypen frei den Gruppen zuordnen (Trans*/Non-binary, Männer-/Frauen-/Trans-Paare); nicht zugeordnete Typen werden nicht bearbeitet; unbekannte Typen werden gesammelt (Export im Menü)
+- Eigenes Männer-Profil: Oma-Scan, Oma-Schutz, Oma-Liste, „blockierte Omas“, Oma-Symbol
+- Einstellungsseite neu: Kippschalter, Regler 18–100, Kopfzeile „derzeit / nach Anwenden ignoriert“ (live), Abschnitt AWO-Faktor
+- Speichern von Regeländerungen: Popup mit Auswirkungen und Wahl (anwenden, nur entsperren, nur sperren, nur speichern, verwerfen), optional unklare Mitglieder nachprüfen
+- AWO-Faktor neu: Anwesenheitsquoten je Gruppe und Stufe, Gewichtung Männer/Frauen/Paare
+- Gästeliste: Reiter je Gruppe nach den Stufen-Bezeichnungen; Trans*/Non-binary in der zugeordneten Gruppe
+- Verdrängung: Quelle → Art (Oma, Sugar Mom, Geronto-Paar, Opa, Sugar Daddy) → am längsten nicht gesehen → Altersregel; Sonderregeln für Sugar Daddys entfallen
+- Gedächtnis aller Kandidaten (gesperrt, verdrängt, vorgemerkt, Testmodus) mit Quellen und Verlauf; Einträge ohne Quelle = „Altbestand“
+- Button „Ignorierliste reparieren“ auf /ignore/
+- Speicher-Umbau: ein Eintrag je Mitglied, Abgleich zwischen Tabs; Sicherung vorher angeboten
+- Menü: „Alle Daten sichern / wiederherstellen“ (JSON); Einzel-Exporte von Liste, Konten, Vorgemerkten, Whitelist und Gruppen entfallen (in der Sicherung enthalten)
+- Entfernt: SEARCH_IGNORE samt Statistik-Modus und „würden ignoriert“, Protokoll der Mitgliedersuche, MAX_AGE/WARN_AGE/ONLY_TYPES/COUPLE_* (werden einmalig übernommen)
+
 1.73 (22.10.2026)
 - Einstellungsseite „Opa-Schutz“ (/edit/account/#opa-schutz) mit Experten-Einstellungen, Rückfrage bei ungespeicherten Änderungen
 - Einstellungen im Skript-Speicher; Änderungen im Quelltext haben Vorrang, solange sich der Quelltext-Wert ändert
