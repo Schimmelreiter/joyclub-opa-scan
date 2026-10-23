@@ -1,6 +1,13 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.80 (23.10.2026)
+- Externe Ficks und Profil-Archiv: Darstellung im Aussehen eines JOYclub-Profils auf dem eigenen Profil (Kopf, Suchkriterien, Profilnotiz, Fickliste, Texte, Steckbrief, Vorlieben); alte Adressen werden umgeleitet
+- Externe Ficks: Profilbild, Kopf, Suchkriterien, Texte, Steckbrief und Vorlieben per Stift editierbar; „Mit JOYclub-Profil verknüpfen“
+- Archiv-Stände speichern zusätzlich Suchkriterien, Vorlieben und alle Textabschnitte
+- Verknüpfte Profile: primäres Profil, „(als …)“ in Liste, Profil-Block und Party-Reiter, Treffen je Profil („als“), Status optional synchron, Verknüpfung lösbar
+- Meine Fickliste: Personen ohne Treffen immer als „Kein Treffen eingetragen“ (bei Datum am Ende; ausgeblendet bei Wo-/Club-/Datumsfilter)
+
 1.79 (23.10.2026)
 - Hamburger-Menü: erster Eintrag „Fickliste“ (mit Symbol) öffnet „Meine Fickliste“
 - Fremdes Profil: Fickliste-Block steht oben in der Badge-Liste (direkt unter der Profilnotiz statt ganz unten) und hat den Link „Zu meiner Fickliste“

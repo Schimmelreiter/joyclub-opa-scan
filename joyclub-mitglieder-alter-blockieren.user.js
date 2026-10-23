@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.79
+// @version      1.80
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -1990,6 +1990,7 @@
 
   // überall auf JOYclub: alle sichtbaren Mitglieder-Karten (Suche, Freunde, Besucher …) und den Profilkopf erfassen
   function recordVisibleAccounts() {
+    if (/[?&]fl=/.test(location.search)) return; // Fickliste-Ansicht auf dem eigenen Profil
     const items = [];
     document.querySelectorAll('j-member-card[age]').forEach((card) => {
       const a = card.closest('a[href*="/profile/"]');
@@ -8224,7 +8225,7 @@
   const flSetStands = (pid, l) => GM_setValue(K_FLA + pid, l);
   const flImg = (id) => (id ? GM_getValue(K_FLI + id, '') : '');
   const flIsExt = (pid) => /^x-/.test(String(pid));
-  const flPath = (p) => (flIsExt(p.id) ? `/edit/homepage/?fickextern=${encodeURIComponent(p.id.slice(2))}` : (p.path || `/profile/${p.id}.html`));
+  const flPath = (p) => (flIsExt(p.id) ? `${flOwnPath()}?fl=${encodeURIComponent(p.id)}` : (p.path || `/profile/${p.id}.html`));
   const flUrl = (p) => location.origin + flPath(p);
   const flDead = (p) => !!p && (p.live === 'dead' || (flIsExt(p.id) && p.wasJoy));
   const pad2f = (n) => String(n).padStart(2, '0');
@@ -8268,6 +8269,7 @@
   const flOverviewUrl = (filter) => `${location.origin}/edit/homepage/?fickliste${filter ? '&status=' + filter : ''}`;
   // Profil der aktuellen Seite als Fickliste-Kandidat (Mann, Frau, Paar, Transperson …; nicht das eigene Profil)
   function flPagePid() {
+    if (flViewerPid()) return flViewerPid();
     if (flExternPage()) return 'x-' + flExternSlug();
     if (!isProfilePage()) return '';
     const id = idOf(location.pathname);
@@ -8275,6 +8277,7 @@
     return id;
   }
   function flSelectable() {
+    if (flViewerPid()) return !!flGet(flViewerPid());
     if (flExternPage()) return !!flGet('x-' + flExternSlug());
     if (!flPagePid()) return false;
     if (flGet(flPagePid())) return true;
@@ -8399,7 +8402,9 @@
       place: profilePlace(doc),
       tagline: tag.replace(/^[^-]+-\s*[^-]+-\s*/, '').trim() || tag,
       sed: parseSedCards(doc),
-      secs: flSections(doc),
+      secs: [...flDescSections(doc), ...flSections(doc).filter((x) => !['Das mag ich', 'Das mag ich nicht'].includes(x.h))],
+      bs: flBsProps(doc),
+      prefs: flPrefs(doc),
       pnote: nh ? (nh.getAttribute('value') || '').trim() : '',
       imgUrl: flProfileImgUrl(doc),
     };
@@ -8641,6 +8646,7 @@
     flRefreshAll();
   }
   function flDeleteAll(pid) {
+    flLinkRemove(pid);
     for (const s of flStands(pid)) if (s.img) GM_deleteValue(K_FLI + s.img);
     const p = flGet(pid);
     if (p && p.img) GM_deleteValue(K_FLI + p.img);
@@ -8855,6 +8861,129 @@
     return r;
   }
 
+
+  // ---- Verknüpfte Profile (z. B. Paar + Frau + Mann): eine Person, mehrere Einträge ----
+  // jaf_fl_groups = { gid: { primary: pid, members: { pid: { sync: bool } } } } – Einträge bleiben getrennt (lösbar)
+  const K_FL_GROUPS = 'jaf_fl_groups';
+  const flGroups = () => GM_getValue(K_FL_GROUPS, {}) || {};
+  const flSetGroups = (g) => GM_setValue(K_FL_GROUPS, g);
+  function flGroupOf(pid, G = flGroups()) {
+    for (const [gid, g] of Object.entries(G)) if (g.members && g.members[pid]) return { gid, g };
+    return null;
+  }
+  const flPrimaryId = (pid, G) => { const x = flGroupOf(pid, G); return x ? x.g.primary : pid; };
+  const flMembers = (pid, G) => { const x = flGroupOf(pid, G); return x ? Object.keys(x.g.members) : [pid]; };
+  // alle Treffen der Gruppe: [{ m, owner }]
+  function flGroupMeets(pid) {
+    const fl = getFl();
+    const out = [];
+    for (const id of flMembers(pid)) for (const m of (fl[id] && fl[id].meets) || []) out.push({ m, owner: fl[id] });
+    return out.sort((a, b) => meetTs(b.m) - meetTs(a.m));
+  }
+  function flNickFromPath(path) {
+    const m = String(path || '').match(/\/profile\/\d+\.([^./?#]+)/);
+    return m ? m[1] : '';
+  }
+  function flLinkAdd(pid, otherRef) {
+    const id = idOf(otherRef) || (Object.values(getFl()).find((q) => norm(q.nick) === norm(otherRef)) || {}).id;
+    if (!id) return 'Kein Profil-Link und kein Nick aus der Fickliste.';
+    if (id === pid) return 'Das ist dasselbe Profil.';
+    const G = flGroups();
+    const mine = flGroupOf(pid, G), other = flGroupOf(id, G);
+    if (other && (!mine || other.gid !== mine.gid)) return 'Dieses Profil ist schon mit anderen verknüpft – dort zuerst die Verknüpfung lösen.';
+    if (!flGet(id)) {
+      const path = (String(otherRef).match(/\/profile\/\d+\.[^?#\s]*/) || [`/profile/${id}.html`])[0];
+      flPut({ id, nick: flNickFromPath(path) || id, path, status: '', meets: [], hist: [], created: Date.now() });
+    }
+    let gid = mine && mine.gid;
+    if (!gid) { gid = flNewId(); G[gid] = { primary: pid, members: { [pid]: { sync: false } } }; }
+    G[gid].members[id] = { sync: false };
+    flSetGroups(G);
+    for (const x of [pid, id]) { const q = flGet(x); flHist(q, `verknüpft mit ${(flGet(x === pid ? id : pid) || {}).nick || ''}`); flPut(q); }
+    return '';
+  }
+  function flLinkRemove(pid) {
+    const G = flGroups();
+    const x = flGroupOf(pid, G);
+    if (!x) return;
+    delete x.g.members[pid];
+    const rest = Object.keys(x.g.members);
+    if (rest.length < 2) delete G[x.gid];
+    else if (x.g.primary === pid) x.g.primary = rest[0];
+    flSetGroups(G);
+    const q = flGet(pid); if (q) { flHist(q, 'Verknüpfung gelöst'); flPut(q); }
+  }
+  // Statuswechsel des primären Profils an synchron gehaltene Profile weitergeben
+  function flSyncStatus(pid) {
+    const G = flGroups();
+    const x = flGroupOf(pid, G);
+    if (!x || x.g.primary !== pid) return;
+    const st = (flGet(pid) || {}).status || '';
+    for (const [id, o] of Object.entries(x.g.members)) {
+      if (id === pid || !o.sync) continue;
+      const q = flGet(id);
+      if (q && q.status !== st) { flHist(q, `Fickstatus: ${q.status ? flLabel(q.status) : '–'} → ${st ? flLabel(st) : 'zurückgesetzt'} (synchron mit ${(flGet(pid) || {}).nick || ''})`); q.status = st; flPut(q); }
+    }
+  }
+  // Popup „Verknüpfte Profile“
+  function flLinkPopup(pid) {
+    return new Promise((resolve) => {
+      const { ov, box } = flOverlay('jaf-fl-links');
+      ov.style.zIndex = '2147483647';
+      const render = () => {
+        box.innerHTML = '';
+        box.appendChild(flEl('div', 'font:bold 19px system-ui;margin-bottom:6px', 'Verknüpfte Profile'));
+        box.appendChild(flEl('div', 'color:#9a9a9a;font-size:13px;margin-bottom:10px', 'Mehrere Profile derselben Person (z. B. Paar, Frau, Mann). In der Fickliste steht die Person unter dem primären Profil; jedes Profil behält seine Einträge.'));
+        const G = flGroups();
+        const x = flGroupOf(pid, G);
+        const ids = x ? Object.keys(x.g.members) : [pid];
+        for (const id of ids) {
+          const q = flGet(id) || { id, nick: id };
+          const row = flEl('div', 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid #3a3d43;border-radius:8px;padding:8px 10px;margin-bottom:6px;background:#24262a');
+          const prim = (x ? x.g.primary : pid) === id;
+          const r = flEl('input'); r.type = 'radio'; r.name = 'jaf-fl-prim'; r.checked = prim; r.title = 'primäres Profil';
+          r.addEventListener('change', () => { if (x) { const G2 = flGroups(); G2[x.gid].primary = id; flSetGroups(G2); render(); } });
+          row.appendChild(r);
+          row.appendChild(flEl('span', 'flex:1;min-width:120px', `${flNickHtml(q)} <span style="opacity:.6;font-size:12px">${escHtml(q.type || '')}</span> ${flIcon(q.status, { size: 15, redGef: true })}${prim ? ' <span style="font-size:11px;opacity:.7">(primär)</span>' : ''}`));
+          if (x && !prim) {
+            const lb = flEl('label', 'display:flex;gap:5px;align-items:center;font-size:12.5px;cursor:pointer');
+            const c = flEl('input'); c.type = 'checkbox'; c.checked = !!x.g.members[id].sync;
+            c.addEventListener('change', () => { const G2 = flGroups(); G2[x.gid].members[id].sync = c.checked; flSetGroups(G2); if (c.checked) flSyncStatus(G2[x.gid].primary); });
+            lb.appendChild(c); lb.appendChild(flEl('span', '', 'Status mit primärem Profil synchron halten'));
+            row.appendChild(lb);
+          }
+          if (x) row.appendChild(flBtn('Verknüpfung lösen', () => { flLinkRemove(id); render(); }));
+          box.appendChild(row);
+        }
+        box.appendChild(flEl('div', 'font-size:12.5px;color:#9a9a9a;margin:10px 0 4px', '+ Profil verknüpfen (Profil-Link einfügen oder Nick aus der Fickliste)'));
+        const r2 = flEl('div', 'display:flex;gap:8px');
+        const inp = flEl('input', FL_INPUT_CSS + ';flex:1');
+        inp.setAttribute('list', 'jaf-fl-linknicks');
+        const dl = flEl('datalist'); dl.id = 'jaf-fl-linknicks';
+        for (const q of Object.values(getFl())) if (!ids.includes(q.id) && !flIsExt(q.id)) dl.appendChild(new Option(q.nick));
+        const err = flEl('div', 'color:#ffb020;font-size:13px;margin-top:6px;min-height:1px');
+        r2.appendChild(inp); r2.appendChild(dl);
+        r2.appendChild(flBtn('Verknüpfen', () => { const e = flLinkAdd(pid, inp.value.trim()); if (e) err.textContent = e; else render(); }, true));
+        box.appendChild(r2);
+        box.appendChild(err);
+        const row = flEl('div', 'display:flex;justify-content:flex-end;margin-top:14px');
+        row.appendChild(flBtn('Schließen', () => { ov.remove(); resolve(); flRefreshAll(); }, true));
+        box.appendChild(row);
+      };
+      render();
+    });
+  }
+  // „verknüpft mit: A [Profil-Archiv] · B [Profil-Archiv]“
+  function flLinkedHtml(pid) {
+    const ids = flMembers(pid).filter((x) => x !== pid);
+    if (!ids.length) return '';
+    return '<div class="jaf-fl-linked" style="font-size:12.5px;margin-top:6px;opacity:.9">verknüpft mit: ' + ids.map((id) => {
+      const q = flGet(id) || { id, nick: id };
+      return `<a href="${escHtml(flIsExt(id) ? flLiveUrl(q) : flDead(q) ? flArchiveUrl(q) : flLiveUrl(q))}" target="_blank" style="color:inherit">${flNickHtml(q)}</a> ` +
+        `<a href="${escHtml(flArchiveUrl(q))}" target="_blank" style="color:inherit;opacity:.7;font-size:12px">Profil-Archiv</a>`;
+    }).join(' · ') + '</div>';
+  }
+
   // ---- Popup „Ficklisteneintragung“ ----
   // newState: neuer Zustand (null = nur bearbeiten); opt: { meetId, prefillMeet, note, title }
   async function flEntryPopup(p0, newState, opt = {}) {
@@ -8868,9 +8997,10 @@
     const st = newState || p.status || '';
     // Vorbelegung: Party, aus deren Gästeliste das Profil geöffnet wurde
     const ctx = onProfile && newState ? flCtxEvent(p.id) : null;
-    let meets = flMeetsSorted(p);
-    if (opt.prefillMeet) meets.unshift(Object.assign({ id: flNewId() }, opt.prefillMeet));
-    else if (ctx && !meets.some((m) => m.url && ctx.url && m.url === ctx.url)) meets.unshift(flMeetFromEvent(ctx));
+    const members = flMembers(p.id);
+    let meets = flGroupMeets(p.id).map(({ m, owner }) => Object.assign({}, m, { as: owner.id }));
+    if (opt.prefillMeet) meets.unshift(Object.assign({ id: flNewId(), as: p.id }, opt.prefillMeet));
+    else if (ctx && !meets.some((m) => m.url && ctx.url && m.url === ctx.url)) meets.unshift(Object.assign(flMeetFromEvent(ctx), { as: p.id }));
     if (opt.meetId) { const i = meets.findIndex((m) => m.id === opt.meetId); if (i > 0) meets.unshift(meets.splice(i, 1)[0]); }
     const isIgn = !dead && blockedIdMap().has(p.id);
     const canIgnore = !dead;
@@ -8937,6 +9067,15 @@
           x.addEventListener('click', (e) => { e.preventDefault(); meets.splice(meets.indexOf(m), 1); renderMeets(); });
           r1.appendChild(x);
           c.appendChild(r1);
+          if (members.length > 1) {
+            const ra = flEl('div', 'display:flex;gap:6px;align-items:center;margin-top:6px');
+            ra.appendChild(flEl('span', 'width:24px', 'als'));
+            const sel = flEl('select', FL_INPUT_CSS);
+            for (const id of members) sel.appendChild(new Option((flGet(id) || { nick: id }).nick, id, id === (m.as || p.id), id === (m.as || p.id)));
+            sel.addEventListener('change', () => { m.as = sel.value; });
+            ra.appendChild(sel);
+            c.appendChild(ra);
+          }
           if (m.url || m.club) c.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin:3px 0 0 30px', `${m.club ? 'Club: ' + escHtml(m.club) : ''}${m.url ? `${m.club ? ' · ' : ''}<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a">Party-Link</a>` : ''}`));
           else c.appendChild(flEl('div', 'font-size:12px;color:#777;margin:3px 0 0 30px', 'Party-Link hier einfügen → Name, Datum und Beginn werden übernommen'));
           const r2 = flEl('div', 'display:flex;gap:6px;align-items:center;margin-top:6px');
@@ -8959,12 +9098,30 @@
       renderMeets();
       renderSug();
       const add = flEl('a', 'display:inline-block;color:#e2b04a;font-weight:bold;margin-top:8px;cursor:pointer', '+ weiteres Treffen');
-      add.addEventListener('click', (e) => { e.preventDefault(); meets.unshift({ id: flNewId(), date: '', time: '', wo: '', url: '', club: '', note: '' }); renderMeets(); });
+      add.addEventListener('click', (e) => { e.preventDefault(); meets.unshift({ id: flNewId(), date: '', time: '', wo: '', url: '', club: '', note: '', as: p.id }); renderMeets(); });
       box.appendChild(add);
       // Anmerkungen (allgemein)
       box.appendChild(lab('Anmerkungen'));
       const notes = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical'); notes.rows = 2; notes.value = p.notes || '';
       box.appendChild(notes);
+      // verknüpfte Profile
+      const lk = flEl('div', 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px');
+      lk.innerHTML = flLinkedHtml(p.id) || '<span style="font-size:12.5px;opacity:.7">keine verknüpften Profile</span>';
+      if (!flIsExt(p.id) || p.wasJoy) lk.appendChild(flBtn('Verknüpfte Profile …', async () => {
+        if (!flGet(p.id)) { const q0 = Object.assign({}, p, { meets: [] }); flPut(q0); }
+        const btn = lk.querySelector('button');
+        await flLinkPopup(p.id);
+        // neu verknüpfte Profile: deren Treffen mit anzeigen
+        const now = flMembers(p.id);
+        for (const id of now) if (!members.includes(id)) for (const m of (flGet(id) || {}).meets || []) meets.push(Object.assign({}, m, { as: id }));
+        members.splice(0, members.length, ...now);
+        meets = meets.filter((m) => !m.as || members.includes(m.as));
+        meets.sort((a, b) => meetTs(b) - meetTs(a));
+        lk.innerHTML = flLinkedHtml(p.id) || '<span style="font-size:12.5px;opacity:.7">keine verknüpften Profile</span>';
+        if (btn) lk.appendChild(btn);
+        renderMeets();
+      }));
+      box.appendChild(lk);
       // Ignorieren
       let chk = null;
       if (canIgnore) {
@@ -8989,7 +9146,16 @@
           const q = flGet(p.id) || p;
           const old = q.status || '';
           q.nick = q.nick || p.nick; q.type = q.type || p.type; q.path = q.path || p.path; q.created = q.created || Date.now();
-          q.meets = meets.filter((m) => m.wo || m.date || m.note || m.url).map((m) => Object.assign({}, m, { id: m.id || flNewId() }));
+          const keep = meets.filter((m) => m.wo || m.date || m.note || m.url).map((m) => Object.assign({}, m, { id: m.id || flNewId() }));
+          const strip = (m) => { const o = Object.assign({}, m); delete o.as; return o; };
+          q.meets = keep.filter((m) => (m.as || p.id) === p.id).map(strip);
+          for (const id of members) {
+            if (id === p.id) continue;
+            const o = flGet(id);
+            if (!o) continue;
+            const mine = keep.filter((m) => m.as === id).map(strip);
+            if (JSON.stringify(o.meets || []) !== JSON.stringify(mine)) { o.meets = mine; flPut(o); }
+          }
           q.notes = notes.value.trim();
           q.dismissed = [...dismissed];
           if (newState && newState !== old) { q.status = newState; flHist(q, `Fickstatus: ${old ? flLabel(old) : '–'} → ${flLabel(newState)}`); }
@@ -9003,6 +9169,7 @@
             } else flHist(q, 'Profilnotiz geändert');
           }
           flPut(q);
+          flSyncStatus(q.id);
           if (chk && chk.checked !== isIgn) {
             msg.textContent = chk.checked ? 'Ignoriere …' : 'Entsperre …';
             const r = chk.checked ? await flDoIgnore(q) : await flDoUnignore(q);
@@ -9028,8 +9195,8 @@
   // ---- Fickliste-Block unter der Profilnotiz ----
   const FL_PEN = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zm17.7-10.2a1 1 0 0 0 0-1.42l-2.33-2.33a1 1 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
   const FL_EXT = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;margin-left:3px" aria-hidden="true"><path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3zM5 5h6v2H5v12h12v-6h2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg>';
-  function flMeetHtml(m) {
-    const wo = escHtml(m.wo || (m.url ? 'Party' : 'ohne Ort'));
+  function flMeetHtml(m, asNick = '') {
+    const wo = escHtml(m.wo || (m.url ? 'Party' : 'ohne Ort')) + (asNick ? ` <span style="font-weight:normal;opacity:.75">(als ${escHtml(asNick)})</span>` : '');
     const when = [m.date ? `am ${fmtDate(m.date)}` : '', m.time ? `um ${m.time}` : ''].filter(Boolean).join(' ');
     return `<div class="jaf-fl-meet" style="padding:9px 0;border-bottom:1px solid rgba(128,128,128,.25)">` +
       `<div style="font-weight:600">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${wo}</a>${FL_EXT.replace('style="', 'style="color:#e2b04a;')}` : wo}${m.club && m.club !== m.wo ? ` <span style="opacity:.7;font-weight:normal">· ${escHtml(m.club)}</span>` : ''}</div>` +
@@ -9040,7 +9207,9 @@
     const el = flEl('div', 'margin:12px 0;padding:14px 16px;border-top:3px solid rgba(128,128,128,.35);border-radius:8px;background:rgba(128,128,128,.08)');
     el.className = 'jaf-fl-block';
     const st = p.status || '';
-    const meets = flMeetsSorted(p);
+    const gm = flGroupMeets(p.id);
+    const meets = gm.map((x) => x.m);
+    const asOf = new Map(gm.map((x) => [x.m, x.owner]));
     const head = flEl('div', 'display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px',
       `<span style="width:26px;height:26px;border-radius:50%;background:${st === 'gef' ? '#c71b1b' : '#33363c'};display:inline-flex;align-items:center;justify-content:center;color:#fff">${flIcon(st, { size: 16 })}</span>` +
       `<span>Fickliste · ${escHtml(flLabel(st))}</span>`);
@@ -9050,11 +9219,12 @@
     head.appendChild(pen);
     el.appendChild(head);
     if (p.notes) el.appendChild(flEl('div', 'font-size:13px;margin-top:8px;white-space:pre-wrap;opacity:.9', escHtml(p.notes)));
+    const lh = flLinkedHtml(p.id); if (lh) el.insertAdjacentHTML('beforeend', lh);
     const list = flEl('div', 'margin-top:4px');
     el.appendChild(list);
     let all = false;
     const render = () => {
-      list.innerHTML = (all ? meets : meets.slice(0, 3)).map(flMeetHtml).join('') || '<div style="font-size:13px;opacity:.6;padding-top:6px">noch keine Treffen</div>';
+      list.innerHTML = (all ? meets : meets.slice(0, 3)).map((m) => { const o = asOf.get(m); return flMeetHtml(m, o && o.id !== p.id ? o.nick : ''); }).join('') || '<div style="font-size:13px;opacity:.6;padding-top:6px">Kein Treffen eingetragen</div>';
       if (meets.length > 3) {
         const more = flEl('a', 'display:inline-block;margin-top:6px;color:#e2b04a;font-weight:600;font-size:13px;cursor:pointer', all ? 'Weniger anzeigen ▴' : `Mehr anzeigen (${meets.length - 3} weitere) ▾`);
         more.addEventListener('click', (e) => { e.preventDefault(); all = !all; render(); });
@@ -9074,7 +9244,7 @@
     const p = pid && flGet(pid);
     if (!p || (!p.status && !(p.meets || []).length && !p.notes)) { if (old && !old.closest('.jaf-fl-archive, .jaf-fl-extern')) old.remove(); return; }
     if (old && old.closest('.jaf-fl-archive, .jaf-fl-extern')) return; // dort baut die Seite den Block selbst
-    const sig = JSON.stringify([p.status, p.meets, p.notes]);
+    const sig = JSON.stringify([p.status, flGroupMeets(p.id).map((x) => [x.m, x.owner.id]), p.notes, flLinkedHtml(p.id)]);
     // Platz: erstes Element der Badge-Liste der Seitenleiste (erscheint so direkt unter der Profilnotiz);
     // ohne Badge-Liste hinter dem Notizkasten
     const lists = [...document.querySelectorAll('j-list.profile-sidebar-container__badge-list')].filter((l) => !l.closest('.jaf-fl-archive'));
@@ -9121,7 +9291,7 @@
   // ---- Eigenes Profil: Badge „Fickliste“ hinter „Freunde“, Kasten über „Account“ ----
   const flOwnPage = () => !!sessionId() && new RegExp(`/${sessionId()}\\.`).test(location.pathname) && /^\/profile\//.test(location.pathname);
   function flOwnPills() {
-    if (!flOwnPage()) return;
+    if (!flOwnPage() || flViewerPid()) return;
     for (const nav of document.querySelectorAll('j-pill-navigation')) {
       if (nav.querySelector('.jaf-fl-pill')) continue;
       const fr = [...nav.querySelectorAll('j-pill')].find((x) => /^freunde$/i.test((x.textContent || '').trim()));
@@ -9163,7 +9333,7 @@
     return `<b style="${css}"${old}>${escHtml(p.nick || '?')}</b>${ext}`;
   }
   function flOwnBox() {
-    if (!flOwnPage()) return;
+    if (!flOwnPage() || flViewerPid()) return;
     const acc = document.querySelector('.profile-membership-and-coins-info');
     if (!acc) return;
     const sig = JSON.stringify([flCounts(), flLastFicks().map((x) => [x.p.id, x.m.id, x.p.live, x.p.img])]);
@@ -9178,7 +9348,7 @@
     const c = flCounts();
     const cnt = FL_ORDER.map((k) => `<a class="jaf-fl-cnt" href="${flOverviewUrl(k)}" target="_blank" title="${escHtml(FL_ST[k].label)}" style="display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:16px;color:inherit;text-decoration:none">${flIcon(k, { size: 22, redGef: true })}${c[k]}</a>`).join('');
     const rows = flLastFicks().map(({ p, m }) => {
-      const href = flDead(p) ? flArchiveUrl(p) : flUrl(p);
+      const href = flIsExt(p.id) ? flLiveUrl(p, false) : flDead(p) ? flArchiveUrl(p) : flUrl(p);
       return `<a href="${escHtml(href)}" target="_blank" style="display:flex;gap:10px;align-items:center;padding:6px 0;color:inherit;text-decoration:none">${flAvatar(p)}` +
         `<span style="min-width:0"><span>${flNickHtml(p)}</span><br><span style="font-size:12.5px;opacity:.7">${escHtml(m.wo || '')}${m.wo ? '<br>' : ''}${m.date ? 'am ' + fmtDate(m.date) : ''}</span></span></a>`;
     }).join('') || '<div style="opacity:.6;font-size:13px;padding:4px 0">noch keine Ficks eingetragen</div>';
@@ -9198,10 +9368,9 @@
   function flArchiveUrl(p, ts, nav = true) {
     const stands = flStands(p.id);
     const t = ts || (stands.some((s) => s.ts === p.lastStand) ? p.lastStand : (stands[stands.length - 1] || {}).ts) || 0;
-    const base = flPath(p);
-    return location.origin + base + (base.includes('?') ? '&' : '?') + `archiv=${t}${nav ? '&flnav=1' : ''}`;
+    return flCarrierUrl(p.id, t, nav);
   }
-  const flLiveUrl = (p, nav = true) => { const b = flPath(p); return location.origin + b + (nav ? (b.includes('?') ? '&' : '?') + 'flnav=1' : ''); };
+  const flLiveUrl = (p, nav = true) => { if (flIsExt(p.id)) return flCarrierUrl(p.id, 0, nav); const b = flPath(p); return location.origin + b + (nav ? (b.includes('?') ? '&' : '?') + 'flnav=1' : ''); };
   const flNavOn = (pid) => ssGet('jaf_flnav') === pid;
   // Navigation „Profil-Archiv“ (überblendet, wie die JOYclub-Infoleiste)
   function flShowNav(p, curTs) {
@@ -9256,6 +9425,11 @@
     row.appendChild(b('»', nn ? fmtDT(nn) : '–', nn ? byTs(nn) : null));
     body.appendChild(row);
     bar.appendChild(body);
+    if (flIsExt(p.id) && curTs) {
+      const ed = flEl('a', 'display:inline-block;margin-top:6px;font-size:12.5px;font-weight:600;color:#7be08f;cursor:pointer;text-decoration:underline', 'Aktuellen Stand bearbeiten');
+      ed.addEventListener('click', (e) => { e.preventDefault(); location.href = flLiveUrl(p, false); });
+      body.appendChild(ed);
+    }
     const x = flEl('button', 'background:none;border:0;color:#9aa3ad;font:18px system-ui;cursor:pointer;padding:0 2px', '✕');
     x.title = 'Navigation beenden';
     x.addEventListener('click', () => { ssSet('jaf_flnav', ''); bar.remove(); });
@@ -9381,40 +9555,45 @@
   }
   function flRows(v) {
     const rows = [];
-    const onlyNoMeet = v.st.length && v.st.every((k) => k === 'will' || k === 'nein');
-    for (const p of Object.values(getFl())) {
-      if (!v.st.includes(p.status)) continue;
-      if (v.user && !norm([p.nick, ...(p.nicks || [])].join(' ')).includes(norm(v.user))) continue;
-      const ms = p.meets || [];
-      if (!ms.length && onlyNoMeet) { if (!v.wo && !v.from && !v.to && !v.clubs) rows.push({ p, m: null }); continue; }
-      for (const m of ms) {
+    const fl = getFl(), G = flGroups();
+    const anyMeetFilter = !!(v.wo || v.from || v.to || v.clubs);
+    for (const p of Object.values(fl)) {
+      const prim = flPrimaryId(p.id, G);
+      if (prim !== p.id && fl[prim]) continue; // verknüpfte Profile stehen unter dem primären
+      const ids = flMembers(p.id, G);
+      const gst = p.status || (ids.map((id) => (fl[id] || {}).status).find(Boolean) || '');
+      if (!v.st.includes(gst)) continue;
+      if (v.user && !norm(ids.flatMap((id) => [(fl[id] || {}).nick, ...((fl[id] || {}).nicks || [])]).join(' ')).includes(norm(v.user))) continue;
+      let n = 0;
+      for (const id of ids) for (const m of (fl[id] && fl[id].meets) || []) {
         if (v.wo && !norm(m.wo).includes(norm(v.wo))) continue;
         if (v.clubs && !v.clubs.includes(m.club || '')) continue;
         if (v.from && (m.date || '') < v.from) continue;
         if (v.to && (m.date || '9999') > v.to) continue;
-        rows.push({ p, m });
+        rows.push({ p, m, owner: fl[id] }); n++;
       }
+      if (!n && !anyMeetFilter && !ids.some((id) => ((fl[id] && fl[id].meets) || []).length)) rows.push({ p, m: null, owner: p });
     }
     const dd = v.dateDir === 'asc' ? 1 : -1;
-    const byDate = (a, b) => dd * ((a.m ? meetTs(a.m) : 0) - (b.m ? meetTs(b.m) : 0));
+    const byDate = (a, b) => (!a.m - !b.m) || dd * ((a.m ? meetTs(a.m) : 0) - (b.m ? meetTs(b.m) : 0));
     if (v.sort === 'name') rows.sort((a, b) => (v.dir === 'asc' ? 1 : -1) * String(a.p.nick || '').localeCompare(String(b.p.nick || ''), 'de', { sensitivity: 'base' }) || byDate(a, b));
-    else rows.sort((a, b) => (v.dir === 'asc' ? 1 : -1) * ((a.m ? meetTs(a.m) : 0) - (b.m ? meetTs(b.m) : 0)));
+    else rows.sort((a, b) => (!a.m - !b.m) || (a.m ? (v.dir === 'asc' ? 1 : -1) * (meetTs(a.m) - meetTs(b.m)) : String(a.p.nick || '').localeCompare(String(b.p.nick || ''), 'de', { sensitivity: 'base' })));
     return rows;
   }
   // eine Zeile der Fickliste (Treffen bzw. Person ohne Treffen)
-  function flRowEl(p, m) {
+  function flRowEl(p, m, asNick = '') {
     const li = flEl('div', 'display:flex;gap:12px;align-items:center;padding:10px;border-radius:8px;background:rgba(128,128,128,.12);cursor:pointer');
     li.className = 'jaf-fl-row';
-    const nickHref = flDead(p) ? flArchiveUrl(p) : flLiveUrl(p);
+    const nickHref = flIsExt(p.id) ? flLiveUrl(p) : flDead(p) ? flArchiveUrl(p) : flLiveUrl(p);
     li.innerHTML = `${flAvatar(p, 56, '6px')}<div style="flex:1;min-width:0">` +
       `<div class="jaf-fl-l1row" style="display:flex;align-items:center"><span class="jaf-fl-nk" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap">` +
-      `<a class="jaf-fl-nick" href="${escHtml(nickHref)}" target="_blank" style="color:inherit;text-decoration:none">${flNickHtml(p)}</a>` +
+      `<a class="jaf-fl-nick" href="${escHtml(nickHref)}" target="_blank" style="color:inherit;text-decoration:none">${flNickHtml(p)}</a>${asNick ? `<span style="opacity:.75;font-size:12.5px">(als ${escHtml(asNick)})</span>` : ''}` +
       `${p.type ? `<span style="opacity:.6;font-size:12px">${escHtml(p.type)}</span>` : ''}${flIcon(p.status, { size: 16, redGef: true })}</span>` +
       `<a class="jaf-fl-arch" href="${escHtml(flArchiveUrl(p))}" target="_blank" style="margin-left:10px;font-size:12.5px;opacity:.75;color:inherit">Profil-Archiv</a></div>` +
       (m ? `<div style="font-size:13px">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${escHtml(m.wo || 'Party')}</a>` : escHtml(m.wo || '')}` +
         ` · <span style="${m.club ? 'opacity:.85' : 'opacity:.55;font-style:italic'}">${escHtml(m.club || 'Club unbekannt')}</span></div>` +
         (m.note ? `<div style="font-size:12.5px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(m.note)}</div>` : '')
-        : '<div style="font-size:13px;opacity:.6">noch keine Treffen</div>') +
+        : '<div style="font-size:13px;opacity:.6">Kein Treffen eingetragen</div>') +
       `</div><div style="text-align:right;font-weight:600;font-size:13px;white-space:nowrap">${m && m.date ? fmtDate(m.date) : ''}<br><span style="opacity:.6;font-weight:normal">${m && m.time ? m.time : ''}</span></div>`;
     li.addEventListener('click', (e) => {
       if (e.composedPath().some((x) => x && x.tagName === 'A')) return;
@@ -9460,6 +9639,20 @@
       if (changed) { flHist(p0, `Treffen mit Party verknüpft: ${ev.name || eid}`); flPut(p0); }
       for (const m of p0.meets || []) if (eid && (String(m.url || '').match(/\/event\/(\d+)\./) || [])[1] === eid) rows.push({ p: p0, m });
     }
+    // Anzeige unter dem primären Profil; „(als X)“, wenn nicht das primäre, aber ein verknüpftes Profil angemeldet ist
+    const G = flGroups(), fl = getFl();
+    const guests = new Set([...document.querySelectorAll('li.date_card a[href*="/profile/"], li.date_card a[href*="/my/"]')].map((a) => idOf(a.getAttribute('href'))).filter(Boolean));
+    try { if (Array.isArray(guestAll)) for (const g of guestAll) { const id = g && (g.id || idOf(g.url || g.path || '')); if (id) guests.add(String(id)); } } catch (e) { /* egal */ }
+    for (const r of rows) {
+      const prim = flPrimaryId(r.p.id, G);
+      const owner = r.p;
+      if (prim !== r.p.id && fl[prim]) r.p = fl[prim];
+      const ids = flMembers(r.p.id, G);
+      let as = '';
+      if (ids.length > 1 && !guests.has(r.p.id)) { const on = ids.find((id) => id !== r.p.id && guests.has(id)); if (on) as = (fl[on] || {}).nick || ''; }
+      if (!as && owner.id !== r.p.id) as = owner.nick;
+      r.as = as;
+    }
     rows.sort((a, b) => String(a.p.nick || '').localeCompare(String(b.p.nick || ''), 'de', { sensitivity: 'base' }) || meetTs(a.m) - meetTs(b.m));
     let li = document.querySelector('.jaf-fl-ev-tab');
     let pn = document.getElementById('jaf_fl_list');
@@ -9481,12 +9674,12 @@
       const tabPane = pn, tabLi = li;
       li.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); showOwnTab(tabLi, tabPane); flAlignNicks(tabPane); });
     }
-    const sig = JSON.stringify(rows.map((r) => [r.p.id, r.p.status, r.p.live, r.p.nick, r.m]));
+    const sig = JSON.stringify(rows.map((r) => [r.p.id, r.p.status, r.p.live, r.p.nick, r.m, r.as]));
     const ul = pn.querySelector('.jaf-fl-list');
     if (ul.__sig === sig) return;
     ul.__sig = sig;
     ul.innerHTML = '';
-    for (const { p, m } of rows) ul.appendChild(flRowEl(p, m));
+    for (const { p, m, as } of rows) ul.appendChild(flRowEl(p, m, as));
     flAlignNicks(ul);
   }
   function flRenderOverview() {
@@ -9579,7 +9772,7 @@
     const ul = flEl('div', 'display:flex;flex-direction:column;gap:8px');
     ul.className = 'jaf-fl-list';
     c.appendChild(ul);
-    for (const { p, m } of rows) ul.appendChild(flRowEl(p, m));
+    for (const { p, m, owner } of rows) ul.appendChild(flRowEl(p, m, owner && owner.id !== p.id ? owner.nick : ''));
     if (!rows.length) ul.appendChild(flEl('div', 'opacity:.6;padding:12px', 'Keine Einträge für diese Auswahl.'));
     flAlignNicks(ul);
     flRenderSide(v);
@@ -9649,14 +9842,17 @@
 
   // ---- Externe Ficks (eigene Profilseite, editierbar wie das eigene Profil) ----
   const FL_TYPES = ['Frau', 'Mann', 'Paar', 'Transfrau', 'Transmann', 'Frauen-Paar', 'Männer-Paar', 'Divers'];
-  const FL_SED_KEYS = ['Größe', 'Gewicht', 'Haarfarbe', 'Augenfarbe', 'Aussehen', 'Neigung', 'Sternzeichen', 'Dominant/Devot', 'Sadomaso', 'Raucher', 'Kinder'];
-  const FL_TEXT_KEYS = ['Über mich', 'Das mag ich', 'Das mag ich nicht'];
+  const FL_SED_KEYS = ['Größe', 'Gewicht', 'Haarfarbe', 'Augenfarbe', 'Aussehen', 'Neigung', 'Sternzeichen', 'Dominant / Devot', 'Sadomaso', 'Raucher', 'Kinder'];
+  const FL_TEXT_KEYS = ['Motto', 'Profiltext', 'Das mag ich', 'Das mag ich nicht'];
   function flExtData(p) {
-    const d = Object.assign({ nick: p.nick, type: p.type || '', ages: [], place: '', tagline: '', sed: [], secs: [], pnote: p.pnote || '' }, p.extData || {});
+    const d = Object.assign({ nick: p.nick, type: p.type || '', ages: [], place: '', tagline: '', sed: [], secs: [], bs: [], prefs: [], pnote: p.pnote || '' }, p.extData || {});
+    d.bs = d.bs || []; d.prefs = d.prefs || [];
+    d.secs = (d.secs || []).map((x) => (x.h === 'Über mich' ? { h: 'Profiltext', t: x.t } : x));
     d.nick = p.nick; d.type = p.type || d.type;
     const n = /paar/i.test(d.type) ? 2 : 1;
     while (d.sed.length < n) d.sed.push({ g: n === 2 ? (d.sed.length ? '1' : '2') : '', age: 0, title: n === 2 ? (d.sed.length ? 'Steckbrief (Er)' : 'Steckbrief (Sie)') : 'Steckbrief', props: {} });
     d.sed = d.sed.slice(0, n);
+    d.sed.forEach((x, i) => { if (d.ages[i]) x.age = d.ages[i]; if (x.props && x.props['Dominant/Devot'] && !x.props['Dominant / Devot']) { x.props['Dominant / Devot'] = x.props['Dominant/Devot']; delete x.props['Dominant/Devot']; } });
     return d;
   }
   function flExtSave(p, d, why = 'bearbeitet', img) {
@@ -9724,7 +9920,7 @@
   function flExtEdit(p, area) {
     const d = flExtData(p);
     const { ov, box } = flOverlay('jaf-fl-extedit');
-    const titles = { head: 'Kopf bearbeiten', img: 'Profilbild', sed: 'Steckbrief bearbeiten', text: 'Texte bearbeiten' };
+    const titles = { head: 'Kopf bearbeiten', img: 'Profilbild', sed: 'Steckbrief bearbeiten', text: 'Texte bearbeiten', prefs: 'Vorlieben bearbeiten', bs: 'Suchkriterien bearbeiten' };
     box.appendChild(flEl('div', 'font:bold 19px system-ui;margin-bottom:10px', escHtml(titles[area] || 'Bearbeiten')));
     const lab = (t) => box.appendChild(flEl('div', 'font-size:12.5px;color:#9a9a9a;margin:8px 0 3px', escHtml(t)));
     const inp = (v, w = '100%') => { const e = flEl('input', FL_INPUT_CSS + `;width:${w}`); e.value = v || ''; return e; };
@@ -9761,6 +9957,23 @@
         get.push(() => { const ix = d.sed.findIndex((x) => x.title === s.title); const t = ix >= 0 ? d.sed[ix] : (d.sed.push(s), s); for (const k of FL_SED_KEYS) t.props[k] = fields[k].value.trim(); });
       }
       box.appendChild(grid);
+    } else if (area === 'prefs') {
+      for (const k of ['Unbedingt', 'Steh ich drauf', 'Geht gar nicht']) {
+        lab(`${k} (durch Komma getrennt)`);
+        const cur = ((d.prefs.find((x) => x.h === k) || {}).items || []).join(', ');
+        const ta = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical'); ta.rows = 2; ta.value = cur; box.appendChild(ta);
+        get.push(() => { d.prefs = d.prefs.filter((x) => x.h !== k); const items = ta.value.split(',').map((x) => x.trim()).filter(Boolean); if (items.length) d.prefs.push({ h: k, items }); });
+      }
+      get.push(() => { const o = ['Unbedingt', 'Steh ich drauf', 'Geht gar nicht']; d.prefs.sort((a, b) => o.indexOf(a.h) - o.indexOf(b.h)); });
+    } else if (area === 'bs') {
+      const keys = ['Ich suche', 'Neigung', 'Beziehungsstatus', 'Besuchbar', 'Swinger', 'BDSM', 'Fotoshooting'];
+      for (const k of keys) {
+        lab(k);
+        const e = inp((d.bs.find((x) => x.t === k) || {}).c);
+        box.appendChild(e);
+        get.push(() => { d.bs = d.bs.filter((x) => x.t !== k); if (e.value.trim()) d.bs.push({ t: k, c: e.value.trim() }); });
+      }
+      get.push(() => { d.bs.sort((a, b) => keys.indexOf(a.t) - keys.indexOf(b.t)); });
     } else {
       for (const k of FL_TEXT_KEYS) {
         lab(k);
@@ -9777,7 +9990,7 @@
       if (newImg) { img = flNewId(); GM_setValue(K_FLI + img, newImg); }
       flExtSave(p, d, area === 'img' ? 'Profilbild geändert' : 'bearbeitet', img);
       ov.remove();
-      flExternRender(true);
+      if (flViewerPid()) flViewerRender(true); else if (flExternPage()) flExternRender(true);
     }, true));
     box.appendChild(row);
   }
@@ -9960,6 +10173,200 @@
     return o;
   }
 
+
+  // ---- Profil-Ansicht im echten JOYclub-Design: Träger ist das eigene Profil (/profile/<eigene ID>…?fl=<pid>[&archiv=<ts>]) ----
+  // Gerüst nach dem Aufbau eines fremden Profils (Kopf, Seitenleiste, Profiltexte, Steckbrief, Vorlieben). Die data-v-Attribute
+  // werden – wenn vorhanden – von der Trägerseite übernommen, damit JOYclubs CSS greift.
+  const flOwnPath = () => GM_getValue('jaf_own_path', '') || (sessionId() ? `/profile/${sessionId()}.html` : '');
+  const flViewerPid = () => (isProfilePage() && sessionId() && idOf(location.pathname) === sessionId()
+    ? decodeURIComponent((location.search.match(/[?&]fl=([^&]+)/) || [])[1] || '') : '');
+  const flCarrierUrl = (pid, ts, nav) => `${location.origin}${flOwnPath()}?fl=${encodeURIComponent(pid)}${ts ? `&archiv=${ts}` : ''}${nav ? '&flnav=1' : ''}`;
+  const FL_DV = { // Rückfall-Werte (Stand 10/2026)
+    'profile-container': 'data-v-f349d257', 'profile-header': 'data-v-58838249 data-v-f349d257', 'profile-coverart': 'data-v-944beade data-v-58838249',
+    'profile-header__main-infos': 'data-v-58838249', 'profile-header__pic': 'data-v-58838249', 'profile-avatar': 'data-v-9c2ac1f3 data-v-58838249',
+    'profile-avatar__image-container': 'data-v-9c2ac1f3', 'profile-avatar__gradient-overlay': 'data-v-9c2ac1f3',
+    'profile-header__base-information': 'data-v-58838249', 'profile-base-info': 'data-v-0a6a81ea data-v-58838249', 'profile-base-info__line-1': 'data-v-0a6a81ea',
+    'profile-header__header-slot': 'data-v-58838249', 'profile-container__interaction-buttons': 'data-v-f349d257', 'profile-interaction-buttons': 'data-v-02c22baa data-v-f349d257',
+    'profile-label-interaction-button': 'data-v-5a0c4a53 data-v-02c22baa', 'profile-container__body': 'data-v-f349d257',
+    'profile-sidebar-container': 'data-v-191742e8 data-v-f349d257', 'profile-sidebar-container__desktop-only-content': 'data-v-191742e8',
+    'profile-bs-container': 'data-v-bc5636d3 data-v-70cc99b8 data-v-191742e8', 'profile-bs-grid': 'data-v-e4e63473 data-v-70cc99b8',
+    'profile-bs-property': 'data-v-fff2cf02 data-v-70cc99b8', 'profile-bs-property__title': 'data-v-fff2cf02', 'profile-sidebar-container__badge-list': 'data-v-191742e8',
+    'profile-container__content': 'data-v-f349d257', 'profile-main-page': 'data-v-2be65c87 data-v-f349d257', 'profile-description': 'data-v-0cdd21da',
+    'profile-description-motto': 'data-v-64cfe7b9 data-v-0cdd21da', 'profile-description-maintext': 'data-v-b3af8de8 data-v-0cdd21da',
+    'profile-description-like': 'data-v-db1bc5af data-v-0cdd21da', 'profile-headline': 'data-v-795786fb', 'profile-sed-card-container': 'data-v-30811b87 data-v-2be65c87',
+    'profile-sed-card-container__sed-card': 'data-v-30811b87', 'profile-sed-card': 'data-v-15f3ebeb data-v-30811b87', 'profile-sed-card__upper-info': 'data-v-15f3ebeb',
+    'profile-erotic-prefs': 'data-v-be9e2df7 data-v-15f3ebeb', 'profile-erotic-prefs__header': 'data-v-be9e2df7',
+  };
+  const flDvCache = {};
+  function flDv(cls) {
+    if (flDvCache[cls]) return flDvCache[cls];
+    const e = document.querySelector(`main.profile-container:not(.jaf-fl-tpl) .${cls}, main.profile-container.${cls}:not(.jaf-fl-tpl)`);
+    const live = e ? [...e.attributes].filter((a) => a.name.startsWith('data-v-')).map((a) => a.name).join(' ') : '';
+    return (flDvCache[cls] = live || FL_DV[cls] || '');
+  }
+  const dvA = (cls) => flDv(cls).split(' ').filter(Boolean).map((a) => `${a}=""`).join(' ');
+  // Inhalte eines Profils (zusätzlich zu flCollect): Beschreibung, Suchkriterien, Vorlieben
+  function flDescSections(doc = document) {
+    const out = [];
+    const map = [['.profile-description-motto', 'Motto', '.profile-description-motto__text'], ['.profile-description-maintext', 'Profiltext', '.profile-description-maintext__text'],
+      ['.profile-description-like', 'Das mag ich', '.profile-description-like__text'], ['.profile-description-dislike', 'Das mag ich nicht', '.profile-description-dislike__text']];
+    for (const [sel, h, tsel] of map) {
+      const sec = [...doc.querySelectorAll(sel)].find((e) => !e.closest('.jaf-fl-viewer'));
+      const t = sec && sec.querySelector(tsel);
+      const txt = t ? (t.innerText || t.textContent || '').replace(/\n{3,}/g, '\n\n').trim() : '';
+      if (txt) out.push({ h, t: txt });
+    }
+    return out;
+  }
+  function flBsProps(doc = document) {
+    const out = [];
+    for (const p of doc.querySelectorAll('.profile-bs-property, .profile-bs-so-property')) {
+      if (p.closest('.jaf-fl-viewer')) continue;
+      const t = ((p.querySelector('[class$="__title"]') || {}).textContent || '').trim();
+      const c = ((p.querySelector('[class$="__content"]') || {}).innerText || (p.querySelector('[class$="__content"]') || {}).textContent || '').replace(/\s+/g, ' ').trim();
+      if (t && c && !out.some((x) => x.t === t)) out.push({ t, c });
+    }
+    return out;
+  }
+  function flPrefs(doc = document) {
+    const out = [];
+    for (const cat of doc.querySelectorAll('.profile-erotic-prefs__category')) {
+      if (cat.closest('.jaf-fl-viewer')) continue;
+      const h = ((cat.querySelector('.profile-erotic-prefs__category-title') || {}).textContent || '').trim();
+      const items = [...cat.querySelectorAll('j-tag')].map((t) => ((t.shadowRoot && t.shadowRoot.textContent) || t.textContent || t.getAttribute('text') || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+      if (h && items.length && !out.some((x) => x.h === h)) out.push({ h, items });
+    }
+    return out;
+  }
+  const FL_SED_UPPER = ['Größe', 'Gewicht', 'Haarfarbe', 'Augenfarbe', 'Aussehen', 'Neigung', 'Sternzeichen'];
+  // Gerüst eines fremden Profils mit den Daten eines Stands bzw. eines externen Ficks
+  function flTplProfile(d, imgSrc, opt = {}) {
+    const E = escHtml;
+    const pen = (a) => (opt.editable ? (window.customElements && customElements.get('j-control-button')
+      ? `<j-control-button class="profile-inline-edit-button jaf-fl-pen" data-a="${a}" icon-only="true" variant="secondary" a11y-label="Bearbeiten" title="Bearbeiten" style="margin-left:8px;vertical-align:middle"><j-icon type="j-ico-pen"></j-icon></j-control-button>`
+      : `<button type="button" class="jaf-fl-pen" data-a="${a}" title="Bearbeiten" style="margin-left:8px;background:#33363c;border:0;border-radius:50%;width:30px;height:30px;color:#fff;cursor:pointer;vertical-align:middle">${FL_PEN}</button>`) : '');
+    const sed = d.sed || [];
+    const g0 = (sed[0] && sed[0].g) || (/frau/i.test(d.type || '') ? '2' : /mann/i.test(d.type || '') ? '1' : '');
+    const img = imgSrc ? `<img class="core-img cover" src="${imgSrc}" alt="" style="width:100%;height:100%;object-fit:cover">`
+      : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#5c6470;color:#fff;font:bold 72px system-ui">${E((d.nick || '?').slice(0, 1).toUpperCase())}</div>`;
+    const ages = (d.ages || []).length ? `${(d.ages || []).join(' + ')} Jahre` : '';
+    const bs = (d.bs || []).map((x) => `<div ${dvA('profile-bs-property')} class="profile-bs-property"><div ${dvA('profile-bs-property__title')} class="profile-bs-property__title">${E(x.t)}</div> <div ${dvA('profile-bs-property__title')} class="profile-bs-property__content">${E(x.c)}</div></div>`).join('');
+    const desc = (d.secs || []).map((x) => {
+      if (x.h === 'Motto') return `<section ${dvA('profile-description-motto')} class="profile-description-motto"><div class="profile-description-motto__text" ${dvA('profile-description-motto').split(' ')[0]}>${E(x.t)}</div></section>`;
+      if (x.h === 'Profiltext' || x.h === 'Über mich') return `<section ${dvA('profile-description-maintext')} class="profile-description-maintext"><p class="profile-description-maintext__text" style="white-space:pre-wrap">${E(x.t)}</p></section>`;
+      return `<section ${dvA('profile-description-like')} class="profile-description-like"><h2 ${dvA('profile-headline')} class="profile-headline profile-headline--with-margin">${E(x.h)}</h2> <p class="profile-description-like__text" style="white-space:pre-wrap">${E(x.t)}</p></section>`;
+    }).join(' ');
+    const prop = (k, v) => `<div ${dvA('profile-sed-card__upper-info')} class="profile-sed-card__property"><div ${dvA('profile-sed-card__upper-info')} class="profile-sed-card__headline">${E(k)}</div> <div ${dvA('profile-sed-card__upper-info')} class="profile-sed-card__content">${E(v)}</div></div>`;
+    const prefs = (d.prefs || []).length ? `<div ${dvA('profile-erotic-prefs')} class="profile-erotic-prefs"><div ${dvA('profile-erotic-prefs__header')} class="profile-erotic-prefs__header"><h3 class="profile-erotic-prefs__headline">Vorlieben${pen('prefs')}</h3></div>` +
+      d.prefs.map((c) => `<div class="profile-erotic-prefs__category"><h4 class="profile-erotic-prefs__category-title">${E(c.h)}</h4> <div class="profile-erotic-prefs__category-item-list" style="display:flex;flex-wrap:wrap;gap:6px">${c.items.map((t) => `<span class="jaf-fl-tag" style="display:inline-block;border:1px solid rgba(128,128,128,.5);border-radius:14px;padding:3px 10px;font-size:13px">${E(t)}</span>`).join('')}</div></div>`).join('') + '</div>'
+      : (opt.editable ? `<div class="profile-erotic-prefs"><h3 class="profile-erotic-prefs__headline">Vorlieben${pen('prefs')}</h3><div style="opacity:.6">keine Angaben</div></div>` : '');
+    const cards = (sed.length ? sed : [{ g: g0, age: (d.ages || [])[0] || 0, title: 'Steckbrief', props: {} }]).map((s, i) => {
+      const P = s.props || {};
+      const up = FL_SED_UPPER.filter((k) => P[k]).map((k) => prop(k, P[k])).join('');
+      const low = Object.keys(P).filter((k) => !FL_SED_UPPER.includes(k) && P[k]).map((k) => prop(k, P[k])).join('');
+      return `<div ${dvA('profile-sed-card-container__sed-card')} class="profile-sed-card-container__sed-card" style="flex:1;min-width:260px"><div ${dvA('profile-sed-card')} class="profile-sed-card"><h2 class="sr-only">${E(s.title || 'Steckbrief')}</h2>` +
+        `<j-card ${dvA('profile-sed-card').split(' ')[0]}="" hide-media=""><div ${dvA('profile-sed-card__upper-info')} class="profile-sed-card__expandable-content">` +
+        `<div ${dvA('profile-sed-card__upper-info')} class="profile-sed-card__upper-info"><div ${dvA('profile-sed-card__upper-info')} class="profile-sed-card__property profile-sed-card__property--filled">` +
+        `${s.g ? `<j-gender-icon class="profile-sed-card__gender-icon" universal-gender="${E(s.g)}" highlighted-gender="[]"></j-gender-icon>` : ''} <span>${s.age ? `${s.age} Jahre` : E(s.title || '')}</span>${i === 0 ? pen('sed') : ''}</div>${up}</div>` +
+        (low ? `<j-spacer class="profile-sed-card__spacer"></j-spacer><div ${dvA('profile-sed-card__upper-info')} class="profile-sed-card__lower-info">${low}</div>` : '') +
+        (i === sed.length - 1 || !sed.length ? `<j-spacer class="profile-sed-card__spacer profile-sed-card__spacer--bigger"></j-spacer>${prefs}` : '') +
+        `</div></j-card></div></div>`;
+    }).join('');
+    return `<main ${dvA('profile-container')} class="profile-container jaf-fl-tpl">` +
+      `<div ${dvA('profile-container')}><div ${dvA('profile-header')} class="profile-header"><div ${dvA('profile-coverart')} class="profile-coverart" aria-hidden="true"></div>` +
+      `<div ${dvA('profile-header__main-infos')} class="profile-header__main-infos"><div ${dvA('profile-header__pic')} class="profile-header__pic">` +
+      `<div ${dvA('profile-avatar')} class="profile-avatar"><div ${dvA('profile-avatar__image-container')} class="profile-avatar__image-container"><a ${dvA('profile-avatar__image-container')} class="profile-avatar__link jaf-fl-avatar" style="${opt.editable ? 'cursor:pointer' : ''}" title="${opt.editable ? 'Profilbild ändern' : ''}">` +
+      `<div class="image-ui vue-variant adaptive" style="width:100%;height:100%">${img}</div></a><div ${dvA('profile-avatar__gradient-overlay')} class="profile-avatar__gradient-overlay"></div></div></div>${pen('img')}</div>` +
+      `<div ${dvA('profile-header__base-information')} class="profile-header__base-information profile-header__base-information--desktop"><div ${dvA('profile-base-info')} class="profile-base-info">` +
+      `<div ${dvA('profile-base-info__line-1')} class="profile-base-info__line-1"><h1 ${dvA('profile-base-info__line-1')} class="profile-base-info__user-name">${E(d.nick || '')}</h1> ${g0 ? `<j-gender-icon universal-gender="${E(g0)}" highlighted-gender="[]"></j-gender-icon>` : ''}${pen('head')}</div>` +
+      `<div ${dvA('profile-base-info__line-1')} class="profile-base-info__line-2"><span>${E(d.type || '')}</span> <span>${E(ages)}</span> <div class="profile-base-info__location-info"><span>${E(d.place || '')}</span></div></div>` +
+      (opt.subline ? `<div class="profile-base-info__line-3">${opt.subline}</div>` : '') + `</div></div></div>` +
+      `<div ${dvA('profile-header__header-slot')} class="profile-header__header-slot"><div ${dvA('profile-container__interaction-buttons')} class="profile-container__interaction-buttons">` +
+      `<div ${dvA('profile-interaction-buttons')} class="profile-interaction-buttons"><div ${dvA('profile-label-interaction-button')} class="profile-label-interaction-button profile-label-interaction-button--is-big jaf-fl-proto" style="display:none"><span class="profile-clubmail-button"></span></div></div></div></div></div></div>` +
+      `<div ${dvA('profile-container__body')} class="profile-container__body"><aside ${dvA('profile-sidebar-container')} class="profile-sidebar-container profile-container__sidebar">` +
+      `<div ${dvA('profile-sidebar-container__desktop-only-content')} class="profile-sidebar-container__desktop-only-content">` +
+      (bs || opt.editable ? `<div ${dvA('profile-bs-container')} class="profile-content-card__wrapper profile-bs-container"><j-content-card><h2 class="sr-only">Suchkriterien</h2>${pen('bs')}<div ${dvA('profile-bs-grid')} class="profile-bs-grid">${bs || '<div style="opacity:.6">keine Suchkriterien</div>'}</div></j-content-card></div>` : '') +
+      (d.pnote ? `<j-content-card class="jaf-fl-pnote" style="display:block;margin-top:12px"><div style="font-weight:600;font-size:13.5px;margin-bottom:4px">${opt.archive ? 'Profilnotiz (damals)' : 'Profilnotiz'}</div><div style="white-space:pre-wrap;font-size:13px">${E(d.pnote)}</div></j-content-card>` : '') +
+      `</div><j-list ${dvA('profile-sidebar-container__badge-list')} class="profile-sidebar-container__badge-list jaf-fl-tpl-list" role="list"></j-list></aside>` +
+      `<div ${dvA('profile-container__content')} class="profile-container__content"><div ${dvA('profile-main-page')} class="profile-main-page profile-main-page--use-content-gap">` +
+      `<div class="profile-main-page--mobile-horizontal-margin"><div ${dvA('profile-description')} class="profile-description">${opt.editable ? `<div style="text-align:right">${pen('text')}</div>` : ''}${desc || (opt.editable ? '<div style="opacity:.6">noch keine Profiltexte</div>' : '')}</div></div>` +
+      `<div ${dvA('profile-sed-card-container')} class="profile-sed-card-container" style="display:flex;gap:16px;flex-wrap:wrap">${cards}</div>` +
+      `</div></div></div></main>`;
+  }
+  // Ansicht rendern (Archivstand bzw. externer Fick); force = neu aufbauen
+  function flViewerRender(force = false) {
+    const pid = flViewerPid();
+    const p = flGet(pid);
+    const ts = flArchivParam();
+    const host = document.querySelector('main.profile-container:not(.jaf-fl-tpl)');
+    let wrap = document.querySelector('.jaf-fl-viewer');
+    const sig = JSON.stringify([pid, ts, p && p.updated]);
+    if (wrap && wrap.__sig === sig && !force) return;
+    if (!wrap) {
+      wrap = flEl('div', 'min-height:60vh');
+      wrap.className = 'jaf-fl-viewer';
+      if (host) { host.style.display = 'none'; host.insertAdjacentElement('beforebegin', wrap); }
+      else (document.querySelector('#cfull, #page, #mfs_core') || document.body).prepend(wrap);
+    }
+    wrap.__sig = sig;
+    if (!p) { wrap.innerHTML = '<div style="padding:40px;text-align:center">Diesen Eintrag gibt es in deiner Fickliste nicht (mehr).</div>'; return; }
+    if (/[?&]flnav=1/.test(location.search)) ssSet('jaf_flnav', pid);
+    const ext = flIsExt(pid);
+    const stands = flStands(pid);
+    const s = ts ? (stands.find((x) => x.ts === ts) || stands[stands.length - 1]) : null;
+    if (!s && !ext) { location.replace(flLiveUrl(p, flNavOn(pid))); return; }
+    if (s && p.lastStand !== s.ts) { p.lastStand = s.ts; flPut(p); }
+    const editable = !s && ext;
+    const d = s ? s.data || {} : flExtData(p);
+    const imgSrc = s ? (flImg(s.img) || flImg(p.img)) : flImg(p.img);
+    if (s && s.html) {
+      if (typeof wrap.setHTMLUnsafe === 'function') wrap.setHTMLUnsafe(s.html); else wrap.innerHTML = s.html;
+      wrap.querySelectorAll('[class*="jaf-"]').forEach((e) => e.remove());
+      if (imgSrc) wrap.querySelectorAll('j-avatar [data-img_id] img, j-avatar [data-img_id] source, .profile-avatar img, .profile-avatar source').forEach((e) => { if (e.tagName === 'SOURCE') e.setAttribute('srcset', imgSrc); else { e.src = imgSrc; e.removeAttribute('data-src'); } });
+      wrap.querySelectorAll('main.profile-container').forEach((m) => m.classList.add('jaf-fl-tpl'));
+    } else {
+      const sub = ext && !p.wasJoy ? '<span style="font-size:11px;border:1px solid currentColor;border-radius:8px;padding:0 6px;opacity:.75">extern</span>' : '';
+      wrap.innerHTML = flTplProfile(d, imgSrc, { editable, archive: !!s, subline: sub });
+    }
+    // Fickliste-Block oben in der Badge-Liste
+    const list = wrap.querySelector('j-list.profile-sidebar-container__badge-list');
+    const blk = flBlockEl(p);
+    blk.classList.add('jaf-fl-vblock');
+    if (list) list.prepend(blk); else (wrap.querySelector('aside') || wrap).prepend(blk);
+    if (editable) {
+      wrap.querySelectorAll('.jaf-fl-pen').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); flExtEdit(flGet(pid), b.getAttribute('data-a')); }));
+      const av = wrap.querySelector('.jaf-fl-avatar');
+      if (av) av.addEventListener('click', (e) => { e.preventDefault(); flExtEdit(flGet(pid), 'img'); });
+      if (!p.wasJoy) {
+        const lk = flBtn('Mit JOYclub-Profil verknüpfen', () => flLinkJoy(flGet(pid)));
+        lk.style.margin = '16px 0';
+        (wrap.querySelector('aside') || wrap).appendChild(lk);
+      }
+    }
+    // aktive Inhalte einer Kopie → echtes Profil bzw. Hinweis
+    if (!wrap.__jafBound) {
+      wrap.__jafBound = true;
+      wrap.addEventListener('click', (ev) => {
+        if (!flArchivParam() && flIsExt(flViewerPid())) return;
+        const path = ev.composedPath();
+        if (path.some((e) => e && e.classList && (e.classList.contains('jaf-fl-wrap') || e.classList.contains('jaf-fl-block') || e.classList.contains('jaf-fl-pen') || e.id === 'jaf-fl-dd'))) return;
+        const act = path.find((e) => e && e.nodeType === 1 && (e.tagName === 'A' || e.tagName === 'BUTTON' || /^J-(BUTTON|CONTROL-BUTTON|CONTEXT-MENU|A|PILL|LINK|TAG)/.test(e.tagName)));
+        if (!act) return;
+        ev.preventDefault(); ev.stopPropagation();
+        const q = flGet(flViewerPid());
+        if (!q) return;
+        if (flDead(q) || flIsExt(q.id)) { flDeadPopup(q); return; }
+        const href = act.getAttribute && act.getAttribute('href');
+        if (href && !/^#|javascript:/.test(href) && idOf(href) !== q.id) location.href = new URL(href, location.origin).href;
+        else location.href = flLiveUrl(q, false);
+      }, true);
+    }
+    if (s && (flDead(p) || (ext && !wrap.__deadShown))) { wrap.__deadShown = true; if (flDead(p)) flDeadPopup(p); }
+    if (!s && flDead(p) && !wrap.__deadShown) { wrap.__deadShown = true; flDeadPopup(p); }
+    if (ssGet('jaf_flnav') === pid) flShowNav(p, s ? s.ts : 0);
+    document.title = `${p.nick || ''}${s ? ` · Profil-Archiv ${fmtDT(s.ts)}` : ''} – JOYclub`;
+  }
+
   // ---- Takt: alle Fickliste-Teile ----
   let flVisitDone = '';
   function flTick() {
@@ -9967,14 +10374,19 @@
     flSaveEventPage();
     flEditNav();
     if (flOverviewPage() && !document.querySelector('.jaf-fl-page') && document.getElementById('c')) flRenderOverview();
-    if (flExternPage()) flExternRender();
+    // eigener Profilpfad (Träger der Fickliste-Ansichten)
+    const ub = document.querySelector('.navigation_user_box a[href*="/profile/"]');
+    if (ub) { const op = new URL(ub.href, location.origin).pathname; if (op !== GM_getValue('jaf_own_path', '')) GM_setValue('jaf_own_path', op); }
+    // alte Adressen der externen Seiten → Ansicht auf dem eigenen Profil
+    if (flExternPage() && flOwnPath()) { location.replace(flCarrierUrl('x-' + flExternSlug(), flArchivParam(), /[?&]flnav=1/.test(location.search) || flNavOn('x-' + flExternSlug()))); return; }
+    if (flViewerPid()) { flViewerRender(); flInsertButtons(); }
     flOwnPills();
     flOwnBox();
     if (isProfilePage() && !isOwnProfile()) {
       const pid = idOf(location.pathname);
       if (flArchivParam()) {
-        if (!document.querySelector('.jaf-fl-archive')) flArchiveView();
-        flInsertButtons();
+        // Archivstände werden auf dem eigenen Profil im JOYclub-Design gezeigt
+        if (flGet(pid) && flOwnPath()) { location.replace(flCarrierUrl(pid, flArchivParam(), /[?&]flnav=1/.test(location.search) || flNavOn(pid))); return; }
       } else {
         flInsertButtons();
         flProfileBlock();

@@ -448,6 +448,7 @@ Jede Zustandsänderung öffnet das Popup „Ficklisteneintragung“:
 - **Profilnotiz** (JOYclub) – vorbelegt, Änderungen werden auf dem Profil gespeichert.
 - **Treffen** (beliebig viele, neueste oben): *wo*, *am*, *um* und eine *Ficknotiz*. Vorbelegt mit der Party, aus deren Gästeliste du das Profil geöffnet hast. „Party wählen …“ bietet die Partys von heute und die letzten 10 vergangenen (eigene Anmeldungen mit ★) und eine Suche. Ein eingefügter Party-Link wird gelesen: Name, Datum, Beginn und Club werden übernommen, der Link bleibt dahinter gespeichert.
 - **Anmerkungen** (allgemein).
+- **als** – bei verknüpften Profilen gehört jedes Treffen einem der Profile (Auswahl je Treffen); „Verknüpfte Profile …“ öffnet die Verwaltung.
 - **Profil zukünftig ignorieren** – bei „Nein, danke!“ und „Nie wieder!“ vorausgewählt. Ist das Profil schon ignoriert, steht „Dieses Profil wird derzeit ignoriert!“ darunter; Abwählen entsperrt es (und setzt es auf die eigene Whitelist). Ignorieren hebt einen Whitelist-Eintrag auf. Bei vollem Limit weicht eine automatische Sperre – eigene Listen haben Vorrang.
 - Enthält die Profilnotiz ein Datum ohne Treffen, schlägt das Skript passende Partys vor (Datum + Club oder Partyname; „am selben Tag“ als schwächere Vorschläge).
 
@@ -455,7 +456,7 @@ Jede Zustandsänderung öffnet das Popup „Ficklisteneintragung“:
 
 <img src="docs/fickliste-eintragung.png" width="420" alt="Popup Ficklisteneintragung"> <img src="docs/fickliste-zuruecksetzen.png" width="360" alt="Popup Fickstatus zurücksetzen">
 
-Unter der Profilnotiz (oben in der Liste der Profil-Badges) zeigt das Profil die Einträge (neueste drei, dann „Mehr anzeigen“) und den Link „Zu meiner Fickliste“; der Stift öffnet dasselbe Popup.
+Unter der Profilnotiz (oben in der Liste der Profil-Badges) zeigt das Profil die Einträge (neueste drei, dann „Mehr anzeigen“, ohne Treffen: „Kein Treffen eingetragen“), die verknüpften Profile und den Link „Zu meiner Fickliste“; der Stift öffnet dasselbe Popup.
 
 <img src="docs/fickliste-profil.png" width="400" alt="Fickliste-Block unter der Profilnotiz">
 
@@ -463,13 +464,13 @@ Unter der Profilnotiz (oben in der Liste der Profil-Badges) zeigt das Profil die
 
 Beim Setzen eines Zustands und bei jedem späteren Profilbesuch mit Änderungen speichert das Skript einen **Stand**: Nick, Typ, Alter, Ort, Steckbrief(e), Profiltexte, deine damalige Profilnotiz und das **Profilbild in bester Qualität** (jedes neue Bild bleibt erhalten). Jeder Stand trägt Datum, Uhrzeit und Grund (z. B. „Fickstatus: Will ich → Gefickt“, „Profilbild geändert“, „Nick geändert“).
 
-„Profil-Archiv“ öffnet den zuletzt betrachteten Stand. Eine Navigation blättert vor und zurück (‹ ›), springt mit « » nur zu den Ständen direkt vor und nach einem Treffen und wählt in der Mitte jeden Stand oder „aktuell (echtes Profil)“. Sie erscheint auch auf dem echten Profil, wenn du aus der Fickliste kommst, und lässt sich für diesen Tab mit ✕ beenden. Aktive Inhalte der Kopie führen zum echten Profil; gibt es das Profil nicht mehr, erscheint mittig „Dieser Benutzer ist nicht mehr auf JOYclub – Du betrachtest eine statische Kopie seines alten Profils“ (schließt nach 10 s).
+„Profil-Archiv“ öffnet den zuletzt betrachteten Stand. Eine Navigation blättert vor und zurück (‹ ›), springt mit « » nur zu den Ständen direkt vor und nach einem Treffen und wählt in der Mitte jeden Stand oder „aktuell (echtes Profil)“. Sie erscheint auch auf dem echten Profil, wenn du aus der Fickliste kommst, und lässt sich für diesen Tab mit ✕ beenden. Archiv-Stände erscheinen (wie externe Ficks) im Aussehen eines JOYclub-Profils auf deinem eigenen Profil als Trägerseite – mit Kopf, Suchkriterien, Profilnotiz, Fickliste-Block, Texten, Steckbrief und Vorlieben. Aktive Inhalte der Kopie führen zum echten Profil; gibt es das Profil nicht mehr, erscheint mittig „Dieser Benutzer ist nicht mehr auf JOYclub – Du betrachtest eine statische Kopie seines alten Profils“ (schließt nach 10 s).
 
 <img src="docs/fickliste-archiv.png" width="640" alt="Profil-Archiv mit Navigation">
 
 ### Meine Fickliste
 
-Unter **Profil verwalten → Fickliste** (zwischen „Videos“ und „Homepages“, auch als Kachel auf der Startseite der Profilverwaltung und als erster Eintrag „Fickliste“ im Hamburger-Menü unter „Profil & Einstellungen“): jede Zeile ist ein Treffen. Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Wo“, Clubs (inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
+Unter **Profil verwalten → Fickliste** (zwischen „Videos“ und „Homepages“, auch als Kachel auf der Startseite der Profilverwaltung und als erster Eintrag „Fickliste“ im Hamburger-Menü unter „Profil & Einstellungen“): jede Zeile ist ein Treffen; Personen ohne Treffen stehen mit „Kein Treffen eingetragen“ in der Liste (bei Datumssortierung am Ende, bei Namenssortierung alphabetisch; ausgeblendet, solange nach Wo, Club oder Datum gefiltert wird). Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Wo“, Clubs (inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
 
 <img src="docs/fickliste-uebersicht.png" width="700" alt="Seite Meine Fickliste">
 
@@ -483,7 +484,15 @@ Hinter „Freunde“ steht der Reiter „Fickliste“; über „Account“ ein K
 
 ### Externe Ficks
 
-„+ Externen Fick zufügen“ legt eine eigene Seite im Stil eines JOYclub-Profils an (Adresse aus dem Namen). Profilbild, Typ, Ort, Kurztext, Steckbrief und Texte sind wie im eigenen Profil per Stift editierbar; jede Änderung wird ein Archiv-Stand. Mit „war bei JOYclub“ verhält sich der Eintrag wie ein gelöschtes Profil. Später lässt er sich mit einem echten JOYclub-Profil verknüpfen.
+„+ Externen Fick zufügen“ legt eine Seite im Aussehen eines JOYclub-Profils an; sie wird auf deinem eigenen Profil dargestellt (Adresse: dein Profil mit `?fl=x-<name>`). Profilbild (Klick aufs Bild), Kopf (Typ, Alter, Ort, Kurztext), Suchkriterien, Profilnotiz, Texte (Motto, Profiltext, Das mag ich / nicht), Steckbrief und Vorlieben sind per Stift editierbar; jede Änderung wird ein Archiv-Stand. Mit „war bei JOYclub“ verhält sich der Eintrag wie ein gelöschtes Profil und lässt sich über „Mit JOYclub-Profil verknüpfen“ einem echten Profil zuordnen.
+
+<img src="docs/fickliste-extern.png" width="640" alt="Externer Fick im Profil-Aussehen"> <img src="docs/fickliste-extern-bearbeiten.png" width="300" alt="Suchkriterien bearbeiten">
+
+### Verknüpfte Profile
+
+Gehört eine Person zu mehreren Profilen (z. B. Paarprofil, ihr eigenes und sein eigenes), verknüpfst du sie über „Verknüpfte Profile …“ in der Eintragung (Profil-Link oder Nick aus der Fickliste). Eines ist **primär**: In „Meine Fickliste“ und auf Party-Seiten steht die Person unter dem primären Nick und Status; Treffen eines anderen Profils tragen „(als …)“. Ist auf einer Party nicht das primäre, aber ein verknüpftes Profil angemeldet, steht ebenfalls „(als …)“ dahinter. „Status mit primärem Profil synchron halten“ übernimmt Statuswechsel des primären Profils (z. B. nicht beim Mann, mit dem nichts lief). Die Einträge werden nicht zusammengelegt – jede Verknüpfung lässt sich wieder lösen.
+
+<img src="docs/fickliste-verknuepfen.png" width="420" alt="Popup Verknüpfte Profile">
 
 ### Gelöschte Kontakte (ClubMail)
 
@@ -546,7 +555,7 @@ Die CSV-Exporte (`;`, Excel-tauglich) unterhalb der Sicherung dienen nur der Feh
 ## Technisches
 
 - **Speicher:** große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen als ein Tampermonkey-Wert je Mitglied (`jaf_log|/profile/…`); geändert wird nur, was sich ändert, andere Tabs werden über `GM_addValueChangeListener` informiert. Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`; ab 1.76 `GM_xmlhttpRequest` mit `@connect image-user.feig-partner.de` (Profilbilder für das Profil-Archiv – Tampermonkey fragt einmal nach).
-- **Fickliste:** `jaf_fl` (Personen), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
+- **Fickliste:** `jaf_fl` (Personen), `jaf_fl_groups` (verknüpfte Profile), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
 - **Orts-URLs:** ä→ae, ö→oe, ü→ue, ß→ss; Leerzeichen und Klammern → „_“ (z. B. „Mülheim (Ruhr)“ → `muelheim_ruhr`).
 - **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
 - **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
