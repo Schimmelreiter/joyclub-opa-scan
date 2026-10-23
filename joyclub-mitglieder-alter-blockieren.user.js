@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.77
+// @version      1.78
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -8499,9 +8499,24 @@
       const it = document.createElement('j-context-menu-item');
       it.setAttribute('justify-content', 'start');
       it.setAttribute('data-k', e.k);
+      it.setAttribute('title', e.text);
       it.innerHTML = `<span slot="icon" style="display:inline-flex;align-items:center">${e.html}</span>${escHtml(e.text)}`;
       cm.appendChild(it);
+      try { it.text = e.text; it.label = e.text; } catch (x) { /* egal */ }
+      it.__jafText = e.text;
     }
+    requestAnimationFrame(() => flMenuTexts(cm));
+  }
+  // JOYclub zeigt den Text im internen Feld .j-context-menu-item__text – leer → selbst füllen; false = Text fehlt weiter
+  function flMenuTexts(cm) {
+    let ok = true;
+    for (const it of cm.querySelectorAll('j-context-menu-item')) {
+      const sp = it.shadowRoot && it.shadowRoot.querySelector('.j-context-menu-item__text');
+      if (!sp) continue; // ohne Shadow DOM steht der Text direkt im Element
+      if (!sp.textContent.trim() && it.__jafText) sp.textContent = it.__jafText;
+      if (!sp.textContent.trim()) ok = false;
+    }
+    return ok;
   }
   // Ersatz-Menü, falls die JOYclub-Komponente nicht aufklappt
   function flFallbackMenu(anchor, st, onPick) {
@@ -8575,9 +8590,10 @@
           flFillMenu(cm, cur.status);
           setTimeout(() => {
             if (!cm.hasAttribute('open')) cm.setAttribute('open', 'true');
+            flMenuTexts(cm);
             setTimeout(() => {
               const it = cm.querySelector('j-context-menu-item');
-              if (cm.hasAttribute('open') && it && !visible(it)) { cm.removeAttribute('open'); flFallbackMenu(act, cur.status, (k) => flPick(k)); }
+              if (cm.hasAttribute('open') && it && (!visible(it) || !flMenuTexts(cm))) { cm.removeAttribute('open'); flFallbackMenu(act, cur.status, (k) => flPick(k)); }
             }, 350);
           }, 60);
         }, true);

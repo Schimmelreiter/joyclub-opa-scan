@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.78 (23.10.2026)
+- Fickliste-Menü: Einträge zeigen neben dem Symbol wieder den Text (JOYclub-Menü bekommt den Text in sein internes Textfeld; fehlt er trotzdem, erscheint das Ersatz-Menü)
+
 1.77 (23.10.2026)
 - Party-Seite: Reiter „Fickliste“ hinter „Opa-Liste“ mit allen Ficks dieser Party (alphabetisch, Darstellung wie „Meine Fickliste“)
 
