@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.80
+// @version      1.81
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -8215,7 +8215,8 @@
     nein: { label: 'Nein, danke!', menu: 'Nein, danke!' },
     nie: { label: 'Nie wieder!', menu: 'Nie wieder!' },
   };
-  const FL_ORDER = ['will', 'gef', 'nein', 'nie'];
+  const FL_ORDER = ['will', 'gef', 'nie', 'nein'];
+  const FL_ST_DEFAULT = ['will', 'gef', 'nie']; // „Nein, danke!“ beim ersten Aufruf/Zurücksetzen aus
   const flLabel = (st) => (FL_ST[st] ? FL_ST[st].label : 'Ficken?');
   const getFl = () => GM_getValue(K_FL, {}) || {};
   const setFl = (m) => GM_setValue(K_FL, m);
@@ -8475,8 +8476,9 @@
     stands.push(st);
     flSetStands(pid, stands);
     const q = flGet(pid) || p;
-    if (d.nick && q.nick && d.nick !== q.nick) { q.nicks = [...new Set([...(q.nicks || []), q.nick])]; flHist(q, `Nick geändert: ${q.nick} → ${d.nick}`); }
-    if (d.nick) q.nick = d.nick;
+    const guessed = q.nickGuess || /^html$/i.test(q.nick || '');
+    if (d.nick && q.nick && d.nick !== q.nick && !guessed) { q.nicks = [...new Set([...(q.nicks || []), q.nick])]; flHist(q, `Nick geändert: ${q.nick} → ${d.nick}`); }
+    if (d.nick) { q.nick = d.nick; delete q.nickGuess; }
     if (d.type) q.type = d.type;
     if (st.img) q.img = st.img;
     q.path = cleanPath(location.pathname);
@@ -8884,16 +8886,51 @@
     const m = String(path || '').match(/\/profile\/\d+\.([^./?#]+)/);
     return m ? m[1] : '';
   }
-  function flLinkAdd(pid, otherRef) {
-    const id = idOf(otherRef) || (Object.values(getFl()).find((q) => norm(q.nick) === norm(otherRef)) || {}).id;
-    if (!id) return 'Kein Profil-Link und kein Nick aus der Fickliste.';
+  // alle dem Skript bekannten Profile (ohne Fickliste): id → { id, nick, path, type, age }
+  function flKnownProfiles() {
+    const out = new Map();
+    const yr = new Date().getFullYear();
+    const add = (path, e) => {
+      const id = idOf(path); if (!id || !e) return;
+      const nick = e.name || e.nick || '';
+      if (!nick || /^html$/i.test(nick)) return;
+      const o = out.get(id) || { id, nick, path: (String(path).match(/\/profile\/\d+\.[^?#\s]*/) || [path])[0], type: '', age: 0 };
+      if (!o.type && e.type && !/^Typ /.test(e.type)) o.type = e.type;
+      if (!o.age) { if (e.ages && e.ages.length) o.age = e.ages[0]; else if (e.persons && e.persons[0] && e.persons[0].hi) o.age = yr - Number(String(e.persons[0].hi).slice(0, 4)); }
+      out.set(id, o);
+    };
+    const src = [['acc', getAccounts], ['log', getLog], ['ign', getIgnored], ['mem', getMem]];
+    for (const [, f] of src) { try { for (const [path, e] of Object.entries(f() || {})) add(path, e); } catch (x) { /* egal */ } }
+    return out;
+  }
+  // echten Nick/Typ zu einer Profil-ID: bekannte Daten, sonst Profilseite im Hintergrund laden
+  async function flResolveProfile(id, path) {
+    const k = flKnownProfiles().get(id);
+    if (k && k.nick) return k;
+    try {
+      const r = await jfetch(location.origin + (path || `/profile/${id}.html`));
+      const d = r.doc && parseProfileDoc(r.doc);
+      let nick = (d && d.name) || '';
+      if (!nick && r.doc) nick = ((r.doc.querySelector('.profile-base-info__user-name') || {}).textContent || '').trim() || ((r.doc.title || '').split(' ♥ ')[0] || '').trim();
+      let fpath = path; try { const fp = new URL(r.url).pathname; if (new RegExp(`/(profile|my)/${id}\\.`).test(fp)) fpath = fp.replace(/^\/my\//, '/profile/'); } catch (x) { /* egal */ }
+      if (nick) return { id, nick, path: fpath, type: d ? d.type : '', age: d && d.ages ? d.ages[0] : 0 };
+    } catch (x) { /* egal */ }
+    const slug = flNickFromPath(path);
+    return { id, nick: slug && !/^html$/i.test(slug) ? slug : `Profil ${id}`, path, type: '', age: 0, guess: true };
+  }
+  async function flLinkAdd(pid, otherRef) {
+    const id = idOf(otherRef) || (Object.values(getFl()).find((q) => norm(q.nick) === norm(otherRef)) || {}).id ||
+      ([...flKnownProfiles().values()].find((q) => norm(q.nick) === norm(otherRef)) || {}).id;
+    if (!id) return 'Kein Profil-Link und kein bekannter Nick.';
     if (id === pid) return 'Das ist dasselbe Profil.';
     const G = flGroups();
     const mine = flGroupOf(pid, G), other = flGroupOf(id, G);
     if (other && (!mine || other.gid !== mine.gid)) return 'Dieses Profil ist schon mit anderen verknüpft – dort zuerst die Verknüpfung lösen.';
     if (!flGet(id)) {
-      const path = (String(otherRef).match(/\/profile\/\d+\.[^?#\s]*/) || [`/profile/${id}.html`])[0];
-      flPut({ id, nick: flNickFromPath(path) || id, path, status: '', meets: [], hist: [], created: Date.now() });
+      const kp = flKnownProfiles().get(id);
+      const path = (String(otherRef).match(/\/profile\/\d+\.[^?#\s]*/) || [kp && kp.path] || [])[0] || `/profile/${id}.html`;
+      const r = await flResolveProfile(id, path);
+      flPut({ id, nick: r.nick, path: r.path || path, type: r.type || '', status: '', meets: [], hist: [], created: Date.now(), nickGuess: !!r.guess });
     }
     let gid = mine && mine.gid;
     if (!gid) { gid = flNewId(); G[gid] = { primary: pid, members: { [pid]: { sync: false } } }; }
@@ -8955,15 +8992,49 @@
           if (x) row.appendChild(flBtn('Verknüpfung lösen', () => { flLinkRemove(id); render(); }));
           box.appendChild(row);
         }
-        box.appendChild(flEl('div', 'font-size:12.5px;color:#9a9a9a;margin:10px 0 4px', '+ Profil verknüpfen (Profil-Link einfügen oder Nick aus der Fickliste)'));
+        box.appendChild(flEl('div', 'font-size:12.5px;color:#9a9a9a;margin:10px 0 4px', '+ Profil verknüpfen (Profil-Link einfügen oder Nick suchen)'));
         const r2 = flEl('div', 'display:flex;gap:8px');
-        const inp = flEl('input', FL_INPUT_CSS + ';flex:1');
-        inp.setAttribute('list', 'jaf-fl-linknicks');
-        const dl = flEl('datalist'); dl.id = 'jaf-fl-linknicks';
-        for (const q of Object.values(getFl())) if (!ids.includes(q.id) && !flIsExt(q.id)) dl.appendChild(new Option(q.nick));
+        const inp = flEl('input', FL_INPUT_CSS + ';width:100%;box-sizing:border-box');
+        inp.placeholder = 'Profil-Link oder Nick (ab 2 Zeichen)';
+        const wrap = flEl('div', 'position:relative;flex:1');
+        const sug = flEl('div', 'position:absolute;left:0;right:0;top:100%;z-index:5;background:#1f2125;border:1px solid #3a3d43;border-radius:6px;margin-top:2px;max-height:260px;overflow:auto;display:none');
+        sug.className = 'jaf-fl-linksug';
+        wrap.appendChild(inp); wrap.appendChild(sug);
+        let pickId = '';
+        const fl = getFl();
+        const known = flKnownProfiles();
+        const item = (q, inFl) => {
+          const meta = [q.type, q.age ? String(q.age) : ''].filter(Boolean).join(' · ');
+          const r = flEl('div', 'padding:5px 10px;cursor:pointer;display:flex;gap:8px;align-items:center', `<span>${escHtml(q.nick)}</span>${meta ? `<span style="opacity:.6;font-size:12px">${escHtml(meta)}</span>` : ''}${inFl && q.status ? flIcon(q.status, { size: 14, redGef: true }) : ''}`);
+          r.addEventListener('mouseenter', () => { r.style.background = '#2b2e34'; });
+          r.addEventListener('mouseleave', () => { r.style.background = ''; });
+          r.addEventListener('mousedown', (e) => { e.preventDefault(); inp.value = q.nick; pickId = q.path ? q.path : q.id; sug.style.display = 'none'; });
+          return r;
+        };
+        const showSug = () => {
+          pickId = '';
+          const t = norm(inp.value.trim());
+          sug.innerHTML = '';
+          if (t.length < 2 || /joyclub\.de|\/profile\//.test(inp.value)) { sug.style.display = 'none'; return; }
+          const a = Object.values(fl).filter((q) => !ids.includes(q.id) && !flIsExt(q.id) && norm(q.nick).includes(t))
+            .sort((x, y) => norm(x.nick).indexOf(t) - norm(y.nick).indexOf(t) || x.nick.localeCompare(y.nick, 'de')).slice(0, 15);
+          const b = a.length >= 15 ? [] : [...known.values()].filter((q) => !fl[q.id] && !ids.includes(q.id) && norm(q.nick).includes(t))
+            .sort((x, y) => norm(x.nick).indexOf(t) - norm(y.nick).indexOf(t) || x.nick.localeCompare(y.nick, 'de')).slice(0, 15 - a.length);
+          const hd = (txt) => flEl('div', 'padding:5px 10px 3px;font-size:11.5px;color:#9a9a9a;text-transform:uppercase;letter-spacing:.04em', txt);
+          if (a.length) { sug.appendChild(hd('Fickliste')); a.forEach((q) => sug.appendChild(item(q, true))); }
+          if (b.length) { sug.appendChild(hd('Weitere bekannte Profile')); b.forEach((q) => sug.appendChild(item(q, false))); }
+          if (!a.length && !b.length) sug.appendChild(flEl('div', 'padding:6px 10px;opacity:.6;font-size:13px', 'Kein bekanntes Profil – Profil-Link einfügen'));
+          sug.style.display = 'block';
+        };
+        inp.addEventListener('input', showSug);
+        inp.addEventListener('blur', () => setTimeout(() => { sug.style.display = 'none'; }, 150));
         const err = flEl('div', 'color:#ffb020;font-size:13px;margin-top:6px;min-height:1px');
-        r2.appendChild(inp); r2.appendChild(dl);
-        r2.appendChild(flBtn('Verknüpfen', () => { const e = flLinkAdd(pid, inp.value.trim()); if (e) err.textContent = e; else render(); }, true));
+        r2.appendChild(wrap);
+        r2.appendChild(flBtn('Verknüpfen', async () => {
+          err.textContent = 'Profil wird gelesen …';
+          const e = await flLinkAdd(pid, pickId || inp.value.trim());
+          if (e) err.textContent = e; else render();
+        }, true));
         box.appendChild(r2);
         box.appendChild(err);
         const row = flEl('div', 'display:flex;justify-content:flex-end;margin-top:14px');
@@ -8998,9 +9069,16 @@
     // Vorbelegung: Party, aus deren Gästeliste das Profil geöffnet wurde
     const ctx = onProfile && newState ? flCtxEvent(p.id) : null;
     const members = flMembers(p.id);
+    // neue Treffen: eigenes Profil bei Will ich/Gefickt/Nie wieder!, sonst (kein Status, Nein danke) das primäre
+    const defAs = () => {
+      if (members.length < 2) return p.id;
+      const prim = flPrimaryId(p.id);
+      if (prim === p.id || !members.includes(prim)) return p.id;
+      return ['will', 'gef', 'nie'].includes(st) ? p.id : prim;
+    };
     let meets = flGroupMeets(p.id).map(({ m, owner }) => Object.assign({}, m, { as: owner.id }));
-    if (opt.prefillMeet) meets.unshift(Object.assign({ id: flNewId(), as: p.id }, opt.prefillMeet));
-    else if (ctx && !meets.some((m) => m.url && ctx.url && m.url === ctx.url)) meets.unshift(Object.assign(flMeetFromEvent(ctx), { as: p.id }));
+    if (opt.prefillMeet) meets.unshift(Object.assign({ id: flNewId(), as: defAs() }, opt.prefillMeet));
+    else if (ctx && !meets.some((m) => m.url && ctx.url && m.url === ctx.url)) meets.unshift(Object.assign(flMeetFromEvent(ctx), { as: defAs() }));
     if (opt.meetId) { const i = meets.findIndex((m) => m.id === opt.meetId); if (i > 0) meets.unshift(meets.splice(i, 1)[0]); }
     const isIgn = !dead && blockedIdMap().has(p.id);
     const canIgnore = !dead;
@@ -9031,7 +9109,7 @@
             `<span style="flex:1">Party zum ${escHtml(fmtDate(d))} gefunden – übernehmen?</span>`);
           row.appendChild(flBtn('Ansehen …', async () => {
             const e = await flSuggestPopup(d, note.value);
-            if (e) { meets.unshift(flMeetFromEvent(e)); renderMeets(); }
+            if (e) { meets.unshift(Object.assign(flMeetFromEvent(e), { as: defAs() })); renderMeets(); }
             if (e !== undefined) { if (!e) dismissed.add(d); renderSug(); }
           }, true));
           row.appendChild(flBtn('Ablehnen', () => { dismissed.add(d); renderSug(); }));
@@ -9043,13 +9121,16 @@
       box.appendChild(lab('Treffen'));
       const mbox = flEl('div', 'display:flex;flex-direction:column;gap:8px');
       box.appendChild(mbox);
+      const clubDl = flEl('datalist'); clubDl.id = 'jaf-fl-clublist';
+      for (const n of flKnownClubs()) clubDl.appendChild(new Option(n));
+      box.appendChild(clubDl);
       const renderMeets = () => {
         mbox.innerHTML = '';
         for (const m of meets) {
           const c = flEl('div', `border:1px solid ${opt.meetId === m.id ? '#2f6fd6' : '#3a3d43'};border-radius:8px;padding:8px 10px;background:#24262a`);
           const r1 = flEl('div', 'display:flex;gap:6px;align-items:center');
-          r1.appendChild(flEl('span', 'width:24px', 'wo'));
-          const wo = flEl('input', FL_INPUT_CSS + ';flex:1;min-width:0'); wo.value = m.wo || ''; wo.placeholder = 'Ort, Party oder Party-Link';
+          r1.appendChild(flEl('span', 'width:30px', 'was'));
+          const wo = flEl('input', FL_INPUT_CSS + ';flex:1;min-width:0'); wo.value = m.wo || ''; wo.placeholder = 'Party, Anlass oder Party-Link';
           wo.addEventListener('input', async () => {
             m.wo = wo.value;
             if (/joyclub\.de\/event\/\d+\./.test(wo.value)) {
@@ -9067,19 +9148,27 @@
           x.addEventListener('click', (e) => { e.preventDefault(); meets.splice(meets.indexOf(m), 1); renderMeets(); });
           r1.appendChild(x);
           c.appendChild(r1);
+          const rw = flEl('div', 'display:flex;gap:6px;align-items:center;margin-top:6px');
+          rw.appendChild(flEl('span', 'width:30px', 'wo'));
+          const cl = flEl('input', FL_INPUT_CSS + ';flex:1;min-width:0'); cl.value = m.club || ''; cl.placeholder = 'Club oder Ort';
+          cl.setAttribute('list', 'jaf-fl-clublist');
+          cl.addEventListener('input', () => { m.club = cl.value; });
+          rw.appendChild(cl);
+          c.appendChild(rw);
           if (members.length > 1) {
             const ra = flEl('div', 'display:flex;gap:6px;align-items:center;margin-top:6px');
-            ra.appendChild(flEl('span', 'width:24px', 'als'));
+            ra.appendChild(flEl('span', 'width:30px', 'als'));
             const sel = flEl('select', FL_INPUT_CSS);
-            for (const id of members) sel.appendChild(new Option((flGet(id) || { nick: id }).nick, id, id === (m.as || p.id), id === (m.as || p.id)));
+            if (!m.as) m.as = defAs();
+            for (const id of members) sel.appendChild(new Option((flGet(id) || { nick: id }).nick, id, id === m.as, id === m.as));
             sel.addEventListener('change', () => { m.as = sel.value; });
             ra.appendChild(sel);
             c.appendChild(ra);
           }
-          if (m.url || m.club) c.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin:3px 0 0 30px', `${m.club ? 'Club: ' + escHtml(m.club) : ''}${m.url ? `${m.club ? ' · ' : ''}<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a">Party-Link</a>` : ''}`));
-          else c.appendChild(flEl('div', 'font-size:12px;color:#777;margin:3px 0 0 30px', 'Party-Link hier einfügen → Name, Datum und Beginn werden übernommen'));
+          if (m.url) c.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin:3px 0 0 36px', `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a">Party-Link</a>`));
+          else c.appendChild(flEl('div', 'font-size:12px;color:#777;margin:3px 0 0 36px', 'Party-Link hier einfügen → Name, Datum und Beginn werden übernommen'));
           const r2 = flEl('div', 'display:flex;gap:6px;align-items:center;margin-top:6px');
-          r2.appendChild(flEl('span', 'width:24px', 'am'));
+          r2.appendChild(flEl('span', 'width:30px', 'am'));
           const dt = flEl('input', FL_INPUT_CSS); dt.type = 'date'; dt.value = m.date || '';
           dt.addEventListener('input', () => { m.date = dt.value; });
           r2.appendChild(dt);
@@ -9098,7 +9187,7 @@
       renderMeets();
       renderSug();
       const add = flEl('a', 'display:inline-block;color:#e2b04a;font-weight:bold;margin-top:8px;cursor:pointer', '+ weiteres Treffen');
-      add.addEventListener('click', (e) => { e.preventDefault(); meets.unshift({ id: flNewId(), date: '', time: '', wo: '', url: '', club: '', note: '', as: p.id }); renderMeets(); });
+      add.addEventListener('click', (e) => { e.preventDefault(); meets.unshift({ id: flNewId(), date: '', time: '', wo: '', url: '', club: '', note: '', as: defAs() }); renderMeets(); });
       box.appendChild(add);
       // Anmerkungen (allgemein)
       box.appendChild(lab('Anmerkungen'));
@@ -9148,12 +9237,12 @@
           q.nick = q.nick || p.nick; q.type = q.type || p.type; q.path = q.path || p.path; q.created = q.created || Date.now();
           const keep = meets.filter((m) => m.wo || m.date || m.note || m.url).map((m) => Object.assign({}, m, { id: m.id || flNewId() }));
           const strip = (m) => { const o = Object.assign({}, m); delete o.as; return o; };
-          q.meets = keep.filter((m) => (m.as || p.id) === p.id).map(strip);
+          q.meets = keep.filter((m) => (m.as || defAs()) === p.id || !members.includes(m.as || defAs())).map(strip);
           for (const id of members) {
             if (id === p.id) continue;
             const o = flGet(id);
             if (!o) continue;
-            const mine = keep.filter((m) => m.as === id).map(strip);
+            const mine = keep.filter((m) => (m.as || defAs()) === id).map(strip);
             if (JSON.stringify(o.meets || []) !== JSON.stringify(mine)) { o.meets = mine; flPut(o); }
           }
           q.notes = notes.value.trim();
@@ -9196,10 +9285,11 @@
   const FL_PEN = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zm17.7-10.2a1 1 0 0 0 0-1.42l-2.33-2.33a1 1 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
   const FL_EXT = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;margin-left:3px" aria-hidden="true"><path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3zM5 5h6v2H5v12h12v-6h2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg>';
   function flMeetHtml(m, asNick = '') {
-    const wo = escHtml(m.wo || (m.url ? 'Party' : 'ohne Ort')) + (asNick ? ` <span style="font-weight:normal;opacity:.75">(als ${escHtml(asNick)})</span>` : '');
+    const wo = escHtml(m.wo || (m.url ? 'Party' : 'Treffen')) + (asNick ? ` <span style="font-weight:normal;opacity:.75">(als ${escHtml(asNick)})</span>` : '');
     const when = [m.date ? `am ${fmtDate(m.date)}` : '', m.time ? `um ${m.time}` : ''].filter(Boolean).join(' ');
+    const where = m.club ? `<span style="opacity:.7;font-weight:normal">${escHtml(m.club)}</span>` : '<span style="opacity:.5;font-weight:normal;font-style:italic">unbekannt</span>';
     return `<div class="jaf-fl-meet" style="padding:9px 0;border-bottom:1px solid rgba(128,128,128,.25)">` +
-      `<div style="font-weight:600">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${wo}</a>${FL_EXT.replace('style="', 'style="color:#e2b04a;')}` : wo}${m.club && m.club !== m.wo ? ` <span style="opacity:.7;font-weight:normal">· ${escHtml(m.club)}</span>` : ''}</div>` +
+      `<div style="font-weight:600">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${wo}</a>${FL_EXT.replace('style="', 'style="color:#e2b04a;')}` : wo} <span style="opacity:.7;font-weight:normal">·</span> ${where}</div>` +
       (when ? `<div style="font-size:12.5px;opacity:.7">${escHtml(when)}</div>` : '') +
       (m.note ? `<div style="font-size:13px;margin-top:3px;white-space:pre-wrap">${escHtml(m.note)}</div>` : '') + '</div>';
   }
@@ -9210,9 +9300,17 @@
     const gm = flGroupMeets(p.id);
     const meets = gm.map((x) => x.m);
     const asOf = new Map(gm.map((x) => [x.m, x.owner]));
+    // ohne eigenen Status, aber verknüpft: Kopf zeigt das primäre (bzw. ein verknüpftes Profil mit Status)
+    let ref = null;
+    if (!st && flMembers(p.id).length > 1) {
+      const prim = flPrimaryId(p.id);
+      ref = (prim !== p.id && flGet(prim)) || flMembers(p.id).map(flGet).find((q) => q && q.id !== p.id && q.status) || null;
+    }
+    const ist = ref ? ref.status || '' : st;
     const head = flEl('div', 'display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px',
-      `<span style="width:26px;height:26px;border-radius:50%;background:${st === 'gef' ? '#c71b1b' : '#33363c'};display:inline-flex;align-items:center;justify-content:center;color:#fff">${flIcon(st, { size: 16 })}</span>` +
-      `<span>Fickliste · ${escHtml(flLabel(st))}</span>`);
+      `<span style="width:26px;height:26px;border-radius:50%;background:${ist === 'gef' ? '#c71b1b' : '#33363c'};display:inline-flex;align-items:center;justify-content:center;color:#fff;${ref ? 'opacity:.55' : ''}">${flIcon(ist, { size: 16 })}</span>` +
+      (ref ? `<span>Fickliste · <span style="font-weight:normal;opacity:.8">verknüpft mit</span> ${flNickHtml(ref)}${ref.status ? ` <span style="font-weight:normal;opacity:.8">(${escHtml(flLabel(ref.status))})</span>` : ''}</span>`
+        : `<span>Fickliste · ${escHtml(flLabel(st))}</span>`));
     const pen = flEl('button', 'margin-left:auto;background:none;border:0;color:inherit;opacity:.7;cursor:pointer;padding:4px', FL_PEN);
     pen.title = 'Ficklisteneintragung bearbeiten';
     pen.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); flEntryPopup(flGet(p.id) || p, null); });
@@ -9242,7 +9340,7 @@
     const pid = flPagePid();
     const old = document.querySelector('.jaf-fl-block:not(.jaf-fl-own)');
     const p = pid && flGet(pid);
-    if (!p || (!p.status && !(p.meets || []).length && !p.notes)) { if (old && !old.closest('.jaf-fl-archive, .jaf-fl-extern')) old.remove(); return; }
+    if (!p || (!p.status && !(p.meets || []).length && !p.notes && flMembers(pid).length < 2)) { if (old && !old.closest('.jaf-fl-archive, .jaf-fl-extern')) old.remove(); return; }
     if (old && old.closest('.jaf-fl-archive, .jaf-fl-extern')) return; // dort baut die Seite den Block selbst
     const sig = JSON.stringify([p.status, flGroupMeets(p.id).map((x) => [x.m, x.owner.id]), p.notes, flLinkedHtml(p.id)]);
     // Platz: erstes Element der Badge-Liste der Seitenleiste (erscheint so direkt unter der Profilnotiz);
@@ -9543,10 +9641,17 @@
   // ---- Seite „Meine Fickliste“ (/edit/homepage/?fickliste) ----
   const K_FL_VIEW = 'jaf_fl_view'; // Filter/Sortierung (bleiben erhalten)
   function flViewState() {
-    const v = Object.assign({ sort: 'date', dir: 'desc', dateDir: 'desc', user: '', wo: '', clubs: null, from: '', to: '', st: ['will', 'gef', 'nein', 'nie'] }, GM_getValue(K_FL_VIEW, {}) || {});
+    const v = Object.assign({ sort: 'date', dir: 'desc', dateDir: 'desc', user: '', wo: '', clubs: null, from: '', to: '', st: FL_ST_DEFAULT.slice() }, GM_getValue(K_FL_VIEW, {}) || {});
+    if (!v.v181) { v.v181 = 1; v.st = (v.st || []).filter((k) => k !== 'nein'); if (!v.st.length) v.st = FL_ST_DEFAULT.slice(); GM_setValue(K_FL_VIEW, v); }
     const q = (location.search.match(/[?&]status=(\w+)/) || [])[1];
     if (q && FL_ST[q] && !window.__jafFlQ) { window.__jafFlQ = true; v.st = [q]; GM_setValue(K_FL_VIEW, v); }
     return v;
+  }
+  // alle bekannten Clubs/Orte: Treffen + gemerkte Partys
+  function flKnownClubs() {
+    const s = new Set(flAllClubs());
+    try { for (const e of Object.values(getEvents())) if (e && e.club) s.add(e.club); } catch (x) { /* egal */ }
+    return [...s].sort((a, b) => a.localeCompare(b, 'de'));
   }
   function flAllClubs() {
     const s = new Set();
@@ -9566,7 +9671,7 @@
       if (v.user && !norm(ids.flatMap((id) => [(fl[id] || {}).nick, ...((fl[id] || {}).nicks || [])]).join(' ')).includes(norm(v.user))) continue;
       let n = 0;
       for (const id of ids) for (const m of (fl[id] && fl[id].meets) || []) {
-        if (v.wo && !norm(m.wo).includes(norm(v.wo))) continue;
+        if (v.wo && !norm(`${m.wo || ''} ${m.club || ''}`).includes(norm(v.wo))) continue;
         if (v.clubs && !v.clubs.includes(m.club || '')) continue;
         if (v.from && (m.date || '') < v.from) continue;
         if (v.to && (m.date || '9999') > v.to) continue;
@@ -9591,7 +9696,7 @@
       `${p.type ? `<span style="opacity:.6;font-size:12px">${escHtml(p.type)}</span>` : ''}${flIcon(p.status, { size: 16, redGef: true })}</span>` +
       `<a class="jaf-fl-arch" href="${escHtml(flArchiveUrl(p))}" target="_blank" style="margin-left:10px;font-size:12.5px;opacity:.75;color:inherit">Profil-Archiv</a></div>` +
       (m ? `<div style="font-size:13px">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${escHtml(m.wo || 'Party')}</a>` : escHtml(m.wo || '')}` +
-        ` · <span style="${m.club ? 'opacity:.85' : 'opacity:.55;font-style:italic'}">${escHtml(m.club || 'Club unbekannt')}</span></div>` +
+        ` · <span style="${m.club ? 'opacity:.85' : 'opacity:.55;font-style:italic'}">${escHtml(m.club || 'unbekannt')}</span></div>` +
         (m.note ? `<div style="font-size:12.5px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(m.note)}</div>` : '')
         : '<div style="font-size:13px;opacity:.6">Kein Treffen eingetragen</div>') +
       `</div><div style="text-align:right;font-weight:600;font-size:13px;white-space:nowrap">${m && m.date ? fmtDate(m.date) : ''}<br><span style="opacity:.6;font-weight:normal">${m && m.time ? m.time : ''}</span></div>`;
@@ -9720,12 +9825,12 @@
       sugg.appendChild(box);
     });
     uIn.addEventListener('change', () => { v.user = uIn.value.trim(); save(); });
-    const wIn = fld('Wo (enthält)', inp(v.wo, 'z. B. Halloween'));
+    const wIn = fld('Was/Wo (enthält)', inp(v.wo, 'z. B. Halloween'));
     wIn.addEventListener('change', () => { v.wo = wIn.value.trim(); save(); });
     // Clubs (Auswahl mit Checkboxen)
     const clubs = flAllClubs();
     const cBtn = flEl('button', FL_INPUT_CSS + ';width:100%;text-align:left;cursor:pointer', escHtml(v.clubs ? `${v.clubs.length} gewählt ▾` : 'alle ▾'));
-    fld('Clubs', cBtn);
+    fld('Wo', cBtn);
     cBtn.addEventListener('click', (e) => {
       e.preventDefault();
       const old = document.getElementById('jaf-fl-clubs'); if (old) { old.remove(); return; }
@@ -9748,7 +9853,7 @@
     const toIn = fld('Datum bis', inp(v.to, '', 'date'));
     toIn.addEventListener('change', () => { v.to = toIn.value; save(); });
     const rs = flEl('a', 'display:block;padding-top:20px;color:#e2b04a;font-weight:600;cursor:pointer', 'Filter zurücksetzen');
-    rs.addEventListener('click', (e) => { e.preventDefault(); Object.assign(v, { user: '', wo: '', clubs: null, from: '', to: '', st: ['will', 'gef', 'nein', 'nie'] }); save(); });
+    rs.addEventListener('click', (e) => { e.preventDefault(); Object.assign(v, { user: '', wo: '', clubs: null, from: '', to: '', st: FL_ST_DEFAULT.slice() }); save(); });
     f.appendChild(rs);
     c.appendChild(f);
     // Liste
@@ -10367,6 +10472,25 @@
     document.title = `${p.nick || ''}${s ? ` · Profil-Archiv ${fmtDT(s.ts)}` : ''} – JOYclub`;
   }
 
+  // ---- Reparatur: Nicks aus Profil-Links ohne Nick („html“) ----
+  let flNickFixBusy = false;
+  async function flFixNicks() {
+    if (flNickFixBusy) return;
+    const bad = Object.values(getFl()).filter((q) => !flIsExt(q.id) && (/^html$/i.test(q.nick || '') || q.nickGuess || !q.nick || q.nick === q.id) && !(q.nickTry > Date.now() - 864e5));
+    if (!bad.length) return;
+    flNickFixBusy = true;
+    try {
+      for (const q0 of bad.slice(0, 3)) {
+        const r = await flResolveProfile(q0.id, /\.html$/.test(q0.path || '') && !/\/\d+\.html$/.test(q0.path) ? q0.path : '');
+        const q = flGet(q0.id); if (!q) continue;
+        q.nickTry = Date.now();
+        if (!r.guess) { if (q.nick !== r.nick) flHist(q, `Nick ergänzt: ${r.nick}`); q.nick = r.nick; if (r.path) q.path = r.path; if (!q.type && r.type) q.type = r.type; delete q.nickGuess; }
+        else if (/^html$/i.test(q.nick || '')) { q.nick = r.nick; q.nickGuess = true; }
+        flPut(q);
+      }
+    } finally { flNickFixBusy = false; }
+  }
+
   // ---- Takt: alle Fickliste-Teile ----
   let flVisitDone = '';
   function flTick() {
@@ -10420,6 +10544,7 @@
     }
     flDecorateCards();
     flEventTab();
+    flFixNicks().catch(() => {});
     if (/^\/clubmail\//.test(location.pathname)) flClubMail();
   }
   if (!IN_FRAME) setInterval(() => { try { flTick(); } catch (e) { console.warn('[Alter-Filter] Fickliste', e); } }, 1500);

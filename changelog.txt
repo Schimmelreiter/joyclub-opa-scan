@@ -1,6 +1,14 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.81 (23.10.2026)
+- Fickliste: Reihenfolge „Nie wieder!“ vor „Nein, danke!“ in Menüs, Filtern und Zählern
+- Meine Fickliste: „Nein, danke!“ beim ersten Aufruf und nach „Filter zurücksetzen“ ausgeblendet; Filter „Was/Wo (enthält)“ und „Wo“ (statt Clubs)
+- Treffen: Felder „was“ (Party/Anlass) und „wo“ (Club/Ort, mit Vorschlägen); leerer Ort wird als „unbekannt“ angezeigt
+- Verknüpfen: Suche auch in allen bekannten Profilen (mit Typ und Alter); echter Nick statt „html“ bei Links ohne Nick (vorhandene Einträge werden repariert)
+- Fickliste-Block auch auf verknüpften Profilen ohne eigenen Status
+- Neue Treffen gehören bei kein Status/„Nein, danke!“ zum primären Profil, sonst zum betrachteten
+
 1.80 (23.10.2026)
 - Externe Ficks und Profil-Archiv: Darstellung im Aussehen eines JOYclub-Profils auf dem eigenen Profil (Kopf, Suchkriterien, Profilnotiz, Fickliste, Texte, Steckbrief, Vorlieben); alte Adressen werden umgeleitet
 - Externe Ficks: Profilbild, Kopf, Suchkriterien, Texte, Steckbrief und Vorlieben per Stift editierbar; „Mit JOYclub-Profil verknüpfen“

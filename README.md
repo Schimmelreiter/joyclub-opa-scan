@@ -434,8 +434,8 @@ Auf jedem Profil, das das Skript einordnen kann (Mann, Frau, Paar, Trans*, … �
 | inaktiv | dünner Umriss | Ficken? |
 | will ich ficken | gefüllt | Will ich |
 | schon gefickt | gefüllt, roter Kreis | Gefickt |
-| will ich nicht | Umriss im roten Verbotsring | Nein, danke! |
 | nie wieder | gefüllt im roten Verbotsring | Nie wieder! |
+| will ich nicht | Umriss im roten Verbotsring | Nein, danke! |
 
 Ein Klick öffnet ein Menü im Stil von „Gefällt mir“. Angeboten werden alle anderen Zustände und – sobald ein Zustand gesetzt ist – „Fickstatus zurücksetzen“ (Mülltonne). Auf Karten (Suche, Gästelisten, Besucher …) zeigt ein kleines Symbol den Zustand.
 
@@ -446,9 +446,9 @@ Ein Klick öffnet ein Menü im Stil von „Gefällt mir“. Angeboten werden all
 Jede Zustandsänderung öffnet das Popup „Ficklisteneintragung“:
 
 - **Profilnotiz** (JOYclub) – vorbelegt, Änderungen werden auf dem Profil gespeichert.
-- **Treffen** (beliebig viele, neueste oben): *wo*, *am*, *um* und eine *Ficknotiz*. Vorbelegt mit der Party, aus deren Gästeliste du das Profil geöffnet hast. „Party wählen …“ bietet die Partys von heute und die letzten 10 vergangenen (eigene Anmeldungen mit ★) und eine Suche. Ein eingefügter Party-Link wird gelesen: Name, Datum, Beginn und Club werden übernommen, der Link bleibt dahinter gespeichert.
+- **Treffen** (beliebig viele, neueste oben): *was* (Party oder Anlass), *wo* (Club oder Ort, mit Vorschlägen aus allen bekannten Clubs), *am*, *um* und eine *Ficknotiz*. Vorbelegt mit der Party, aus deren Gästeliste du das Profil geöffnet hast. „Party wählen …“ bietet die Partys von heute und die letzten 10 vergangenen (eigene Anmeldungen mit ★) und eine Suche. Ein eingefügter Party-Link wird gelesen: Name (*was*), Club (*wo*), Datum und Beginn werden übernommen und bleiben änderbar, der Link bleibt dahinter gespeichert.
 - **Anmerkungen** (allgemein).
-- **als** – bei verknüpften Profilen gehört jedes Treffen einem der Profile (Auswahl je Treffen); „Verknüpfte Profile …“ öffnet die Verwaltung.
+- **als** – bei verknüpften Profilen gehört jedes Treffen einem der Profile (Auswahl je Treffen). Neue Treffen gehören dem betrachteten Profil, wenn es „Will ich“, „Gefickt“ oder „Nie wieder!“ hat, sonst (kein Status, „Nein, danke!“) dem primären. „Verknüpfte Profile …“ öffnet die Verwaltung.
 - **Profil zukünftig ignorieren** – bei „Nein, danke!“ und „Nie wieder!“ vorausgewählt. Ist das Profil schon ignoriert, steht „Dieses Profil wird derzeit ignoriert!“ darunter; Abwählen entsperrt es (und setzt es auf die eigene Whitelist). Ignorieren hebt einen Whitelist-Eintrag auf. Bei vollem Limit weicht eine automatische Sperre – eigene Listen haben Vorrang.
 - Enthält die Profilnotiz ein Datum ohne Treffen, schlägt das Skript passende Partys vor (Datum + Club oder Partyname; „am selben Tag“ als schwächere Vorschläge).
 
@@ -456,9 +456,9 @@ Jede Zustandsänderung öffnet das Popup „Ficklisteneintragung“:
 
 <img src="docs/fickliste-eintragung.png" width="420" alt="Popup Ficklisteneintragung"> <img src="docs/fickliste-zuruecksetzen.png" width="360" alt="Popup Fickstatus zurücksetzen">
 
-Unter der Profilnotiz (oben in der Liste der Profil-Badges) zeigt das Profil die Einträge (neueste drei, dann „Mehr anzeigen“, ohne Treffen: „Kein Treffen eingetragen“), die verknüpften Profile und den Link „Zu meiner Fickliste“; der Stift öffnet dasselbe Popup.
+Unter der Profilnotiz (oben in der Liste der Profil-Badges) zeigt das Profil die Einträge (neueste drei, dann „Mehr anzeigen“, ohne Treffen: „Kein Treffen eingetragen“), die verknüpften Profile und den Link „Zu meiner Fickliste“; der Stift öffnet dasselbe Popup. Der Block erscheint bei jedem Status – bei „Nein, danke!“ als Liste der Begegnungen und Gründe – und auch auf verknüpften Profilen ohne eigenen Status („Fickliste · verknüpft mit …“).
 
-<img src="docs/fickliste-profil.png" width="400" alt="Fickliste-Block unter der Profilnotiz">
+<img src="docs/fickliste-profil.png" width="400" alt="Fickliste-Block unter der Profilnotiz"> <img src="docs/fickliste-profil-verknuepft.png" width="400" alt="Block auf einem verknüpften Profil ohne Status">
 
 ### Profil-Archiv
 
@@ -470,7 +470,7 @@ Beim Setzen eines Zustands und bei jedem späteren Profilbesuch mit Änderungen 
 
 ### Meine Fickliste
 
-Unter **Profil verwalten → Fickliste** (zwischen „Videos“ und „Homepages“, auch als Kachel auf der Startseite der Profilverwaltung und als erster Eintrag „Fickliste“ im Hamburger-Menü unter „Profil & Einstellungen“): jede Zeile ist ein Treffen; Personen ohne Treffen stehen mit „Kein Treffen eingetragen“ in der Liste (bei Datumssortierung am Ende, bei Namenssortierung alphabetisch; ausgeblendet, solange nach Wo, Club oder Datum gefiltert wird). Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Wo“, Clubs (inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
+Unter **Profil verwalten → Fickliste** (zwischen „Videos“ und „Homepages“, auch als Kachel auf der Startseite der Profilverwaltung und als erster Eintrag „Fickliste“ im Hamburger-Menü unter „Profil & Einstellungen“): jede Zeile ist ein Treffen; Personen ohne Treffen stehen mit „Kein Treffen eingetragen“ in der Liste (bei Datumssortierung am Ende, bei Namenssortierung alphabetisch; ausgeblendet, solange nach Wo, Club oder Datum gefiltert wird). Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Was/Wo (enthält)“, „Wo“ (Mehrfachauswahl inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. „Nein, danke!“ ist beim ersten Aufruf und nach „Filter zurücksetzen“ ausgeblendet; alle Filter und die Sortierung bleiben gespeichert. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
 
 <img src="docs/fickliste-uebersicht.png" width="700" alt="Seite Meine Fickliste">
 
@@ -490,7 +490,7 @@ Hinter „Freunde“ steht der Reiter „Fickliste“; über „Account“ ein K
 
 ### Verknüpfte Profile
 
-Gehört eine Person zu mehreren Profilen (z. B. Paarprofil, ihr eigenes und sein eigenes), verknüpfst du sie über „Verknüpfte Profile …“ in der Eintragung (Profil-Link oder Nick aus der Fickliste). Eines ist **primär**: In „Meine Fickliste“ und auf Party-Seiten steht die Person unter dem primären Nick und Status; Treffen eines anderen Profils tragen „(als …)“. Ist auf einer Party nicht das primäre, aber ein verknüpftes Profil angemeldet, steht ebenfalls „(als …)“ dahinter. „Status mit primärem Profil synchron halten“ übernimmt Statuswechsel des primären Profils (z. B. nicht beim Mann, mit dem nichts lief). Die Einträge werden nicht zusammengelegt – jede Verknüpfung lässt sich wieder lösen.
+Gehört eine Person zu mehreren Profilen (z. B. Paarprofil, ihr eigenes und sein eigenes), verknüpfst du sie über „Verknüpfte Profile …“ in der Eintragung: Profil-Link einfügen oder Nick suchen (ab 2 Zeichen; erst Treffer aus der Fickliste, dann „Weitere bekannte Profile“ aus allem, was das Skript kennt – mit Typ und Alter). Der echte Nick wird aus bekannten Daten oder der Profilseite gelesen. Ein Status setzen oder zurücksetzen hebt die Verknüpfung nicht auf. Eines ist **primär**: In „Meine Fickliste“ und auf Party-Seiten steht die Person unter dem primären Nick und Status; Treffen eines anderen Profils tragen „(als …)“. Ist auf einer Party nicht das primäre, aber ein verknüpftes Profil angemeldet, steht ebenfalls „(als …)“ dahinter. „Status mit primärem Profil synchron halten“ übernimmt Statuswechsel des primären Profils (z. B. nicht beim Mann, mit dem nichts lief). Die Einträge werden nicht zusammengelegt – jede Verknüpfung lässt sich wieder lösen.
 
 <img src="docs/fickliste-verknuepfen.png" width="420" alt="Popup Verknüpfte Profile">
 
