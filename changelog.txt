@@ -1,6 +1,22 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.76 (23.10.2026)
+- Neu: Fickliste – Button zwischen „Match!“ und „ClubMail“ mit fünf Zuständen (Ficken?, Will ich, Gefickt, Nein danke!, Nie wieder!), Menü im JOYclub-Stil, Symbole auf Karten
+- Popup „Ficklisteneintragung“: Profilnotiz, beliebig viele Treffen (wo/am/um/Ficknotiz, Party wählen, Party-Link einlesen), Anmerkungen, „Profil zukünftig ignorieren“ (entsperren → Whitelist; eigene Listen haben beim Limit Vorrang); Party-Vorschläge aus Datumsangaben der Notiz
+- Profil-Archiv: Stände mit Datum, Grund und Profilbild (beste Qualität, alle Bilder), Navigation ‹ › « » mit Auswahl, statische Kopie gelöschter Profile mit Hinweis
+- Seite „Meine Fickliste“ unter Profil verwalten (Navigation + Kachel): Sortierung, Filter (Mitglied, Wo, Clubs, Datum), Statusfilter, bündiges „Profil-Archiv“, Lebendprüfung (nur unsichtbar), gelöscht = durchgestrichen, deaktiviert = rot
+- Eigenes Profil: Reiter „Fickliste“ hinter „Freunde“, Kasten über „Account“ mit Zählern und letzten Ficks
+- Externe Ficks: eigene, editierbare Profilseite; „war bei JOYclub“; mit JOYclub-Profil verknüpfen
+- ClubMail: gelöschte Kontakte und JOY-Team-Löschmeldungen erkennen, „+ Zur Fickliste hinzufügen“ mit Party-Vorschlag
+- Jede geöffnete Party-Seite wird mit Name, Beginn, Link und Club gemerkt (auch vergangene)
+- Sicherung: Fickliste mit dem eigenen Nick verschlüsselt; Wiederherstellen fragt nach einem Nick-Wechsel
+- Neu im Tampermonkey-Menü: „Fremde Datensicherung importieren (mischen)“; neues Feld „Profil zuletzt aufgerufen“
+- Region: eigenes Profil im Ruhrgebiet → überall „Oppa“/„Omma“ (inkl. Standard-Bezeichnungen); Rheinland wird erkannt
+- Mitgliedersuche: Orts-URLs mit ae/oe/ue/ss und „_“ für Leerzeichen und Klammern
+- Partys synchronisieren: Buttons ohne Ziffern
+- Neue Berechtigung GM_xmlhttpRequest (@connect image-user.feig-partner.de) für Profilbilder
+
 1.75 (22.10.2026)
 - Gästeliste: keine leeren Reiter; leere Gruppe behält ihren Original-Reiter; Original-Reiter verschwinden nur, wenn alle Anmeldungen umgezogen sind; Anmeldungen ohne neuen Reiter kommen in den Original-Reiter ihrer zugeordneten Gruppe
 - AWO-Faktor und Scan-Datum im Slider „Dates & Events“ der Profilseiten (eigenes Profil mit Platzhaltern, fremde nur gescannte Partys); Platzhalter „AWO – (--.--.----)“ auf „Dates & Events“

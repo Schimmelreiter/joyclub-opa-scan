@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.75
+// @version      1.76
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -13,6 +13,9 @@
 // @grant        GM_deleteValue
 // @grant        GM_addValueChangeListener
 // @grant        GM_setClipboard
+// @grant        GM_xmlhttpRequest
+// @connect      image-user.feig-partner.de
+// @connect      cfnimg.feig-partner.de
 // @run-at       document-idle
 // @homepageURL  https://github.com/Schimmelreiter/joyclub-opa-scan
 // @updateURL    https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
@@ -536,12 +539,74 @@
     for (const k of ['jaf_pauses', 'jaf_ms_protocol', 'jaf_ms_would']) if (gmGet(k, null) != null) GM_deleteValue(k);
     if (ch) gmSet(K_SETTINGS, st);
   })();
+  // ---------- Region des eigenen Profils: im Ruhrgebiet heißt es „Oppa“ und „Omma“ ----------
+  // Feste Listen (Kreise/kreisfreie Städte, wie JOYclub sie als Ort anzeigt). Rheinland dient vorerst nur der Einordnung.
+  const K_REGION = 'jaf_region'; // { <eigene ID>: { region: 'ruhr' | 'rheinland' | 'anderswo' | 'unbekannt', place, ts } }
+  const sessionId = () => (document.body && document.body.getAttribute('data-session-user-id')) || '';
+  const regionRec = () => { const m = gmGet(K_REGION, {}) || {}; return m[sessionId()] || {}; };
+  const REGION_PLACES = {
+    ruhr: ['Bochum', 'Bottrop', 'Dortmund', 'Duisburg', 'Ennepe-Ruhr-Kreis', 'Essen', 'Gelsenkirchen', 'Hagen', 'Hamm', 'Herne',
+      'Mülheim an der Ruhr', 'Mülheim (Ruhr)', 'Mülheim/Ruhr', 'Oberhausen', 'Recklinghausen', 'Kreis Recklinghausen', 'Unna', 'Kreis Unna', 'Wesel', 'Kreis Wesel'],
+    rheinland: ['Aachen', 'Städteregion Aachen', 'Köln', 'Düsseldorf', 'Leverkusen', 'Rhein-Kreis Neuss', 'Neuss', 'Rhein-Erft-Kreis', 'Düren', 'Kreis Düren',
+      'Heinsberg', 'Kreis Heinsberg', 'Bonn', 'Rhein-Sieg-Kreis', 'Euskirchen', 'Kreis Euskirchen', 'Oberbergischer Kreis', 'Mönchengladbach', 'Rheinisch-Bergischer Kreis'],
+  };
+  const placeKey = (t) => String(t || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, '');
+  function regionOfPlace(place) {
+    const k = placeKey(place);
+    if (!k || /^nordrheinwestfalen|deutschland$/.test(k)) return 'unbekannt';
+    for (const [r, l] of Object.entries(REGION_PLACES)) if (l.some((x) => placeKey(x) === k)) return r;
+    return 'anderswo';
+  }
+  const ownRegion = () => regionRec().region || '';
+  const isRuhr = () => ownRegion() === 'ruhr';
+  // Standard-Bezeichnungen ↔ Ruhrgebiet (eigene Bezeichnungen bleiben unverändert)
+  const RUHR_WORDS = { Opa: 'Oppa', Opas: 'Oppas', Oma: 'Omma', Omas: 'Ommas' };
+  function ruhrNames(G, back = false) {
+    const map = back ? Object.fromEntries(Object.entries(RUHR_WORDS).map(([a, b]) => [b, a])) : RUHR_WORDS;
+    for (const g of Object.keys(G || {})) {
+      const n = G[g] && G[g].names;
+      if (!n) continue;
+      for (const k of ['one', 'many']) if (Array.isArray(n[k])) n[k] = n[k].map((x) => map[x] || x);
+    }
+    return G;
+  }
+  if (isRuhr()) ruhrNames(CONFIG.GROUPS);
+  // Ort aus einer Profilseite: „Profil von X, Mann, …, 50 Jahre, Aachen“ bzw. Titel „X ♥ Mann - Aachen - …“
+  function profilePlace(doc = document) {
+    const fig = [...doc.querySelectorAll('[aria-label^="Profil von "]')][0];
+    if (fig) {
+      const m = fig.getAttribute('aria-label').match(/Jahre,\s*([^,]+)/);
+      if (m) return m[1].trim();
+    }
+    const t = (doc.querySelector('title') || {}).textContent || '';
+    const m2 = t.match(/♥\s*[^-]+?\s+-\s+(.+?)\s+-\s+/);
+    return m2 ? m2[1].trim() : '';
+  }
+  // eigene Region merken; bei Wechsel sofort umschalten (Standard-Bezeichnungen)
+  function setOwnRegion(place) {
+    if (!place) return;
+    const region = regionOfPlace(place);
+    const all = gmGet(K_REGION, {}) || {}, id = sessionId();
+    if (!id) return;
+    const old = all[id] || {};
+    if (old.region === region && old.place === place && Date.now() - (old.ts || 0) < 864e5) return;
+    const wasRuhr = old.region === 'ruhr';
+    all[id] = { region, place, ts: Date.now() };
+    gmSet(K_REGION, all);
+    if (wasRuhr !== (region === 'ruhr')) ruhrNames(CONFIG.GROUPS, wasRuhr);
+  }
+  // Ruhrgebiets-Wörter in Anzeigetexten
+  function ruhrText(s) {
+    return String(s).replace(/\bOpa(?![\wäöüß])/g, 'Oppa').replace(/\bOpas\b/g, 'Oppas').replace(/\bOma(?![\wäöüß])/g, 'Omma').replace(/\bOmas\b/g, 'Ommas');
+  }
   const storedSettings = () => gmGet(K_SETTINGS, {}) || {};
   function saveSettings(values) {
     const st = storedSettings();
     for (const [k, v] of Object.entries(values)) {
       if (!SETTING_KEYS.includes(k)) continue;
-      st[k] = { value: JSON.parse(JSON.stringify(v)), src: JSON.stringify(SOURCE_DEFAULTS[k]) };
+      const val = JSON.parse(JSON.stringify(v));
+      if (k === 'GROUPS' && isRuhr()) ruhrNames(val, true);
+      st[k] = { value: val, src: JSON.stringify(SOURCE_DEFAULTS[k]) };
     }
     gmSet(K_SETTINGS, st);
   }
@@ -1073,7 +1138,7 @@
   // alle jemals verwendeten Stufe-3-Bezeichnungen (für das Erkennen eigener Notizzeilen)
   const K_LABELS = 'jaf_note_labels';
   function noteLabels() {
-    const l = new Set(['Alter Sack', 'Sugar Daddy', 'Sugar Mom', 'Geronto-Paar', 'Opa', 'Oma'].concat(gmGet(K_LABELS, []) || []));
+    const l = new Set(['Alter Sack', 'Sugar Daddy', 'Sugar Mom', 'Geronto-Paar', 'Opa', 'Oma', 'Oppa', 'Omma'].concat(gmGet(K_LABELS, []) || []));
     for (const g of GROUP_KEYS) l.add(CONFIG.GROUPS[g].names.one[2]);
     return [...l].filter(Boolean);
   }
@@ -1865,6 +1930,8 @@
         if (rec.online !== (old && old.online)) onlineUpdates.push([it.path, rec.online]);
       }
       if (it.cardOnline) rec.seenOnline = Date.now();
+      // „Profil zuletzt aufgerufen“ (für das Mischen fremder Sicherungen); höchstens alle 10 min schreiben
+      if (it.visited && Date.now() - (rec.visited || 0) > 10 * 60000) rec.visited = Date.now();
       if (JSON.stringify(rec) !== JSON.stringify(old)) { acc[it.path] = rec; changed = true; }
     }
     if (changed) gmSet(K_ACCOUNTS, acc);
@@ -1934,7 +2001,7 @@
     });
     if (isProfilePage()) {
       const ages = profileAges();
-      if (ages.length) items.push({ path: cleanPath(location.pathname), name: profileName(), ages, type: profileType(), online: profileOnline(), signs: profileSigns(document, ages) });
+      if (ages.length) items.push({ path: cleanPath(location.pathname), name: profileName(), ages, type: profileType(), online: profileOnline(), signs: profileSigns(document, ages), visited: true });
     }
     recordAccounts(items);
   }
@@ -2027,7 +2094,7 @@
   function fullBackup() {
     const data = {};
     for (const k of GM_listValues()) {
-      if (!k.startsWith('jaf_') || k.includes('|') || k.includes('#') || BACKUP_SKIP.test(k) || BIG_KEYS.includes(k)) continue;
+      if (!k.startsWith('jaf_') || k.includes('|') || k.includes('#') || BACKUP_SKIP.test(k) || BIG_KEYS.includes(k) || /^jaf_fl/.test(k)) continue;
       data[k] = GM_getValue(k);
     }
     for (const n of BIG_KEYS) data[n] = bigGet(n, {});
@@ -2042,7 +2109,20 @@
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
   }
-  function downloadBackup() { const b = fullBackup(); downloadJson('opa-scan-sicherung', b); return Object.keys(b.data).length; }
+  // Fickliste: verschlüsselt mit dem eigenen Nick (kein durchsuchbarer Klartext in der Datei)
+  async function downloadBackup() {
+    const b = fullBackup();
+    const fl = flBackupPart();
+    let hint = '';
+    if (Object.keys(fl).length) {
+      const nick = ownNick();
+      if (nick) { b.fl = await flEncrypt(fl, nick); b.flHint = 'Fickliste verschlüsselt (Schlüssel: dein Nick)'; hint = b.flHint; }
+      else hint = 'Fickliste NICHT gesichert: eigener Nick unbekannt (Seite mit Kopfzeile öffnen)';
+    }
+    downloadJson('opa-scan-sicherung', b);
+    if (hint) flToast(`Sicherung gespeichert · ${hint}`, 6000);
+    return Object.keys(b.data).length;
+  }
   function restoreBackup() {
     const inp = document.createElement('input');
     inp.type = 'file'; inp.accept = '.json,application/json';
@@ -2053,13 +2133,124 @@
       try { b = JSON.parse(await file.text()); } catch (e) { alert('Die Datei ist keine gültige Sicherung.'); return; }
       if (!b || b.format !== 'opa-scan-backup' || !b.data) { alert('Die Datei ist keine Sicherung des Opa-Scans.'); return; }
       const n = Object.keys(b.data).length;
-      if (!confirm(`Sicherung vom ${fmtTs(b.ts)} (Version ${b.version || '?'}, ${n} Bereiche) wiederherstellen?\n\nAlle aktuellen Daten werden dabei ersetzt.`)) return;
-      for (const k of GM_listValues()) if (k.startsWith('jaf_') && !BACKUP_SKIP.test(k) && k !== K_STORE_V) GM_deleteValue(k);
+      if (!confirm(`Sicherung vom ${fmtTs(b.ts)} (Version ${b.version || '?'}, ${n} Bereiche${b.fl ? ', Fickliste verschlüsselt' : ''}) wiederherstellen?\n\nAlle aktuellen Daten werden dabei ersetzt.`)) return;
+      // Fickliste entschlüsseln (eigener Nick; nach Nick-Wechsel fragen)
+      let fl = null, keepFl = false;
+      if (b.fl) {
+        let nick = ownNick();
+        fl = nick ? await flDecrypt(b.fl, nick) : null;
+        while (!fl) {
+          const v = await askPopup({ title: 'Fickliste verschlüsselt', lines: ['Die Fickliste wurde unter einem anderen Nick gesichert.', 'Wie hieß dein Nick beim Export?'],
+            buttons: [{ label: 'Nick eingeben …', value: 'nick', primary: true }, { label: 'Ohne Fickliste wiederherstellen', value: 'skip' }, { label: 'Abbrechen', value: null, focus: true }] });
+          if (!v) return;
+          if (v === 'skip') { keepFl = true; break; }
+          nick = await flPrompt('Nick beim Export', ['Groß- und Kleinschreibung spielt keine Rolle.'], nick || '', 'Entschlüsseln');
+          if (nick) fl = await flDecrypt(b.fl, nick);
+        }
+      } else keepFl = true;
+      for (const k of GM_listValues()) if (k.startsWith('jaf_') && !BACKUP_SKIP.test(k) && k !== K_STORE_V && !(keepFl && /^jaf_fl/.test(k))) GM_deleteValue(k);
+      if (fl) for (const [k, v] of Object.entries(fl)) if (/^jaf_fl/.test(k)) GM_setValue(k, v);
       for (const nme of BIG_KEYS) if (BIG[nme]) BIG[nme].loaded = false;
       if (!storeNeedsMigration()) { const l = GM_getValue(K_STORE_V, []) || []; GM_setValue(K_STORE_V, [...new Set(l.concat(BIG_KEYS))]); }
       for (const [k, v] of Object.entries(b.data)) { if (BIG_KEYS.includes(k)) bigSet(k, v); else if (k !== K_STORE_V) GM_setValue(k, v); }
       alert('Sicherung wiederhergestellt. Die Seite wird neu geladen.');
       location.reload();
+    });
+    inp.click();
+  }
+  // ---------- Fremde Datensicherung importieren (mischen) ----------
+  // Übernimmt nur Wissen über ANDERE Mitglieder: Konten (Typ, Geburtszeiträume, Sternzeichen, Online, Größe/Gewicht),
+  // Prüf-Cache, Geschlechts-Zuordnung, unbekannte Profiltypen. Nicht: Partys/AWO, Einstellungen, Whitelist, Sperren,
+  // Ignorierliste, Gedächtnis, Vormerkliste, Sichtungen, Scan-Zustände, Fickliste.
+  // Abgleich über die Profil-ID; „Profil zuletzt aufgerufen“ entscheidet (unbekannt = 01.01.1970),
+  // bei Gleichstand der vollständigere Eintrag, dann der eigene. Geburtszeiträume werden immer geschnitten.
+  function accCompleteness(r) {
+    if (!r) return 0;
+    let n = 0;
+    for (const k of ['name', 'type', 'url', 'online', 'last', 'first']) if (r[k]) n++;
+    for (const q of r.persons || []) { if (q.lo) n++; if (q.sign) n++; }
+    for (const q of (r.fig && r.fig.persons) || []) { if (figNum(q.h)) n++; if (figNum(q.w)) n++; }
+    return n;
+  }
+  function mergeAccountRec(own, fr) {
+    const fv = fr.visited || 0, ov = own.visited || 0;
+    const foreignWins = fv > ov || (fv === ov && accCompleteness(fr) > accCompleteness(own));
+    const base = JSON.parse(JSON.stringify(foreignWins ? fr : own));
+    const other = foreignWins ? own : fr;
+    // Personen: Geburtszeiträume schneiden, Sternzeichen/Größe/Gewicht ergänzen
+    const a = base.persons || [], b = other.persons || [];
+    if (a.length && a.length === b.length) {
+      base.persons = a.map((p, i) => {
+        const q = b[i] || {};
+        const r = (p.lo && q.lo) ? mergeRange(p, q) : (p.lo ? p : q);
+        const out = Object.assign({}, q, p, { lo: r.lo, hi: r.hi });
+        if (!out.sign && q.sign) out.sign = q.sign;
+        for (const k of ['h', 'w']) if (out[k] == null && q[k] != null) out[k] = q[k];
+        return out;
+      });
+    } else if (!a.length && b.length) base.persons = b;
+    if (other.online && (!base.online || (other.online.at || 0) > (base.online.at || 0))) base.online = other.online;
+    if (other.fig && (!base.fig || (other.fig.ts || 0) > (base.fig.ts || 0))) base.fig = other.fig;
+    for (const k of ['first']) if (other[k] && (!base[k] || other[k] < base[k])) base[k] = other[k];
+    for (const k of ['last', 'seenOnline', 'visited']) if (other[k] && (!base[k] || other[k] > base[k])) base[k] = other[k];
+    return { rec: base, foreignWins };
+  }
+  function mergeForeignData(d) {
+    const st = { neu: 0, akt: 0, eigen: 0, checkedNeu: 0, typen: 0, gender: 0 };
+    // Konten
+    const acc = getAccounts();
+    const byId = {};
+    for (const p of Object.keys(acc)) { const id = idOf(p); if (id) byId[id] = p; }
+    for (const [fp, fr] of Object.entries(d.jaf_accounts || {})) {
+      if (!fr || typeof fr !== 'object') continue;
+      const id = idOf(fp);
+      const op = (id && byId[id]) || (acc[fp] ? fp : null);
+      if (!op) { acc[fp] = fr; if (id) byId[id] = fp; st.neu++; continue; }
+      const { rec, foreignWins } = mergeAccountRec(acc[op], fr);
+      if (JSON.stringify(rec) !== JSON.stringify(acc[op])) { acc[op] = rec; if (foreignWins) st.akt++; else st.eigen++; }
+      else st.eigen++;
+    }
+    gmSet(K_ACCOUNTS, acc);
+    // Prüf-Cache: neuerer Eintrag gewinnt
+    const ch = getChecked();
+    for (const [id, e] of Object.entries(d.jaf_checked || {})) {
+      if (!e) continue;
+      if (!ch[id] || (e.ts || 0) > (ch[id].ts || 0)) { ch[id] = e; st.checkedNeu++; }
+    }
+    gmSet(K_CHECKED, ch);
+    // Geschlechts-Zuordnung: Belege addieren (gedeckelt)
+    const gm = gmGet(K_GENDER, {}) || {};
+    for (const [num, titles] of Object.entries(d[K_GENDER] || {})) {
+      const e = gm[num] || (gm[num] = {});
+      for (const [t, n] of Object.entries(titles || {})) { const v = Math.min(20, (e[t] || 0) + (+n || 0)); if (v !== e[t]) { e[t] = v; st.gender++; } }
+    }
+    gmSet(K_GENDER, gm);
+    // unbekannte Profiltypen: Namen vereinigen
+    const ty = getTypes();
+    for (const [t, names] of Object.entries(d[K_TYPES] || {})) {
+      const l = new Set(ty[t] || []); const n0 = l.size;
+      for (const x of names || []) l.add(x);
+      if (l.size !== n0 || !ty[t]) { ty[t] = [...l]; st.typen++; }
+    }
+    gmSet(K_TYPES, ty);
+    return st;
+  }
+  function importForeignBackup() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.addEventListener('change', async () => {
+      const file = inp.files && inp.files[0];
+      if (!file) return;
+      let b;
+      try { b = JSON.parse(await file.text()); } catch (e) { alert('Die Datei ist keine gültige Sicherung.'); return; }
+      if (!b || b.format !== 'opa-scan-backup' || !b.data) { alert(opaT('Die Datei ist keine Sicherung des Opa-Scans.')); return; }
+      const n = Object.keys(b.data.jaf_accounts || {}).length;
+      if (!confirm(`Fremde Sicherung vom ${fmtTs(b.ts)} (Version ${b.version || '?'}) mit ${n.toLocaleString('de-DE')} Konten einmischen?\n\n` +
+        'Übernommen wird nur Wissen über andere Mitglieder (Typ, Geburtszeiträume, Sternzeichen, Online-Angaben, Größe/Gewicht, geprüfte Profile).\n' +
+        'Deine Einstellungen, Whitelist, Ignorierliste, Partys und Fickliste bleiben unverändert.')) return;
+      const st = mergeForeignData(b.data);
+      alert(`Fremde Sicherung eingemischt.\n\nKonten: ${st.neu} neu · ${st.akt} aktualisiert · ${st.eigen} eigene behalten\n` +
+        `Geprüfte Profile: ${st.checkedNeu} übernommen\nProfiltypen: ${st.typen} ergänzt · Geschlechts-Zuordnung: ${st.gender} ergänzt`);
     });
     inp.click();
   }
@@ -2125,11 +2316,29 @@
     } catch (e) { /* egal */ }
   }
   const ownIsMan = () => gmGet(K_OWN_TYPE, '') === 'Mann';
-  const NICK = () => (ownIsMan() ? 'Oma' : 'Opa');
+  const NICK = () => opaT(ownIsMan() ? 'Oma' : 'Opa');
   const nickG = () => (ownIsMan() ? OMA_G : OPA_G);
   function opaT(s) {
-    if (!ownIsMan()) return s;
-    return String(s).replace(/Opa-(Scan|Schutz|Liste)/g, 'Oma-$1').replace(/blockierte Opas/g, 'blockierte Omas');
+    let t = String(s);
+    if (ownIsMan()) t = t.replace(/Opa-(Scan|Schutz|Liste)/g, 'Oma-$1').replace(/blockierte Opas/g, 'blockierte Omas');
+    return isRuhr() ? ruhrText(t) : t;
+  }
+  // Sicherheitsnetz: Texte und Titel aller Skript-Elemente (id/class „jaf…“) im Ruhrgebiet nachziehen
+  function ruhrifyUi() {
+    if (!isRuhr()) return;
+    for (const root of document.querySelectorAll('[id^="jaf"], [class*="jaf-"], [class*="jaf_"]')) {
+      if (root.closest('input,textarea,[contenteditable]') || root.__jafRuhr === root.textContent) continue;
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        if (!/Opa|Oma/.test(n.nodeValue) || (n.parentElement && n.parentElement.closest('input,textarea,[contenteditable]'))) continue;
+        const v = ruhrText(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v;
+      }
+      for (const el of [root, ...root.querySelectorAll('[title]')]) {
+        const t = el.getAttribute && el.getAttribute('title');
+        if (t && /Opa|Oma/.test(t)) { const v = ruhrText(t); if (v !== t) el.setAttribute('title', v); }
+      }
+      root.__jafRuhr = root.textContent;
+    }
   }
   function updateOpaBadge() {
     const happy = document.querySelector('.page-header-info-element.happy_member_num_info');
@@ -4138,12 +4347,12 @@
     bgBody(null);
     const go = (opt) => () => psPrepare(opt, evs);
     bgButtons([
-      { label: '1. Importierte Partys merken', fn: go(1), hint: 'Alle Partys der Liste werden gemerkt. Bereits Gemerktes bleibt.' },
-      { label: '2. Importierte Partys merken / nicht mehr merken', fn: go(2), hint: 'Erst wird alles nicht mehr gemerkt, was nicht in der Liste steht (Anmeldungen bleiben), dann wird alles aus der Liste gemerkt.' },
-      { label: '3. Für importierte Partys anmelden', fn: go(3), hint: 'Angemeldete der Liste werden angemeldet, Vorgemerkte gemerkt. Nichts wird entfernt.' },
-      { label: '4. Für importierte Partys an-/abmelden', fn: go(4), hint: 'Stellt den Stand der Liste her: anmelden, merken, stornieren und nicht mehr merken.' },
-      { label: '5. Einzeln fragen', fn: go(5), hint: 'Jede Party einzeln mit ihrem aktuellen Status anzeigen und entscheiden.' },
-      { label: '6. Abbrechen', fn: closeBgPopup, focus: true },
+      { label: 'Importierte Partys merken', fn: go(1), hint: 'Alle Partys der Liste werden gemerkt. Bereits Gemerktes bleibt.' },
+      { label: 'Importierte Partys merken / nicht mehr merken', fn: go(2), hint: 'Erst wird alles nicht mehr gemerkt, was nicht in der Liste steht (Anmeldungen bleiben), dann wird alles aus der Liste gemerkt.' },
+      { label: 'Für importierte Partys anmelden', fn: go(3), hint: 'Angemeldete der Liste werden angemeldet, Vorgemerkte gemerkt. Nichts wird entfernt.' },
+      { label: 'Für importierte Partys an-/abmelden', fn: go(4), hint: 'Stellt den Stand der Liste her: anmelden, merken, stornieren und nicht mehr merken.' },
+      { label: 'Einzeln fragen', fn: go(5), hint: 'Jede Party einzeln mit ihrem aktuellen Status anzeigen und entscheiden.' },
+      { label: 'Abbrechen', fn: closeBgPopup, focus: true },
     ]);
   }
   // Anmeldetyp wählen (3, 4, 5)
@@ -5204,8 +5413,9 @@
   // Aus einer niedrigeren Quelle darf jede Art weichen, aus derselben Quelle nur eine gleiche oder niedrigere Art.
   // Von Hand oder über die Whitelist Gesperrte werden nie angefasst.
   function pickVictim(item) {
-    const newRank = srcRank(item.source);
-    const newKind = kindRank(itemKind(item));
+    // item.manual: Sperre aus einer eigenen Liste (Fickliste) – jede automatische Sperre darf weichen
+    const newRank = item.manual ? -1 : srcRank(item.source);
+    const newKind = item.manual ? 99 : kindRank(itemKind(item));
     const l = getLog(), ign = getIgnored();
     const ignIds = new Set(Object.keys(ign).map(idOf));
     const today = isoDay(new Date());
@@ -5613,7 +5823,10 @@
     return { types: Array.isArray(s.types) ? s.types : d.types, min: s.min || d.min, max: s.max || d.max,
       lands: Array.isArray(s.lands) ? s.lands.filter((n) => (CONFIG.AREAS || {})[n]) : d.lands };
   }
-  const msSlug = (t) => norm(t).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'ort';
+  // JOYclub-Slug: ä→ae ö→oe ü→ue ß→ss, übrige Akzente weg, Leerzeichen/Klammern/Sonstiges → „_“ (z. B. „Mülheim (Ruhr)“ → muelheim_ruhr)
+  const joySlug = (t) => norm(t).replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9-]+/g, '_').replace(/_+/g, '_').replace(/^[_-]+|[_-]+$/g, '');
+  const msSlug = (t) => joySlug(t) || 'ort';
   function msUrl(area, types, age) {
     const is = MS_TYPES.filter(([k]) => types.includes(k)).map(([, , slug]) => slug).join('_');
     return `${location.origin}/member/${msSlug(area[0])}-x${area[4]}-r/is-${is}/?user_geo_distance=${CONFIG.AREA_RADIUS_KM}&user_age=${age}_${age}`;
@@ -5691,6 +5904,179 @@
       }
     }
   }
+
+  // ---- Steckbrief(e) einer Profilseite: [{ g: universal-gender, age, props: { Größe: '170 cm', … } }] (erstes Vorkommen je Person) ----
+  function parseSedCards(doc = document) {
+    const out = [], seen = new Set();
+    for (const up of doc.querySelectorAll('.profile-sed-card__upper-info')) {
+      const gi = up.querySelector('j-gender-icon[universal-gender]');
+      const ageTxt = gi ? ((gi.parentElement && gi.parentElement.textContent) || '') : '';
+      const age = +((ageTxt.match(/(\d{2,3})\s*Jahre/) || [])[1] || 0);
+      const g = gi ? gi.getAttribute('universal-gender') : '';
+      const key = `${g}|${age}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const props = {};
+      const card = up.closest('.profile-sed-card') || up.parentElement || up;
+      for (const pr of card.querySelectorAll('.profile-sed-card__property')) {
+        const h = ((pr.querySelector('.profile-sed-card__headline') || {}).textContent || '').trim();
+        const c = pr.querySelector('.profile-sed-card__content');
+        if (!h || !c) continue;
+        const v = (c.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!(h in props)) props[h] = /keine angabe/i.test(v) ? '' : v;
+      }
+      const title = ((card.querySelector('h2, h3') || {}).textContent || '').trim();
+      out.push({ g, age, title, props });
+    }
+    return out;
+  }
+
+  // ---- Figur: drei zusätzliche Auswahlwerte (JOYclub-Suche bekommt „Eher etwas mehr“) ----
+  const FIG_MODES = { mollig: { label: 'Mollig', min: 30, hide: 0 }, mastschwein: { label: 'Mastschwein', min: 35, hide: 35 }, qualle: { label: 'Qualle', min: 40, hide: 40 } };
+  const FIG_BANDS = [[40, 'Qualle'], [35, 'Mastschwein'], [30, 'Mollig']];
+  const ssGet = (k) => { try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } };
+  const ssSet = (k, v) => { try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (e) { /* egal */ } };
+  const figMode = () => { const m = ssGet('jaf_fig'); return FIG_MODES[m] && isMemberSearchPage() && /[?&]user_bmi=3(&|$)/.test(location.search) ? m : ''; };
+  function figSelects() { return [...document.querySelectorAll('j-setting-select[label]')].filter((e) => /^figur$/i.test(e.getAttribute('label') || '')); }
+  function figInjectOptions() {
+    for (const sel of figSelects()) {
+      let items = [];
+      try { items = JSON.parse(sel.getAttribute('items') || '[]'); } catch (e) { continue; }
+      if (!items.some((x) => String(x.value) === '3') || items.some((x) => x.label === 'Mollig')) continue;
+      items = items.concat(Object.values(FIG_MODES).map((m) => ({ label: m.label, value: '3' })));
+      sel.setAttribute('items', JSON.stringify(items));
+    }
+    // angezeigten Wert ersetzen, solange ein eigener Modus gilt
+    const m = ssGet('jaf_fig');
+    if (FIG_MODES[m]) for (const sel of figSelects()) {
+      if (String(sel.getAttribute('value')) !== '3' || !sel.shadowRoot) continue;
+      const w = document.createTreeWalker(sel.shadowRoot, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        if (n.parentElement && n.parentElement.closest('[role="option"], [role="listbox"], li')) continue;
+        if (/Eher etwas mehr/.test(n.nodeValue)) n.nodeValue = n.nodeValue.replace('Eher etwas mehr', FIG_MODES[m].label);
+      }
+    }
+  }
+  if (!IN_FRAME) document.addEventListener('click', (ev) => {
+    const path = ev.composedPath ? ev.composedPath() : [];
+    if (!path.some((e) => e && e.tagName === 'J-SETTING-SELECT' && /^figur$/i.test(e.getAttribute('label') || ''))) return;
+    const el = path.find((e) => e && e.nodeType === 1 && /^(Eher schlank|Normale Figur|Eher etwas mehr|Mollig|Mastschwein|Qualle)$/.test((e.textContent || '').trim()));
+    if (!el) return;
+    const t = el.textContent.trim();
+    const k = Object.keys(FIG_MODES).find((x) => FIG_MODES[x].label === t);
+    ssSet('jaf_fig', k || '');
+  }, true);
+  // BMI eines Kontos (bei Paaren: Person des anderen Geschlechts zum eigenen Profil, sonst irgendeine mit Angaben)
+  const figNum = (v) => { const n = parseFloat(String(v || '').replace(',', '.')); return Number.isFinite(n) && n > 0 ? n : null; };
+  function figBmi(rec) {
+    const ps = (rec && rec.fig && rec.fig.persons) || [];
+    if (!ps.length) return null;
+    const calc = (p) => { const h = figNum(p.h), w = figNum(p.w); return h && w ? { bmi: w / ((h / 100) ** 2), w } : { bmi: null, w: w || 0 }; };
+    let pick = ps;
+    if (ps.length > 1) {
+      const own = gmGet(K_OWN_TYPE, '');
+      const want = own === 'Mann' ? '2' : own === 'Frau' ? '1' : '';
+      if (want) pick = ps.filter((p) => p.g === want);
+      if (!pick.length) pick = ps;
+    }
+    const known = pick.map(calc).filter((x) => x.bmi != null).sort((a, b) => b.bmi - a.bmi);
+    return known[0] || { bmi: null, w: Math.max(0, ...pick.map((p) => figNum(p.w) || 0)) };
+  }
+  function figPersonsFromDoc(doc) {
+    return parseSedCards(doc).map((p) => {
+      const h = (String(p.props['Größe'] || '').match(/(\d{3})/) || [])[1];
+      const w = (String(p.props['Gewicht'] || '').match(/(\d{2,3})/) || [])[1];
+      return { g: p.g, age: p.age, h: h ? +h : 'UNKNOWN', w: w ? +w : 'UNKNOWN' };
+    });
+  }
+  let figBusy = false;
+  async function figFetchOne(c) {
+    const r = await jfetch(c.url);
+    if (!r.ok || !r.doc) throw new Error(`HTTP ${r.status}`);
+    const persons = figPersonsFromDoc(r.doc);
+    const acc = getAccounts();
+    const rec = Object.assign({ first: isoDay(new Date()), name: c.name, url: c.url, type: c.type }, acc[c.path] || {});
+    rec.fig = { ts: Date.now(), persons: persons.length ? persons : [{ g: '', h: 'UNKNOWN', w: 'UNKNOWN' }] };
+    acc[c.path] = rec;
+    gmSet(K_ACCOUNTS, acc);
+  }
+  async function figWorker() {
+    if (figBusy) return;
+    figBusy = true;
+    try {
+      while (figMode()) {
+        const acc = getAccounts();
+        const todo = readCards().find((c) => !(acc[c.path] && acc[c.path].fig) && !c.a.__jafFigFail);
+        if (!todo) break;
+        if (!ssGet('jaf_fig_vis')) {
+          const ok = await visGuard();
+          ssSet('jaf_fig_vis', ok ? 'ok' : 'no');
+        }
+        if (ssGet('jaf_fig_vis') !== 'ok') break;
+        try { await figFetchOne(todo); } catch (e) { todo.a.__jafFigFail = true; }
+        const vr = visRun(); if (vr) gmSet(K_VIS_RUN, Object.assign(vr, { ts: Date.now() }));
+        figRender();
+        await sleep(1200 + Math.random() * 1200);
+      }
+    } finally {
+      figBusy = false;
+      const vr = visRun(); if (vr && vr.ts) gmSet(K_VIS_RUN, Object.assign({}, vr, { ts: 0 }));
+    }
+  }
+  function figRender() {
+    const mode = figMode();
+    const cards = readCards();
+    if (!mode) {
+      for (const c of cards) { const b = c.a.querySelector('.jaf-fig'); if (b) b.remove(); if (c.a.__jafFigWrap) c.a.__jafFigWrap.style.display = ''; }
+      return;
+    }
+    const M = FIG_MODES[mode];
+    const acc = getAccounts();
+    if (!cards.length) return;
+    // gemeinsamer Container der Karten
+    let P = cards[0].a.parentElement;
+    while (P && !cards.every((c) => P.contains(c.a))) P = P.parentElement;
+    if (!P) return;
+    const rows = cards.map((c) => {
+      let w = c.a; while (w.parentElement && w.parentElement !== P) w = w.parentElement;
+      c.a.__jafFigWrap = w;
+      const rec = acc[c.path];
+      const done = !!(rec && rec.fig);
+      const b = done ? figBmi(rec) : null;
+      const bmi = b && b.bmi != null ? b.bmi : null;
+      const eff = bmi != null ? bmi : M.min;
+      return { c, w, done, bmi, eff, kg: (b && b.w) || 0 };
+    });
+    for (const r of rows) {
+      const hide = r.done && r.eff < M.hide;
+      r.w.style.display = hide ? 'none' : '';
+      let el = r.c.a.querySelector('.jaf-fig');
+      let txt = '';
+      if (r.done) {
+        if (r.bmi == null) txt = `${M.label}? · BMI ?`;
+        else if (r.bmi >= Math.max(30, M.min)) txt = `${(FIG_BANDS.find(([t]) => r.bmi >= t) || [])[1]} · BMI ${r.bmi.toFixed(1).replace('.', ',')}`;
+      }
+      if (!txt) { if (el) el.remove(); continue; }
+      if (!el) {
+        el = document.createElement('div'); el.className = 'jaf-fig';
+        if (getComputedStyle(r.c.a).position === 'static') r.c.a.style.position = 'relative';
+        r.c.a.appendChild(el);
+      }
+      if (el.textContent !== txt) el.textContent = txt;
+      el.style.cssText = 'position:absolute;bottom:6px;left:6px;z-index:5;font:bold 11px system-ui;padding:2px 6px;border-radius:3px;pointer-events:none;background:#7a3fb0;color:#fff';
+    }
+    // sortieren: geprüfte zuerst, BMI absteigend, bei Gleichstand höheres Gewicht; ungeprüfte am Ende
+    const sorted = rows.slice().sort((a, b) => (b.done - a.done) || (b.eff - a.eff) || (b.kg - a.kg));
+    const cur = [...P.children].filter((x) => rows.some((r) => r.w === x));
+    if (sorted.some((r, i) => r.w !== cur[i])) for (const r of sorted) P.appendChild(r.w);
+  }
+  function figTick() {
+    if (!isMemberSearchPage()) return;
+    figInjectOptions();
+    figRender();
+    if (figMode()) figWorker();
+  }
+  if (!IN_FRAME) setInterval(() => { try { figTick(); } catch (e) { /* weiter */ } }, 1500);
 
   // ---- Popup 1: Auswahl ----
   function msOpen() {
@@ -6002,10 +6388,10 @@
     if (l === 'sugar daddy') return 'sd';
     if (l === 'sugar mom') return 'sm';
     if (l === 'geronto-paar' || l === norm(CONFIG.GROUPS.p.names.one[2])) return 'geronto';
-    if (l === 'oma' || l === norm(CONFIG.GROUPS.f.names.one[2])) return 'oma';
+    if (l === 'oma' || l === 'omma' || l === norm(CONFIG.GROUPS.f.names.one[2])) return 'oma';
     return 'opa';
   }
-  const KIND_NAMES = { opa: 'Opa', oma: 'Oma', geronto: 'Geronto-Paar', sd: 'Sugar Daddy', sm: 'Sugar Mom' };
+  const KIND_NAMES = { opa: opaT('Opa'), oma: opaT('Oma'), geronto: 'Geronto-Paar', sd: 'Sugar Daddy', sm: 'Sugar Mom' };
   const kindArg = (k) => k;
   // eigene Notizzeile zerlegen: { kind, label, source, ts }
   function parseOwnLine(text) {
@@ -6870,7 +7256,7 @@
     const el = li.querySelector('.item_text');
     if (el.textContent !== t) el.textContent = t;
   }
-  setInterval(() => { try { insertMenuEntries(); updateTopButton(); invisiblePageGuard(); } catch (e) { /* weiter */ } }, 1500);
+  setInterval(() => { try { insertMenuEntries(); updateTopButton(); invisiblePageGuard(); ruhrifyUi(); } catch (e) { /* weiter */ } }, 1500);
 
   // =====================================================================
   // ---------- Seite „Opa-Schutz“ (Einstellungen) unter /edit/account/#opa-schutz ----------
@@ -7803,9 +8189,1751 @@
     render();
   }
 
+  // =====================================================================
+  // ---------- Fickliste ----------
+  // Button neben „ClubMail“ (fünf Zustände), Popup „Ficklisteneintragung“ (Profilnotiz, Treffen, Ignorieren),
+  // Profil-Archiv (Stände mit Profilbild), Seite „Meine Fickliste“, externe Ficks, Löschmeldungen aus der ClubMail.
+  // Speicher: jaf_fl = { pid: Person }, jaf_fla_<pid> = [Stand], jaf_fli_<bild> = data:-URL des Profilbilds.
+  // pid = Profil-ID bzw. „x-<slug>“ für externe Ficks.
+  // =====================================================================
+  const K_FL = 'jaf_fl';
+  const K_FLA = 'jaf_fla_';
+  const K_FLI = 'jaf_fli_';
+  const K_FL_LVL = 'jaf_fl_lvl2';     // Stufe 2 (Seiten-Snapshot) – per Strg+Klick auf den Button
+  const K_FL_CTX = 'jaf_fl_ctx';      // Party, aus deren Gästeliste zuletzt ein Profil geöffnet wurde
+  const K_FL_CM = 'jaf_fl_cm';        // bereits ausgewertete JOY-Team-Löschmeldungen
+  const K_FL_UNKNOWN = 'jaf_fl_unknown'; // unklare Profilzustände (Lebendprüfung)
+  const FL_ST = {
+    will: { label: 'Will ich', menu: 'Will ich ficken' },
+    gef: { label: 'Gefickt', menu: 'Gefickt' },
+    nein: { label: 'Nein, danke!', menu: 'Nein, danke!' },
+    nie: { label: 'Nie wieder!', menu: 'Nie wieder!' },
+  };
+  const FL_ORDER = ['will', 'gef', 'nein', 'nie'];
+  const flLabel = (st) => (FL_ST[st] ? FL_ST[st].label : 'Ficken?');
+  const getFl = () => GM_getValue(K_FL, {}) || {};
+  const setFl = (m) => GM_setValue(K_FL, m);
+  const flGet = (pid) => getFl()[pid] || null;
+  function flPut(p) { const m = getFl(); p.updated = Date.now(); m[p.id] = p; setFl(m); return p; }
+  const flStands = (pid) => GM_getValue(K_FLA + pid, []) || [];
+  const flSetStands = (pid, l) => GM_setValue(K_FLA + pid, l);
+  const flImg = (id) => (id ? GM_getValue(K_FLI + id, '') : '');
+  const flIsExt = (pid) => /^x-/.test(String(pid));
+  const flPath = (p) => (flIsExt(p.id) ? `/edit/homepage/?fickextern=${encodeURIComponent(p.id.slice(2))}` : (p.path || `/profile/${p.id}.html`));
+  const flUrl = (p) => location.origin + flPath(p);
+  const flDead = (p) => !!p && (p.live === 'dead' || (flIsExt(p.id) && p.wasJoy));
+  const pad2f = (n) => String(n).padStart(2, '0');
+  const fmtDate = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}.${m[2]}.${m[1]}` : ''; };
+  const fmtDT = (t) => { const d = new Date(t); return `${pad2f(d.getDate())}.${pad2f(d.getMonth() + 1)}.${d.getFullYear()} ${pad2f(d.getHours())}:${pad2f(d.getMinutes())}`; };
+  const meetTs = (m) => { const t = Date.parse(`${m.date || '1970-01-01'}T${m.time || '00:00'}:00`); return Number.isFinite(t) ? t : 0; };
+  const flMeetsSorted = (p, asc = false) => (p.meets || []).slice().sort((a, b) => (asc ? 1 : -1) * (meetTs(a) - meetTs(b)));
+  const flHist = (p, why) => { (p.hist = p.hist || []).push({ ts: Date.now(), why }); };
+  const flNewId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  // ---- Symbole (Ficken-Icon; Quelle: SVG Repo „sex-doggy“) ----
+  const FL_D = 'M65.9,26.7c0-13.6,11-24.6,24.6-24.6s24.6,11,24.6,24.6s-11,24.6-24.6,24.6S65.9,40.3,65.9,26.7z M254,191.2c0,8.7-7.1,15.8-15.8,15.8h-78.8c-8.7,0-15.8-7.1-15.8-15.8v-27.5H74.8v30.4c0,7.1-5.7,12.8-12.8,12.8H14.8c-7.1,0-12.8-5.7-12.8-12.8s5.7-12.8,12.8-12.8h34.5c0,0,0.1-36.7,0.1-37.3c-0.4-7.9,5.2-14.9,13.1-16.3l45.9-7.7c0,0,0-59.2,0-59.2c0-11.7,9.5-21.3,21.3-21.3c3.7,0,7.2,0.9,10.2,2.6c8.4,4.5,41.9,29.7,61.1,44c8.8,6.6,13.9,16.9,13.9,27.8l0.1,61.4h23.3C246.9,175.4,254,182.5,254,191.2z M183.5,175.4l-0.2-36c0-10.4-4.8-20.1-13-26.5L134,84.7v31.1l10.9-1.8c0,0,0.1,0,0.1,0c7.5-1.2,15.2,0.9,21,5.8c5.8,4.9,9.2,12.1,9.3,19.7c0,0.1,0,0.1,0,0.2v35.7h7.9H183.5z M16.5,140.3c12.4,5.6,26.3-0.3,32.6-12.3c8-15.5,4.5-33.1-2.4-42.9c0,0,0,0,0,0c-4.8,5.8-12.2,7.6-19.6,8.1C15.3,94,8.4,98.4,4.2,107.7C-1.4,120.1,4.1,134.7,16.5,140.3z';
+  const FL_RED = '#e01b1b';
+  // kind: '' (Umriss dünn = inaktiv) | will | gef | nein | nie | trash; opt: { size, color, shadow }
+  function flIcon(kind, opt = {}) {
+    const size = opt.size || 20;
+    const sh = opt.shadow === false ? '' : 'filter:drop-shadow(1px 2px 1.5px rgba(0,0,0,.7));';
+    const st = `width:${size}px;height:${size}px;flex:none;vertical-align:middle;${sh}`;
+    if (kind === 'trash') {
+      return `<svg class="jaf-fl-svg" viewBox="0 0 24 24" style="${st}color:${opt.color || 'currentColor'}" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9zm4 2v9h1.6v-9H10zm3.4 0v9H15v-9h-1.6z"/></svg>`;
+    }
+    const fill = `<path fill="currentColor" d="${FL_D}"/>`;
+    const line = `<path fill="none" stroke="currentColor" stroke-width="${kind === 'nein' ? 12 : 9}" stroke-linejoin="round" d="${FL_D}"/>`;
+    const col = opt.color || (kind === 'gef' && opt.redGef ? FL_RED : 'currentColor');
+    if (kind === 'nein' || kind === 'nie') {
+      return `<svg class="jaf-fl-svg" viewBox="-48 -71.5 352 352" style="${st}color:${col}" aria-hidden="true">` +
+        `<g transform="translate(128 104.5) scale(.78) translate(-128 -104.5)">${kind === 'nein' ? line : fill}</g>` +
+        `<circle cx="128" cy="104.5" r="158" fill="none" stroke="${FL_RED}" stroke-width="22"/>` +
+        `<line x1="16.3" y1="216.2" x2="239.7" y2="-7.2" stroke="${FL_RED}" stroke-width="22" stroke-linecap="round"/></svg>`;
+    }
+    return `<svg class="jaf-fl-svg" viewBox="${kind ? '-4 -4 264 217' : '-8 -8 272 225'}" style="${st}color:${col}" aria-hidden="true">${kind ? fill : line}</svg>`;
+  }
+  // kleines Symbol für Karten/Listen (Zustand ≠ inaktiv)
+  const flBadgeIcon = (st, size = 16) => flIcon(st, { size, redGef: true });
+
+  // ---- Seiten-Erkennung ----
+  const flOverviewPage = () => /^\/edit\/homepage\/?$/.test(location.pathname) && /[?&]fickliste(=|&|$)/.test(location.search);
+  const flExternPage = () => /^\/edit\/homepage\/?$/.test(location.pathname) && /[?&]fickextern=/.test(location.search);
+  const flExternSlug = () => decodeURIComponent((location.search.match(/[?&]fickextern=([^&]+)/) || [])[1] || '');
+  const flArchivParam = () => +((location.search.match(/[?&]archiv=(\d+)/) || [])[1] || 0);
+  const flOverviewUrl = (filter) => `${location.origin}/edit/homepage/?fickliste${filter ? '&status=' + filter : ''}`;
+  // Profil der aktuellen Seite als Fickliste-Kandidat (Mann, Frau, Paar, Transperson …; nicht das eigene Profil)
+  function flPagePid() {
+    if (flExternPage()) return 'x-' + flExternSlug();
+    if (!isProfilePage()) return '';
+    const id = idOf(location.pathname);
+    if (!id || isOwnProfile()) return '';
+    return id;
+  }
+  function flSelectable() {
+    if (flExternPage()) return !!flGet('x-' + flExternSlug());
+    if (!flPagePid()) return false;
+    if (flGet(flPagePid())) return true;
+    const t = profileType();
+    return !!t && !!knownType(String(t).split('|')[0]);
+  }
+
+  // ---- Hilfen für Popups ----
+  const FL_BOX_CSS = POPUP_BOX_CSS.replace('max-width:440px', 'max-width:600px');
+  const FL_INPUT_CSS = 'background:#2a2c31;border:1px solid #4a4f53;border-radius:6px;color:#fff;padding:6px 8px;font:14px system-ui,sans-serif;box-sizing:border-box';
+  function flOverlay(id) {
+    document.getElementById(id)?.remove();
+    const ov = document.createElement('div');
+    ov.id = id;
+    ov.className = 'jaf-fl-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+    const box = document.createElement('div');
+    box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+    box.style.cssText = FL_BOX_CSS;
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+    return { ov, box };
+  }
+  function flBtn(label, fn, primary = false) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.style.cssText = `border:${primary ? '0' : '1px solid #6b6f76'};border-radius:20px;background:${primary ? '#c71b1b' : 'transparent'};color:#fff;` +
+      'font:bold 14px system-ui,sans-serif;padding:8px 18px;cursor:pointer';
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(e); });
+    return b;
+  }
+  function flEl(tag, css, html) { const e = document.createElement(tag); if (css) e.style.cssText = css; if (html != null) e.innerHTML = html; return e; }
+  function flToast(text, ms = 2500) {
+    const t = flEl('div', 'position:fixed;left:50%;top:90px;transform:translateX(-50%);z-index:2147483647;background:#20242c;color:#fff;border-left:4px solid #2f6fd6;' +
+      'border-radius:8px;padding:10px 16px;font:bold 14px system-ui,sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.5)');
+    t.textContent = text;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), ms);
+  }
+  // rotes Popup „nicht mehr auf JOYclub“ (mittig, 10 s, mit Schließen-Knopf)
+  function flDeadPopup(p) {
+    document.getElementById('jaf-fl-dead')?.remove();
+    const ext = p && flIsExt(p.id) && !p.wasJoy;
+    const ov = flEl('div', 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;pointer-events:none');
+    ov.id = 'jaf-fl-dead';
+    const box = flEl('div', 'pointer-events:auto;position:relative;background:#3a1c1c;border:1px solid #c71b1b;border-left:6px solid #c71b1b;border-radius:10px;' +
+      'padding:18px 46px 18px 28px;color:#fff;text-align:center;font:15px/1.5 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.6);max-width:520px');
+    box.innerHTML = ext ? '<b style="display:block;font-size:17px">Externer Kontakt</b><span style="color:#e8c9c9">Kein JOYclub-Profil – du betrachtest deine eigene Seite zu dieser Person.</span>'
+      : '<b style="display:block;font-size:17px">Dieser Benutzer ist nicht mehr auf JOYclub</b><span style="color:#e8c9c9">Du betrachtest eine statische Kopie seines alten Profils.</span>';
+    const x = flEl('button', 'position:absolute;top:8px;right:10px;background:none;border:0;color:#e8c9c9;font:20px system-ui;cursor:pointer', '✕');
+    x.title = 'Schließen';
+    x.addEventListener('click', () => ov.remove());
+    box.appendChild(x);
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+    setTimeout(() => ov.remove(), 10000);
+  }
+  // Eingabe-Popup (ein Textfeld)
+  function flPrompt(title, lines, value = '', okLabel = 'OK') {
+    return new Promise((resolve) => {
+      const { ov, box } = flOverlay('jaf-fl-prompt');
+      box.appendChild(flEl('div', 'font:bold 19px system-ui;margin-bottom:10px', escHtml(title)));
+      for (const l of lines) box.appendChild(flEl('p', 'margin:0 0 8px', escHtml(l)));
+      const inp = flEl('input', FL_INPUT_CSS + ';width:100%;margin:6px 0 14px');
+      inp.value = value;
+      box.appendChild(inp);
+      const row = flEl('div', 'display:flex;gap:10px;justify-content:flex-end');
+      const done = (v) => { ov.remove(); resolve(v); };
+      row.appendChild(flBtn('Abbrechen', () => done(null)));
+      row.appendChild(flBtn(okLabel, () => done(inp.value.trim()), true));
+      box.appendChild(row);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value.trim()); if (e.key === 'Escape') done(null); });
+      setTimeout(() => inp.focus(), 50);
+    });
+  }
+
+  // ---- Profil auslesen (für das Archiv) ----
+  function flBestSrc(srcset) {
+    let best = '', bw = 0;
+    for (const part of String(srcset || '').split(',')) {
+      const m = part.trim().match(/^(\S+)\s+(\d+)w$/);
+      if (m && +m[2] > bw) { bw = +m[2]; best = m[1]; }
+    }
+    return best;
+  }
+  function flProfileImgUrl(doc = document) {
+    const scopes = [...doc.querySelectorAll('j-avatar')].filter((a) => a.querySelector('[data-img_id]'));
+    for (const sc of scopes) {
+      const srcs = [...sc.querySelectorAll('source')];
+      const webp = srcs.find((s) => /webp/.test(s.getAttribute('type') || '')) || srcs[0];
+      const u = webp && flBestSrc(webp.getAttribute('srcset') || webp.getAttribute('data-srcset'));
+      if (u && !/\/_\.gif/.test(u)) return u;
+      const img = sc.querySelector('img.core-img');
+      if (img && img.src && !/^data:|\/_\.gif/.test(img.src)) return img.src;
+    }
+    const og = doc.querySelector('meta[property="og:image"]');
+    return og ? og.getAttribute('content') || '' : '';
+  }
+  const flImgKey = (u) => String(u || '').replace(/[?#].*$/, '');
+  function flSections(doc = document) {
+    const out = [], seen = new Set();
+    for (const h of doc.querySelectorAll('main h2.profile-headline, main .profile-headline')) {
+      const sec = h.closest('section') || h.parentElement;
+      if (!sec || sec.closest('.jaf-fl-block, .jaf-fl-archive')) continue;
+      const head = (h.textContent || '').replace(/\s+/g, ' ').trim();
+      const body = [...sec.querySelectorAll('p, .profile-description__text')].map((p) => (p.innerText || p.textContent || '').trim()).filter(Boolean).join('\n\n');
+      if (!head || !body || seen.has(head)) continue;
+      seen.add(head);
+      out.push({ h: head, t: body });
+    }
+    return out;
+  }
+  function flCollect(doc = document) {
+    const t = ((doc.querySelector('title') || {}).textContent || '').trim();
+    const tag = (t.match(/♥\s*(.*)$/) || [])[1] || '';
+    const nh = noteHost();
+    return {
+      nick: profileName() || (t.split('♥')[0] || '').trim(),
+      type: profileType(),
+      ages: profileAges(),
+      place: profilePlace(doc),
+      tagline: tag.replace(/^[^-]+-\s*[^-]+-\s*/, '').trim() || tag,
+      sed: parseSedCards(doc),
+      secs: flSections(doc),
+      pnote: nh ? (nh.getAttribute('value') || '').trim() : '',
+      imgUrl: flProfileImgUrl(doc),
+    };
+  }
+  // Seiten-Snapshot (Stufe 2): Profilbereich inkl. Shadow DOM
+  function flPageHtml() {
+    const main = document.querySelector('main.profile-container') || document.querySelector('main');
+    if (!main) return '';
+    const clone = main.cloneNode(true);
+    const roots = [];
+    const walk = (el) => { if (el.shadowRoot) roots.push(el.shadowRoot); for (const c of el.children) walk(c); if (el.shadowRoot) for (const c of el.shadowRoot.children) walk(c); };
+    walk(main);
+    try {
+      if (typeof main.getHTML === 'function') {
+        const h = main.getHTML({ serializableShadowRoots: true, shadowRoots: roots });
+        return `<main class="${escHtml(main.className)}">${h}</main>`;
+      }
+    } catch (e) { /* älterer Browser */ }
+    clone.querySelectorAll('[class*="jaf-"]').forEach((e) => e.remove());
+    return clone.outerHTML;
+  }
+  // Bild als data:-URL holen (fremde Domain → GM_xmlhttpRequest)
+  function flFetchImage(url) {
+    return new Promise((resolve) => {
+      if (!url) { resolve(''); return; }
+      const done = (blob) => { if (!blob) { resolve(''); return; } const fr = new FileReader(); fr.onload = () => resolve(String(fr.result || '')); fr.onerror = () => resolve(''); fr.readAsDataURL(blob); };
+      if (typeof GM_xmlhttpRequest === 'function') {
+        try {
+          GM_xmlhttpRequest({ method: 'GET', url, responseType: 'blob', timeout: 30000,
+            onload: (r) => done(r.status >= 200 && r.status < 300 ? r.response : null), onerror: () => resolve(''), ontimeout: () => resolve('') });
+          return;
+        } catch (e) { /* weiter mit fetch */ }
+      }
+      fetch(url).then((r) => (r.ok ? r.blob() : null)).then(done).catch(() => resolve(''));
+    });
+  }
+  async function flStoreImage(url) {
+    const data = await flFetchImage(url);
+    if (!data) return '';
+    const id = flNewId();
+    GM_setValue(K_FLI + id, data);
+    return id;
+  }
+  const flCmpData = (d) => JSON.stringify(Object.assign({}, d, { imgUrl: flImgKey(d.imgUrl) }));
+  // neuen Archiv-Stand anlegen; force = auch ohne Änderung (z. B. Statuswechsel)
+  async function flSnapshot(pid, why, force = false) {
+    if (!pid || flIsExt(pid) || !isProfilePage() || idOf(location.pathname) !== pid || flArchivParam()) return null;
+    const p = flGet(pid);
+    if (!p) return null;
+    const d = flCollect(document);
+    if (!d.ages.length && !d.sed.length) return null; // Profil (noch) nicht geladen
+    const stands = flStands(pid);
+    const last = stands[stands.length - 1];
+    const reasons = [];
+    if (last && last.data) {
+      if (last.data.nick && d.nick && last.data.nick !== d.nick) reasons.push(`Nick geändert: ${last.data.nick} → ${d.nick}`);
+      if (flImgKey(last.data.imgUrl) !== flImgKey(d.imgUrl) && d.imgUrl) reasons.push('Profilbild geändert');
+      if (last.data.pnote !== d.pnote) reasons.push('Profilnotiz geändert');
+    }
+    const changed = !last || flCmpData(last.data) !== flCmpData(d);
+    if (!changed && !force) return null;
+    if (changed && last && !reasons.length) reasons.push('Profil geändert');
+    const st = { ts: Date.now(), why: [why, ...reasons].filter(Boolean).join(' · ') || 'gespeichert', lvl: GM_getValue(K_FL_LVL, false) ? 2 : 1, data: d };
+    // Profilbild nur bei neuem Bild laden (beste Qualität, Original-WebP)
+    if (d.imgUrl && (!last || flImgKey(last.data.imgUrl) !== flImgKey(d.imgUrl) || !last.img)) st.img = await flStoreImage(d.imgUrl);
+    else if (last) st.img = last.img;
+    if (st.lvl === 2) st.html = flPageHtml();
+    stands.push(st);
+    flSetStands(pid, stands);
+    const q = flGet(pid) || p;
+    if (d.nick && q.nick && d.nick !== q.nick) { q.nicks = [...new Set([...(q.nicks || []), q.nick])]; flHist(q, `Nick geändert: ${q.nick} → ${d.nick}`); }
+    if (d.nick) q.nick = d.nick;
+    if (d.type) q.type = d.type;
+    if (st.img) q.img = st.img;
+    q.path = cleanPath(location.pathname);
+    if (d.pnote) q.pnote = d.pnote;
+    flPut(q);
+    return st;
+  }
+
+  // ---- Button „Fickliste“ zwischen „Match!“/„Gefällt mir“ und „ClubMail“ ----
+  function flCurrentPerson() {
+    const pid = flPagePid();
+    if (!pid) return null;
+    const p = flGet(pid);
+    if (p) return p;
+    return { id: pid, nick: profileName(), type: profileType(), path: cleanPath(location.pathname), status: '', meets: [], hist: [], created: Date.now() };
+  }
+  function flCloseMenus() {
+    document.querySelectorAll('.jaf-fl-cm[open]').forEach((m) => m.removeAttribute('open'));
+    document.getElementById('jaf-fl-dd')?.remove();
+  }
+  // Einträge des Menüs (aktueller Zustand ausgeblendet; „zurücksetzen“ nur, wenn ein Zustand gesetzt ist)
+  function flMenuEntries(st) {
+    const l = FL_ORDER.filter((k) => k !== st).map((k) => ({ k, html: flIcon(k, { size: 20, redGef: true }), text: FL_ST[k].menu }));
+    if (st) l.push({ k: 'reset', html: flIcon('trash', { size: 20 }), text: 'Fickstatus zurücksetzen' });
+    return l;
+  }
+  function flFillMenu(cm, st) {
+    cm.querySelectorAll('j-context-menu-item').forEach((i) => i.remove());
+    for (const e of flMenuEntries(st)) {
+      const it = document.createElement('j-context-menu-item');
+      it.setAttribute('justify-content', 'start');
+      it.setAttribute('data-k', e.k);
+      it.innerHTML = `<span slot="icon" style="display:inline-flex;align-items:center">${e.html}</span>${escHtml(e.text)}`;
+      cm.appendChild(it);
+    }
+  }
+  // Ersatz-Menü, falls die JOYclub-Komponente nicht aufklappt
+  function flFallbackMenu(anchor, st, onPick) {
+    document.getElementById('jaf-fl-dd')?.remove();
+    const r = anchor.getBoundingClientRect();
+    const dd = flEl('div', `position:fixed;z-index:2147483646;left:${Math.max(8, r.left - 80)}px;top:${r.bottom + 6}px;background:#25272b;border:1px solid #3a3d43;` +
+      'border-radius:10px;padding:6px 0;min-width:240px;box-shadow:0 8px 24px rgba(0,0,0,.6);font:15px system-ui,sans-serif;color:#fff');
+    dd.id = 'jaf-fl-dd';
+    for (const e of flMenuEntries(st)) {
+      const row = flEl('div', 'display:flex;align-items:center;gap:12px;padding:9px 16px;cursor:pointer', `${e.html}<span>${escHtml(e.text)}</span>`);
+      row.addEventListener('mouseenter', () => { row.style.background = '#33363c'; });
+      row.addEventListener('mouseleave', () => { row.style.background = ''; });
+      row.addEventListener('click', (ev) => { ev.stopPropagation(); dd.remove(); onPick(e.k); });
+      dd.appendChild(row);
+    }
+    document.body.appendChild(dd);
+  }
+  function flRenderButton(wrap, p) {
+    const st = (p && p.status) || '';
+    const big = wrap.classList.contains('profile-label-interaction-button--is-big');
+    const ico = wrap.querySelector('.jaf-fl-ico');
+    const want = `${st}|${big}`;
+    if (ico && ico.getAttribute('data-k') !== want) {
+      ico.setAttribute('data-k', want);
+      ico.innerHTML = flIcon(st, { size: big ? 26 : 20 });
+    }
+    const jb = wrap.querySelector('j-button');
+    if (jb) { if (st === 'gef') jb.setAttribute('variant', 'primary'); else jb.removeAttribute('variant'); }
+    const fb = wrap.querySelector('.jaf-fl-fallback');
+    if (fb) fb.style.background = st === 'gef' ? '#c71b1b' : '#33363c';
+    const lbl = wrap.querySelector('.jaf-fl-lbl');
+    if (lbl && lbl.textContent !== flLabel(st)) lbl.textContent = flLabel(st);
+  }
+  function flInsertButtons() {
+    if (!flSelectable()) { document.querySelectorAll('.jaf-fl-wrap').forEach((w) => w.remove()); return; }
+    const p = flCurrentPerson();
+    const haveJoy = !!(window.customElements && customElements.get('j-button') && customElements.get('j-context-menu'));
+    for (const box of document.querySelectorAll('.profile-interaction-buttons')) {
+      let wrap = box.querySelector('.jaf-fl-wrap');
+      if (!wrap) {
+        const cmBtn = box.querySelector('.profile-clubmail-button');
+        const cmWrap = cmBtn && cmBtn.closest('.profile-label-interaction-button');
+        const ref = cmWrap || box.lastElementChild;
+        const proto = cmWrap || box.querySelector('.profile-label-interaction-button');
+        if (!proto) continue;
+        const big = proto.classList.contains('profile-label-interaction-button--is-big');
+        wrap = document.createElement('div');
+        wrap.className = proto.className + ' jaf-fl-wrap';
+        for (const a of proto.attributes) if (a.name.startsWith('data-v-')) wrap.setAttribute(a.name, '');
+        const lblProto = proto.querySelector('.profile-label-interaction-button__label');
+        const lblAttrs = lblProto ? [...lblProto.attributes].filter((a) => a.name.startsWith('data-v-')).map((a) => `${a.name}=""`).join(' ') : '';
+        const size = big ? 56 : 40;
+        wrap.innerHTML = haveJoy
+          ? `<j-context-menu class="jaf-fl-cm"><j-button slot="activator" icon-only="true" circle="true" ${big ? 'big="true"' : ''} aria-label="Fickliste" title="Fickliste" type="button" role="" aria-controls="menu"><span class="jaf-fl-ico" style="display:inline-flex;align-items:center;justify-content:center"></span></j-button></j-context-menu>`
+          : `<button type="button" class="jaf-fl-fallback" title="Fickliste" style="width:${size}px;height:${size}px;border-radius:50%;border:0;background:#33363c;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer"><span class="jaf-fl-ico" style="display:inline-flex"></span></button>`;
+        if (big) wrap.insertAdjacentHTML('beforeend', `<div ${lblAttrs} class="profile-label-interaction-button__label jaf-fl-lbl" aria-hidden="true"></div>`);
+        box.insertBefore(wrap, ref === box.lastElementChild && !cmWrap ? null : ref);
+        const act = wrap.querySelector('j-button, .jaf-fl-fallback');
+        const cm = wrap.querySelector('.jaf-fl-cm');
+        act.addEventListener('click', (ev) => {
+          if (ev.ctrlKey || ev.metaKey) {
+            ev.preventDefault(); ev.stopPropagation();
+            const on = !GM_getValue(K_FL_LVL, false);
+            GM_setValue(K_FL_LVL, on);
+            flToast(`Erinnerungen: Stufe ${on ? 2 : 1}`);
+            if (cm) cm.removeAttribute('open');
+            return;
+          }
+          const cur = flCurrentPerson();
+          if (!cm) { ev.stopPropagation(); flFallbackMenu(act, cur.status, (k) => flPick(k)); return; }
+          flFillMenu(cm, cur.status);
+          setTimeout(() => {
+            if (!cm.hasAttribute('open')) cm.setAttribute('open', 'true');
+            setTimeout(() => {
+              const it = cm.querySelector('j-context-menu-item');
+              if (cm.hasAttribute('open') && it && !visible(it)) { cm.removeAttribute('open'); flFallbackMenu(act, cur.status, (k) => flPick(k)); }
+            }, 350);
+          }, 60);
+        }, true);
+        if (cm) cm.addEventListener('click', (ev) => {
+          const it = ev.composedPath().find((e) => e && e.tagName === 'J-CONTEXT-MENU-ITEM');
+          if (!it) return;
+          ev.stopPropagation();
+          cm.removeAttribute('open');
+          flPick(it.getAttribute('data-k'));
+        });
+      }
+      flRenderButton(wrap, p);
+    }
+  }
+  if (!IN_FRAME) document.addEventListener('click', (ev) => {
+    const path = ev.composedPath ? ev.composedPath() : [];
+    if (path.some((e) => e && e.classList && (e.classList.contains('jaf-fl-wrap') || e.id === 'jaf-fl-dd'))) return;
+    flCloseMenus();
+  }, true);
+  async function flPick(k) {
+    const p = flCurrentPerson();
+    if (!p) return;
+    if (k === 'reset') { await flResetPopup(p); return; }
+    await flEntryPopup(p, k);
+  }
+  // „Fickstatus zurücksetzen“: Zurücksetzen | Zurücksetzen und Daten löschen | Abbrechen
+  async function flResetPopup(p) {
+    const v = await askPopup({ title: 'Fickstatus zurücksetzen', lines: [
+      `${p.nick || 'Dieses Profil'}: Status „${flLabel(p.status)}“.`,
+      '„Zurücksetzen“ entfernt nur den Status – Treffen, Notizen und das Profil-Archiv bleiben.',
+      '„Zurücksetzen und Daten löschen“ entfernt alles zu dieser Person (auch Archiv und Bilder).'],
+    buttons: [{ label: 'Zurücksetzen', value: 'reset', primary: true }, { label: 'Zurücksetzen und Daten löschen', value: 'delete' }, { label: 'Abbrechen', value: null, focus: true }] });
+    if (v === 'reset') {
+      const q = flGet(p.id);
+      if (q) { flHist(q, `Fickstatus: ${flLabel(q.status)} → zurückgesetzt`); q.status = ''; flPut(q); }
+    } else if (v === 'delete') {
+      flDeleteAll(p.id);
+      if (flIsExt(p.id)) { location.href = flOverviewUrl(); return; }
+    }
+    flRefreshAll();
+  }
+  function flDeleteAll(pid) {
+    for (const s of flStands(pid)) if (s.img) GM_deleteValue(K_FLI + s.img);
+    const p = flGet(pid);
+    if (p && p.img) GM_deleteValue(K_FLI + p.img);
+    GM_deleteValue(K_FLA + pid);
+    const m = getFl(); delete m[pid]; setFl(m);
+  }
+  function flRefreshAll() {
+    try { flInsertButtons(); flProfileBlock(); flDecorateCards(); } catch (e) { /* weiter */ }
+    if (flOverviewPage()) flRenderOverview();
+  }
+
+  // ---- Partys (für Treffen) ----
+  const flNormName = (s) => String(s || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .replace(/\b(swingerclub|swinger|club|party|partys|events?|the|der|die|das|im|in|am|bei|und|mit)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  function flEvStart(e) {
+    if (e && e.start) { const t = Date.parse(e.start); if (Number.isFinite(t)) return t; }
+    const m = String((e && e.date) || '').match(/(\d{2})\.(\d{2})\.(\d{4})/);
+    return m ? new Date(+m[3], +m[2] - 1, +m[1], 20, 0).getTime() : 0;
+  }
+  function flEventFromDoc(doc, url) {
+    const id = (String(url).match(/\/event\/(\d+)\./) || [])[1] || '';
+    const h = doc.querySelector('h1.event_name') || doc.querySelector('h1');
+    const name = h ? h.textContent.replace(/\s+/g, ' ').trim() : '';
+    let start = '';
+    for (const sc of doc.querySelectorAll('script')) { const m = (sc.textContent || '').match(/"startDate"\s*:\s*"([^"]+)"/); if (m) { start = m[1]; break; } }
+    const org = doc.querySelector('.event_organizer a');
+    const club = org ? org.textContent.replace(/\s+/g, ' ').trim() : '';
+    return { id, name, start, date: start ? fmtDay(Date.parse(start)) : '', url: String(url).replace(/[?#].*$/, ''), club };
+  }
+  function flSaveEvent(ev) {
+    if (!ev || !ev.id) return;
+    const m = getEvents();
+    const o = m[ev.id] || {};
+    for (const k of ['name', 'start', 'date', 'url', 'club']) if (ev[k]) o[k] = ev[k];
+    m[ev.id] = o;
+    gmSet(K_EVENTS, m);
+  }
+  // jede geöffnete Party-Seite merken (Name, Beginn, URL, Club) – auch vergangene
+  function flSaveEventPage() {
+    if (!isEventPage() || window.__jafFlEvSaved === location.pathname) return;
+    const ev = flEventFromDoc(document, location.origin + location.pathname);
+    ev.id = eventIdOf(location.pathname);
+    ev.url = location.origin + location.pathname;
+    if (!ev.id || !ev.name) return;
+    window.__jafFlEvSaved = location.pathname;
+    flSaveEvent(ev);
+  }
+  // Klick auf ein Profil in einer Gästeliste → Party als Vorbelegung merken
+  if (!IN_FRAME) document.addEventListener('click', (ev) => {
+    if (!isEventPage()) return;
+    const a = ev.composedPath().find((e) => e && e.tagName === 'A' && /\/(profile|my)\/\d+\./.test(e.getAttribute('href') || ''));
+    if (!a) return;
+    GM_setValue(K_FL_CTX, { pid: idOf(a.getAttribute('href')), ev: eventIdOf(location.pathname), ts: Date.now() });
+  }, true);
+  const flMeetFromEvent = (e) => {
+    const t = flEvStart(e), d = t ? new Date(t) : null;
+    return { id: flNewId(), date: d ? isoDay(d) : '', time: d ? `${pad2f(d.getHours())}:${pad2f(d.getMinutes())}` : '', wo: e.name || '', url: e.url || '', club: e.club || '' };
+  };
+  function flCtxEvent(pid) {
+    const evs = getEvents();
+    const c = GM_getValue(K_FL_CTX, null);
+    if (c && c.pid === pid && Date.now() - c.ts < 6 * 3600e3 && evs[c.ev]) return Object.assign({ id: c.ev }, evs[c.ev]);
+    const r = (String(document.referrer || '').match(/\/event\/(\d+)\./) || [])[1];
+    if (r && evs[r]) return Object.assign({ id: r }, evs[r]);
+    return null;
+  }
+  // heute + die letzten n vergangenen Partys (eigene Anmeldungen zuerst markiert), optional Suche
+  function flPartyList(q = '', n = 10) {
+    const endToday = new Date(); endToday.setHours(23, 59, 59, 999);
+    const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+    const all = Object.entries(getEvents()).map(([id, e]) => Object.assign({ id }, e, { t: flEvStart(e) }))
+      .filter((e) => e.t && e.t <= endToday.getTime() && e.name);
+    all.sort((a, b) => b.t - a.t);
+    const own = (e) => /angemeldet|warteliste/i.test(e.status || '');
+    if (q) { const k = norm(q); return all.filter((e) => norm(`${e.name} ${e.club || ''} ${e.location || ''}`).includes(k)).slice(0, 50); }
+    const todays = all.filter((e) => e.t >= today0.getTime());
+    const past = all.filter((e) => e.t < today0.getTime()).slice(0, n);
+    return [...todays, ...past].sort((a, b) => (own(b) - own(a)) || (b.t - a.t));
+  }
+  function flChooseParty() {
+    return new Promise((resolve) => {
+      const { ov, box } = flOverlay('jaf-fl-party');
+      ov.style.zIndex = '2147483647';
+      box.appendChild(flEl('div', 'font:bold 19px system-ui;margin-bottom:8px', 'Party wählen'));
+      const inp = flEl('input', FL_INPUT_CSS + ';width:100%;margin-bottom:10px');
+      inp.placeholder = 'Ältere Partys suchen (Name oder Club) …';
+      box.appendChild(inp);
+      const list = flEl('div', 'display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto');
+      box.appendChild(list);
+      const done = (v) => { ov.remove(); resolve(v); };
+      const render = () => {
+        list.innerHTML = '';
+        const l = flPartyList(inp.value.trim());
+        if (!l.length) list.appendChild(flEl('div', 'color:#9a9a9a', inp.value ? 'Keine passende Party gespeichert.' : 'Noch keine vergangenen Partys gespeichert. Öffne die Party-Seite einmal oder füge ihren Link ins Feld „wo“ ein.'));
+        for (const e of l) {
+          const own = /angemeldet|warteliste/i.test(e.status || '');
+          const row = flEl('div', 'border:1px solid #3a3d43;border-radius:8px;padding:7px 10px;cursor:pointer;background:#24262a',
+            `<b>${own ? '★ ' : ''}${escHtml(e.name)}</b><br><span style="color:#9a9a9a;font-size:12.5px">${escHtml(fmtDT(e.t))}${e.club ? ' · ' + escHtml(e.club) : ''}${own ? ' · eigene Anmeldung' : ''}</span>`);
+          row.addEventListener('click', () => done(e));
+          list.appendChild(row);
+        }
+      };
+      inp.addEventListener('input', render);
+      render();
+      const row = flEl('div', 'display:flex;justify-content:flex-end;margin-top:12px');
+      row.appendChild(flBtn('Abbrechen', () => done(null)));
+      box.appendChild(row);
+      setTimeout(() => inp.focus(), 50);
+    });
+  }
+  async function flEventFromUrl(url) {
+    const m = String(url).match(/https?:\/\/(?:www\.)?joyclub\.de\/event\/(\d+)\.[^\s?#]*/);
+    if (!m) return null;
+    const known = getEvents()[m[1]];
+    if (known && known.name && (known.start || known.date)) return Object.assign({ id: m[1] }, known, { url: known.url || m[0] });
+    try {
+      const doc = await fetchDoc(m[0]);
+      const ev = flEventFromDoc(doc, m[0]);
+      if (!ev.name) return { id: m[1], url: m[0] };
+      flSaveEvent(ev);
+      return ev;
+    } catch (e) { return { id: m[1], url: m[0] }; }
+  }
+  // Datumsangaben in einem Notiztext → ISO-Tage
+  function flNoteDates(txt) {
+    const out = [];
+    for (const m of String(txt || '').matchAll(/\b(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})\b/g)) {
+      const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
+      const d = new Date(y, +m[2] - 1, +m[1]);
+      if (d.getMonth() === +m[2] - 1 && y > 1995) out.push(isoDay(d));
+    }
+    return [...new Set(out)];
+  }
+  // Partys zu einem Datum: sicher (Datum + Club oder Name passt) bzw. schwach (nur Datum)
+  function flPartyMatches(dayIso, txt) {
+    const note = ' ' + flNormName(txt) + ' ';
+    const noteToks = note.split(' ').filter((w) => w.length >= 3);
+    const day = Date.parse(dayIso + 'T12:00:00');
+    const strong = [], weak = [];
+    for (const [id, e] of Object.entries(getEvents())) {
+      const t = flEvStart(e);
+      if (!t || !e.name) continue;
+      const sd = isoDay(new Date(t));
+      const prev = isoDay(new Date(day - 864e5));
+      if (sd !== dayIso && !(sd === prev && new Date(t).getHours() >= 17)) continue;
+      const fields = [e.club, e.name, e.location].map(flNormName).filter(Boolean);
+      const hit = fields.some((f) => {
+        const ft = f.split(' ').filter((w) => w.length >= 3);
+        return ft.some((w) => note.includes(' ' + w) || noteToks.some((n) => w.startsWith(n) || n.startsWith(w)));
+      });
+      (hit ? strong : weak).push(Object.assign({ id }, e, { t }));
+    }
+    return { strong, weak };
+  }
+  // Auswahl „Passende Party gefunden“ → Party oder null
+  function flSuggestPopup(dayIso, txt, title = 'Passende Party gefunden') {
+    const { strong, weak } = flPartyMatches(dayIso, txt);
+    if (!strong.length && !weak.length) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      const { ov, box } = flOverlay('jaf-fl-suggest');
+      ov.style.zIndex = '2147483647';
+      box.appendChild(flEl('div', 'font:bold 19px system-ui;margin-bottom:6px', escHtml(title)));
+      box.appendChild(flEl('div', 'color:#bdbdbd;margin-bottom:10px', `Zum ${escHtml(fmtDate(dayIso))} aus „${escHtml(String(txt).slice(0, 120))}“:`));
+      let sel = strong[0] || null;
+      const mk = (e, pre) => {
+        const row = flEl('label', 'display:flex;gap:8px;align-items:flex-start;border:1px solid #3a3d43;border-radius:8px;padding:7px 10px;cursor:pointer;margin-bottom:6px;background:#24262a');
+        const r = flEl('input'); r.type = 'radio'; r.name = 'jaf-fl-sg'; r.checked = sel === e; r.style.marginTop = '4px';
+        r.addEventListener('change', () => { sel = e; });
+        row.appendChild(r);
+        row.appendChild(flEl('span', '', `<b>${escHtml(e.name)}</b><br><span style="color:#9a9a9a;font-size:12.5px">${escHtml(fmtDT(e.t))}${e.club ? ' · ' + escHtml(e.club) : ''}</span>`));
+        box.appendChild(row);
+      };
+      strong.forEach((e) => mk(e));
+      if (weak.length) { box.appendChild(flEl('div', 'color:#9a9a9a;margin:8px 0 6px', 'Am selben Tag:')); weak.forEach((e) => mk(e)); }
+      const row = flEl('div', 'display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:12px');
+      const done = (v) => { ov.remove(); resolve(v); };
+      row.appendChild(flBtn('Ohne Party', () => done(null)));
+      row.appendChild(flBtn('Andere Party wählen …', async () => { const e = await flChooseParty(); if (e) done(e); }));
+      row.appendChild(flBtn('Übernehmen', () => { if (sel) done(sel); }, true));
+      box.appendChild(row);
+    });
+  }
+
+  // ---- Ignorieren / Entsperren aus der Fickliste (eigene Listen haben Vorrang vor automatischen Sperren) ----
+  function flDropWhite(name) {
+    const k = norm(name);
+    const w = getDynWhite();
+    if (w[k]) { delete w[k]; gmSet(K_WHITE, w); }
+    let ch = false;
+    const W = JSON.parse(JSON.stringify(CONFIG.WHITELIST));
+    for (const r of Object.keys(W)) { const n0 = W[r].length; W[r] = W[r].filter((x) => norm(x) !== k); if (W[r].length !== n0) ch = true; }
+    if (ch) { CONFIG.WHITELIST = W; saveSettings({ WHITELIST: W }); }
+  }
+  async function flDoIgnore(p) {
+    flDropWhite(p.nick);
+    if (ignCount() >= CONFIG.IGNORE_LIMIT) {
+      const v = pickVictim({ manual: true });
+      if (v) {
+        const r = await bgUnignore(idOf(v.p));
+        if (r.ok) markUnblocked(v.p, v.e, 'entsperrt (Platz für Fickliste, Limit)');
+      }
+    }
+    return bgIgnore(p.id, p.nick);
+  }
+  async function flDoUnignore(p) {
+    const r = await bgUnignore(p.id);
+    const path = p.path || `/profile/${p.id}.html`;
+    const l = getLog();
+    const lp = Object.keys(l).find((x) => idOf(x) === p.id);
+    if (lp) markUnblocked(lp, l[lp], 'entsperrt (Fickliste)');
+    addWhite(p.nick, location.origin + path, 'Fickliste');
+    return r;
+  }
+
+  // ---- Popup „Ficklisteneintragung“ ----
+  // newState: neuer Zustand (null = nur bearbeiten); opt: { meetId, prefillMeet, note, title }
+  async function flEntryPopup(p0, newState, opt = {}) {
+    const onProfile = !flIsExt(p0.id) && isProfilePage() && idOf(location.pathname) === p0.id && !flArchivParam();
+    const dead = flDead(p0) || flIsExt(p0.id);
+    const nh = onProfile ? noteHost() : null;
+    const noteNow = nh ? (nh.getAttribute('value') || '').trim() : (opt.note != null ? opt.note : (p0.pnote || ''));
+    const noteEditable = onProfile || dead;
+    const p = JSON.parse(JSON.stringify(p0));
+    p.meets = p.meets || [];
+    const st = newState || p.status || '';
+    // Vorbelegung: Party, aus deren Gästeliste das Profil geöffnet wurde
+    const ctx = onProfile && newState ? flCtxEvent(p.id) : null;
+    let meets = flMeetsSorted(p);
+    if (opt.prefillMeet) meets.unshift(Object.assign({ id: flNewId() }, opt.prefillMeet));
+    else if (ctx && !meets.some((m) => m.url && ctx.url && m.url === ctx.url)) meets.unshift(flMeetFromEvent(ctx));
+    if (opt.meetId) { const i = meets.findIndex((m) => m.id === opt.meetId); if (i > 0) meets.unshift(meets.splice(i, 1)[0]); }
+    const isIgn = !dead && blockedIdMap().has(p.id);
+    const canIgnore = !dead;
+    return new Promise((resolve) => {
+      const { ov, box } = flOverlay('jaf-fl-entry');
+      box.appendChild(flEl('div', 'display:flex;align-items:center;gap:10px;font:bold 20px system-ui;margin-bottom:12px',
+        `<span style="width:32px;height:32px;border-radius:50%;background:${st === 'gef' ? '#c71b1b' : '#33363c'};display:inline-flex;align-items:center;justify-content:center">${flIcon(st, { size: 20 })}</span>` +
+        `<span>${escHtml(opt.title || 'Ficklisteneintragung')}${st ? ' · ' + escHtml(flLabel(st)) : ''}</span>`));
+      if (p.nick) box.appendChild(flEl('div', 'color:#9a9a9a;margin:-6px 0 10px', escHtml(p.nick)));
+      const lab = (t) => flEl('div', 'font-size:12.5px;color:#9a9a9a;margin:10px 0 4px', escHtml(t));
+      // Profilnotiz
+      box.appendChild(lab(onProfile ? 'Profilnotiz (JOYclub)' : dead ? 'Profilnotiz (gespeichert)' : 'Profilnotiz (nur auf der Profilseite änderbar)'));
+      const note = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical');
+      note.rows = 3; note.value = noteNow; note.readOnly = !noteEditable;
+      if (!noteEditable) note.style.opacity = '.7';
+      box.appendChild(note);
+      // Vorschläge aus Datumsangaben der Notiz
+      const sugBox = flEl('div', '');
+      box.appendChild(sugBox);
+      const dismissed = new Set(p.dismissed || []);
+      const renderSug = () => {
+        sugBox.innerHTML = '';
+        for (const d of flNoteDates(note.value)) {
+          if (dismissed.has(d) || meets.some((m) => m.date === d)) continue;
+          const { strong, weak } = flPartyMatches(d, note.value);
+          if (!strong.length && !weak.length) continue;
+          const row = flEl('div', 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#20242c;border-left:4px solid #2f6fd6;border-radius:6px;padding:7px 10px;margin-top:8px;font-size:13.5px',
+            `<span style="flex:1">Party zum ${escHtml(fmtDate(d))} gefunden – übernehmen?</span>`);
+          row.appendChild(flBtn('Ansehen …', async () => {
+            const e = await flSuggestPopup(d, note.value);
+            if (e) { meets.unshift(flMeetFromEvent(e)); renderMeets(); }
+            if (e !== undefined) { if (!e) dismissed.add(d); renderSug(); }
+          }, true));
+          row.appendChild(flBtn('Ablehnen', () => { dismissed.add(d); renderSug(); }));
+          sugBox.appendChild(row);
+        }
+      };
+      note.addEventListener('input', () => { clearTimeout(note.__t); note.__t = setTimeout(renderSug, 400); });
+      // Treffen
+      box.appendChild(lab('Treffen'));
+      const mbox = flEl('div', 'display:flex;flex-direction:column;gap:8px');
+      box.appendChild(mbox);
+      const renderMeets = () => {
+        mbox.innerHTML = '';
+        for (const m of meets) {
+          const c = flEl('div', `border:1px solid ${opt.meetId === m.id ? '#2f6fd6' : '#3a3d43'};border-radius:8px;padding:8px 10px;background:#24262a`);
+          const r1 = flEl('div', 'display:flex;gap:6px;align-items:center');
+          r1.appendChild(flEl('span', 'width:24px', 'wo'));
+          const wo = flEl('input', FL_INPUT_CSS + ';flex:1;min-width:0'); wo.value = m.wo || ''; wo.placeholder = 'Ort, Party oder Party-Link';
+          wo.addEventListener('input', async () => {
+            m.wo = wo.value;
+            if (/joyclub\.de\/event\/\d+\./.test(wo.value)) {
+              wo.disabled = true; const old = wo.value; wo.value = 'Party wird gelesen …';
+              const e = await flEventFromUrl(old);
+              wo.disabled = false;
+              if (e && e.name) Object.assign(m, flMeetFromEvent(e), { id: m.id, note: m.note });
+              else { m.url = (e && e.url) || old; m.wo = ''; }
+              renderMeets();
+            }
+          });
+          r1.appendChild(wo);
+          r1.appendChild(flBtn('Party wählen …', async () => { const e = await flChooseParty(); if (e) { Object.assign(m, flMeetFromEvent(e), { id: m.id, note: m.note }); renderMeets(); } }));
+          const x = flEl('button', 'background:none;border:0;color:#9a9a9a;font:18px system-ui;cursor:pointer', '✕'); x.title = 'Treffen entfernen';
+          x.addEventListener('click', (e) => { e.preventDefault(); meets.splice(meets.indexOf(m), 1); renderMeets(); });
+          r1.appendChild(x);
+          c.appendChild(r1);
+          if (m.url || m.club) c.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin:3px 0 0 30px', `${m.club ? 'Club: ' + escHtml(m.club) : ''}${m.url ? `${m.club ? ' · ' : ''}<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a">Party-Link</a>` : ''}`));
+          else c.appendChild(flEl('div', 'font-size:12px;color:#777;margin:3px 0 0 30px', 'Party-Link hier einfügen → Name, Datum und Beginn werden übernommen'));
+          const r2 = flEl('div', 'display:flex;gap:6px;align-items:center;margin-top:6px');
+          r2.appendChild(flEl('span', 'width:24px', 'am'));
+          const dt = flEl('input', FL_INPUT_CSS); dt.type = 'date'; dt.value = m.date || '';
+          dt.addEventListener('input', () => { m.date = dt.value; });
+          r2.appendChild(dt);
+          r2.appendChild(flEl('span', 'margin-left:8px', 'um'));
+          const tm = flEl('input', FL_INPUT_CSS); tm.type = 'time'; tm.value = m.time || '';
+          tm.addEventListener('input', () => { m.time = tm.value; });
+          r2.appendChild(tm);
+          c.appendChild(r2);
+          c.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin:6px 0 3px', 'Ficknotiz'));
+          const fn = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical'); fn.rows = 2; fn.value = m.note || '';
+          fn.addEventListener('input', () => { m.note = fn.value; });
+          c.appendChild(fn);
+          mbox.appendChild(c);
+        }
+      };
+      renderMeets();
+      renderSug();
+      const add = flEl('a', 'display:inline-block;color:#e2b04a;font-weight:bold;margin-top:8px;cursor:pointer', '+ weiteres Treffen');
+      add.addEventListener('click', (e) => { e.preventDefault(); meets.unshift({ id: flNewId(), date: '', time: '', wo: '', url: '', club: '', note: '' }); renderMeets(); });
+      box.appendChild(add);
+      // Anmerkungen (allgemein)
+      box.appendChild(lab('Anmerkungen'));
+      const notes = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical'); notes.rows = 2; notes.value = p.notes || '';
+      box.appendChild(notes);
+      // Ignorieren
+      let chk = null;
+      if (canIgnore) {
+        const row = flEl('label', 'display:flex;gap:8px;align-items:center;margin-top:14px;cursor:pointer');
+        chk = flEl('input'); chk.type = 'checkbox';
+        chk.checked = isIgn || ['nein', 'nie'].includes(newState);
+        row.appendChild(chk);
+        row.appendChild(flEl('span', '', 'Profil zukünftig ignorieren'));
+        box.appendChild(row);
+        if (isIgn) box.appendChild(flEl('div', 'color:#ffb020;font-size:12.5px;margin:2px 0 0 24px', 'Dieses Profil wird derzeit ignoriert!'));
+      }
+      const msg = flEl('div', 'color:#ffb020;font-size:13px;margin-top:8px;min-height:1px');
+      box.appendChild(msg);
+      const bs = flEl('div', 'display:flex;gap:10px;justify-content:flex-end;margin-top:14px');
+      const done = (v) => { document.removeEventListener('keydown', onKey, true); ov.remove(); resolve(v); };
+      let busy = false;
+      const save = async () => {
+        if (busy) return;
+        busy = true;
+        msg.textContent = 'Speichere …';
+        try {
+          const q = flGet(p.id) || p;
+          const old = q.status || '';
+          q.nick = q.nick || p.nick; q.type = q.type || p.type; q.path = q.path || p.path; q.created = q.created || Date.now();
+          q.meets = meets.filter((m) => m.wo || m.date || m.note || m.url).map((m) => Object.assign({}, m, { id: m.id || flNewId() }));
+          q.notes = notes.value.trim();
+          q.dismissed = [...dismissed];
+          if (newState && newState !== old) { q.status = newState; flHist(q, `Fickstatus: ${old ? flLabel(old) : '–'} → ${flLabel(newState)}`); }
+          const nv = note.value.trim();
+          if (noteEditable && nv !== noteNow) {
+            q.pnote = nv;
+            if (onProfile) {
+              const ed = await openNoteEditor();
+              if (ed.error) msg.textContent = `Profilnotiz nicht gespeichert: ${ed.error}`;
+              else { const r = await commitNote(ed, nv, nv.split('\n')[0] || '', [], true); if (!r.ok) msg.textContent = r.msg; }
+            } else flHist(q, 'Profilnotiz geändert');
+          }
+          flPut(q);
+          if (chk && chk.checked !== isIgn) {
+            msg.textContent = chk.checked ? 'Ignoriere …' : 'Entsperre …';
+            const r = chk.checked ? await flDoIgnore(q) : await flDoUnignore(q);
+            if (!r.ok) { msg.textContent = r.msg; await sleep(2500); }
+          }
+          if (onProfile) await flSnapshot(q.id, newState && newState !== old ? `Fickstatus: ${old ? flLabel(old) : '–'} → ${flLabel(newState)}` : 'Ficklisteneintragung', !!newState);
+          done(flGet(q.id));
+          flRefreshAll();
+        } catch (e) { msg.textContent = `Fehler: ${e.message || e}`; busy = false; }
+      };
+      bs.appendChild(flBtn('Abbrechen', () => done(null)));
+      bs.appendChild(flBtn('Speichern', save, true));
+      box.appendChild(bs);
+      const onKey = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); done(null); }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
+        if (e.key === 'Enter' && e.target && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') { e.preventDefault(); save(); }
+      };
+      document.addEventListener('keydown', onKey, true);
+    });
+  }
+
+  // ---- Fickliste-Block unter der Profilnotiz ----
+  const FL_PEN = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zm17.7-10.2a1 1 0 0 0 0-1.42l-2.33-2.33a1 1 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
+  const FL_EXT = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;margin-left:3px" aria-hidden="true"><path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3zM5 5h6v2H5v12h12v-6h2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg>';
+  function flMeetHtml(m) {
+    const wo = escHtml(m.wo || (m.url ? 'Party' : 'ohne Ort'));
+    const when = [m.date ? `am ${fmtDate(m.date)}` : '', m.time ? `um ${m.time}` : ''].filter(Boolean).join(' ');
+    return `<div class="jaf-fl-meet" style="padding:9px 0;border-bottom:1px solid rgba(128,128,128,.25)">` +
+      `<div style="font-weight:600">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${wo}</a>${FL_EXT.replace('style="', 'style="color:#e2b04a;')}` : wo}${m.club && m.club !== m.wo ? ` <span style="opacity:.7;font-weight:normal">· ${escHtml(m.club)}</span>` : ''}</div>` +
+      (when ? `<div style="font-size:12.5px;opacity:.7">${escHtml(when)}</div>` : '') +
+      (m.note ? `<div style="font-size:13px;margin-top:3px;white-space:pre-wrap">${escHtml(m.note)}</div>` : '') + '</div>';
+  }
+  function flBlockEl(p) {
+    const el = flEl('div', 'margin:12px 0;padding:14px 16px;border-top:3px solid rgba(128,128,128,.35);border-radius:8px;background:rgba(128,128,128,.08)');
+    el.className = 'jaf-fl-block';
+    const st = p.status || '';
+    const meets = flMeetsSorted(p);
+    const head = flEl('div', 'display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px',
+      `<span style="width:26px;height:26px;border-radius:50%;background:${st === 'gef' ? '#c71b1b' : '#33363c'};display:inline-flex;align-items:center;justify-content:center;color:#fff">${flIcon(st, { size: 16 })}</span>` +
+      `<span>Fickliste · ${escHtml(flLabel(st))}</span>`);
+    const pen = flEl('button', 'margin-left:auto;background:none;border:0;color:inherit;opacity:.7;cursor:pointer;padding:4px', FL_PEN);
+    pen.title = 'Ficklisteneintragung bearbeiten';
+    pen.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); flEntryPopup(flGet(p.id) || p, null); });
+    head.appendChild(pen);
+    el.appendChild(head);
+    if (p.notes) el.appendChild(flEl('div', 'font-size:13px;margin-top:8px;white-space:pre-wrap;opacity:.9', escHtml(p.notes)));
+    const list = flEl('div', 'margin-top:4px');
+    el.appendChild(list);
+    let all = false;
+    const render = () => {
+      list.innerHTML = (all ? meets : meets.slice(0, 3)).map(flMeetHtml).join('') || '<div style="font-size:13px;opacity:.6;padding-top:6px">noch keine Treffen</div>';
+      if (meets.length > 3) {
+        const more = flEl('a', 'display:inline-block;margin-top:6px;color:#e2b04a;font-weight:600;font-size:13px;cursor:pointer', all ? 'Weniger anzeigen ▴' : `Mehr anzeigen (${meets.length - 3} weitere) ▾`);
+        more.addEventListener('click', (e) => { e.preventDefault(); all = !all; render(); });
+        list.appendChild(more);
+      }
+    };
+    render();
+    return el;
+  }
+  function flProfileBlock() {
+    const pid = flPagePid();
+    const old = document.querySelector('.jaf-fl-block:not(.jaf-fl-own)');
+    const p = pid && flGet(pid);
+    if (!p || (!p.status && !(p.meets || []).length && !p.notes)) { if (old && !old.closest('.jaf-fl-archive, .jaf-fl-extern')) old.remove(); return; }
+    if (old && old.closest('.jaf-fl-archive, .jaf-fl-extern')) return; // dort baut die Seite den Block selbst
+    const sig = JSON.stringify([p.status, p.meets, p.notes]);
+    if (old && old.__sig === sig) return;
+    const nh = noteHost();
+    const anchor = nh && (nh.closest('j-expandable-content-box') || nh.closest('j-setting-container') || nh);
+    if (!anchor) return;
+    const el = flBlockEl(p);
+    el.__sig = sig;
+    if (old) old.replaceWith(el); else anchor.insertAdjacentElement('afterend', el);
+  }
+
+  // ---- Symbole auf Karten (Suche, Gästelisten, Besucher …) ----
+  function flDecorateCards() {
+    const fl = getFl();
+    const ids = Object.keys(fl).filter((k) => fl[k].status);
+    const put = (host, st, css) => {
+      let b = host.querySelector(':scope > .jaf-fl-card');
+      if (!st) { if (b) b.remove(); return; }
+      if (b && b.getAttribute('data-k') === st) return;
+      if (!b) { b = document.createElement('div'); b.className = 'jaf-fl-card'; host.appendChild(b); if (getComputedStyle(host).position === 'static') host.style.position = 'relative'; }
+      b.setAttribute('data-k', st);
+      b.title = `Fickliste: ${flLabel(st)}`;
+      b.style.cssText = `position:absolute;${css};z-index:6;width:24px;height:24px;border-radius:50%;background:${st === 'gef' ? '#c71b1b' : 'rgba(20,20,20,.75)'};display:flex;align-items:center;justify-content:center;pointer-events:none;color:#fff`;
+      b.innerHTML = flIcon(st, { size: 15 });
+    };
+    if (!ids.length && !document.querySelector('.jaf-fl-card')) return;
+    document.querySelectorAll('j-member-card').forEach((card) => {
+      const a = card.closest('a[href]');
+      if (!a) return;
+      const id = idOf(new URL(a.href, location.origin).pathname);
+      put(a, id && fl[id] ? fl[id].status : '', 'top:6px;right:6px');
+    });
+    document.querySelectorAll('li.date_card').forEach((li) => {
+      const a = li.querySelector('a[href*="/profile/"], a[href*="/my/"]');
+      if (!a) return;
+      const id = idOf(a.getAttribute('href'));
+      put(li, id && fl[id] ? fl[id].status : '', 'top:6px;right:6px');
+    });
+  }
+
+  // ---- Eigenes Profil: Badge „Fickliste“ hinter „Freunde“, Kasten über „Account“ ----
+  const flOwnPage = () => !!sessionId() && new RegExp(`/${sessionId()}\\.`).test(location.pathname) && /^\/profile\//.test(location.pathname);
+  function flOwnPills() {
+    if (!flOwnPage()) return;
+    for (const nav of document.querySelectorAll('j-pill-navigation')) {
+      if (nav.querySelector('.jaf-fl-pill')) continue;
+      const fr = [...nav.querySelectorAll('j-pill')].find((x) => /^freunde$/i.test((x.textContent || '').trim()));
+      if (!fr) continue;
+      const pill = document.createElement('j-pill');
+      for (const a of fr.attributes) if (a.name.startsWith('data-v-')) pill.setAttribute(a.name, '');
+      pill.className = 'jaf-fl-pill';
+      pill.setAttribute('href', flOverviewUrl());
+      pill.textContent = 'Fickliste';
+      pill.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); location.href = flOverviewUrl(); }, true);
+      fr.insertAdjacentElement('afterend', pill);
+    }
+  }
+  function flLastFicks(n = 3) {
+    const out = [];
+    for (const p of Object.values(getFl())) {
+      if (!['gef', 'nie'].includes(p.status)) continue;
+      const m = flMeetsSorted(p)[0];
+      if (m) out.push({ p, m });
+    }
+    return out.sort((a, b) => meetTs(b.m) - meetTs(a.m)).slice(0, n);
+  }
+  function flCounts() {
+    const c = { will: 0, gef: 0, nein: 0, nie: 0 };
+    for (const p of Object.values(getFl())) if (c[p.status] != null) c[p.status]++;
+    return c;
+  }
+  function flAvatar(p, size = 40, radius = '50%') {
+    const src = flImg(p.img);
+    const init = escHtml((p.nick || '?').slice(0, 1).toUpperCase());
+    return src ? `<img src="${src}" alt="" style="width:${size}px;height:${size}px;border-radius:${radius};object-fit:cover;flex:none${flDead(p) ? ';filter:grayscale(1);opacity:.7' : ''}">`
+      : `<span style="width:${size}px;height:${size}px;border-radius:${radius};background:#5c6470;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex:none">${init}</span>`;
+  }
+  // Nick mit Lebenszustand: gelöscht = durchgestrichen/grau, deaktiviert = rot
+  function flNickHtml(p) {
+    const css = flDead(p) ? 'text-decoration:line-through;opacity:.6' : p.live === 'deact' ? 'color:#e0453a' : '';
+    const old = (p.nicks || []).length ? ` title="früher: ${escHtml(p.nicks.join(', '))}"` : '';
+    const ext = flIsExt(p.id) && !p.wasJoy ? ' <span style="font-size:11px;border:1px solid currentColor;border-radius:8px;padding:0 5px;opacity:.75">extern</span>' : '';
+    return `<b style="${css}"${old}>${escHtml(p.nick || '?')}</b>${ext}`;
+  }
+  function flOwnBox() {
+    if (!flOwnPage()) return;
+    const acc = document.querySelector('.profile-membership-and-coins-info');
+    if (!acc) return;
+    const sig = JSON.stringify([flCounts(), flLastFicks().map((x) => [x.p.id, x.m.id, x.p.live, x.p.img])]);
+    let box = document.querySelector('.jaf-fl-own');
+    if (box && box.__sig === sig) return;
+    const h2p = acc.querySelector('h2');
+    const dv = (el) => (el ? [...el.attributes].filter((a) => a.name.startsWith('data-v-')).map((a) => `${a.name}=""`).join(' ') : '');
+    const linkP = acc.querySelector('j-a');
+    const nb = document.createElement('div');
+    nb.className = acc.className.replace('profile-membership-and-coins-info', '') + ' jaf-fl-own jaf-fl-block';
+    nb.style.marginBottom = '24px';
+    const c = flCounts();
+    const cnt = FL_ORDER.map((k) => `<a class="jaf-fl-cnt" href="${flOverviewUrl(k)}" target="_blank" title="${escHtml(FL_ST[k].label)}" style="display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:16px;color:inherit;text-decoration:none">${flIcon(k, { size: 22, redGef: true })}${c[k]}</a>`).join('');
+    const rows = flLastFicks().map(({ p, m }) => {
+      const href = flDead(p) ? flArchiveUrl(p) : flUrl(p);
+      return `<a href="${escHtml(href)}" target="_blank" style="display:flex;gap:10px;align-items:center;padding:6px 0;color:inherit;text-decoration:none">${flAvatar(p)}` +
+        `<span style="min-width:0"><span>${flNickHtml(p)}</span><br><span style="font-size:12.5px;opacity:.7">${escHtml(m.wo || '')}${m.wo ? '<br>' : ''}${m.date ? 'am ' + fmtDate(m.date) : ''}</span></span></a>`;
+    }).join('') || '<div style="opacity:.6;font-size:13px;padding:4px 0">noch keine Ficks eingetragen</div>';
+    nb.innerHTML = `<h2 ${dv(h2p)} class="profile-headline profile-headline--with-margin" style="display:flex;align-items:center;gap:8px"><span>Fickliste</span>` +
+      `<j-badge><j-icon slot="icon" type="j-ico-eye-slash"></j-icon>Nur für dich sichtbar</j-badge></h2>` +
+      `<div class="profile-content-card__wrapper"><j-content-card><div style="padding:4px 0">` +
+      `<div style="display:flex;justify-content:space-between;padding:2px 4px 12px;border-bottom:1px solid rgba(128,128,128,.3)">${cnt}</div>` +
+      `<div style="font-size:12px;opacity:.7;margin:10px 0 4px">Letzte Ficks</div>${rows}` +
+      `<div style="margin-top:8px"><j-a ${dv(linkP)} class="${linkP ? escHtml(linkP.className) : ''}" href="${flOverviewUrl()}">Zu meiner Fickliste</j-a></div></div></j-content-card></div>`;
+    const ja = nb.querySelector('j-a');
+    ja.addEventListener('click', (e) => { e.preventDefault(); location.href = flOverviewUrl(); });
+    nb.__sig = sig;
+    if (box) box.replaceWith(nb); else acc.parentElement.insertBefore(nb, acc);
+  }
+
+  // ---- Profil-Archiv: Ansicht eines Stands + Navigation ----
+  function flArchiveUrl(p, ts, nav = true) {
+    const stands = flStands(p.id);
+    const t = ts || (stands.some((s) => s.ts === p.lastStand) ? p.lastStand : (stands[stands.length - 1] || {}).ts) || 0;
+    const base = flPath(p);
+    return location.origin + base + (base.includes('?') ? '&' : '?') + `archiv=${t}${nav ? '&flnav=1' : ''}`;
+  }
+  const flLiveUrl = (p, nav = true) => { const b = flPath(p); return location.origin + b + (nav ? (b.includes('?') ? '&' : '?') + 'flnav=1' : ''); };
+  const flNavOn = (pid) => ssGet('jaf_flnav') === pid;
+  // Navigation „Profil-Archiv“ (überblendet, wie die JOYclub-Infoleiste)
+  function flShowNav(p, curTs) {
+    document.getElementById('jaf-fl-nav')?.remove();
+    const stands = flStands(p.id).slice().sort((a, b) => a.ts - b.ts);
+    const dead = flDead(p);
+    const live = !curTs;
+    const idx = live ? stands.length : stands.findIndex((s) => s.ts === curTs);
+    const T = (s) => (s === 'live' ? 'aktuell' : s ? fmtDT(s.ts) : '–');
+    const prev = idx > 0 ? stands[idx - 1] : null;
+    const next = live ? null : (stands[idx + 1] || (dead ? null : 'live'));
+    // Doppelpfeile: letzter Stand vor und erster Stand nach jedem Treffen
+    const tg = new Set();
+    for (const m of p.meets || []) {
+      const t = meetTs(m);
+      if (!t) continue;
+      const b = stands.filter((s) => s.ts < t).pop(); if (b) tg.add(b.ts);
+      const a = stands.find((s) => s.ts > t); if (a) tg.add(a.ts);
+    }
+    const targets = [...tg].sort((a, b) => a - b);
+    const cur = live ? Infinity : curTs;
+    const pp = targets.filter((t) => t < cur).pop();
+    const nn = targets.find((t) => t > cur);
+    const byTs = (t) => stands.find((s) => s.ts === t);
+    const go = (t) => { if (t === 'live') location.href = flLiveUrl(p, false); else if (t) location.href = flArchiveUrl(p, t.ts || t, false); };
+    const bar = flEl('div', 'position:fixed;left:50%;top:76px;transform:translateX(-50%);z-index:2147483640;width:min(760px,calc(100% - 24px));box-sizing:border-box;' +
+      'display:flex;gap:12px;align-items:flex-start;background:#20242c;color:#fff;border-left:4px solid #2f6fd6;border-radius:8px;padding:10px 12px;box-shadow:0 6px 18px rgba(0,0,0,.5);font:14px system-ui,sans-serif');
+    bar.id = 'jaf-fl-nav';
+    bar.className = 'jaf-fl-nav';
+    bar.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" style="flex:none;margin-top:2px"><circle cx="12" cy="12" r="11" fill="#2f6fd6"/><path fill="#fff" d="M10.5 16.3c-.7 0-1.3.6-1.3 1.2s.6 1.3 1.3 1.3h4c.7 0 1.2-.6 1.2-1.3s-.5-1.2-1.2-1.2h-.8v-4.8c0-1.2-1-2.2-2.2-2.2h-1c-.7 0-1.3.6-1.3 1.2s.6 1.3 1.3 1.3h.7v4.5zm1.8-11.6a1.8 1.8 0 1 0 0 3.5 1.8 1.8 0 0 0 0-3.5z"/></svg>';
+    const body = flEl('div', 'flex:1;min-width:0');
+    body.appendChild(flEl('div', 'font-weight:700;font-size:13.5px;margin-bottom:6px', `Profil-Archiv · ${escHtml(p.nick || '')}`));
+    const row = flEl('div', 'display:flex;gap:6px;align-items:flex-start');
+    const b = (sym, lbl, target) => {
+      const w = flEl('div', 'width:96px;text-align:center;flex:none');
+      const k = flEl('button', `width:100%;height:26px;border-radius:16px;border:1px solid ${target ? '#4a505a' : '#333'};background:transparent;color:${target ? '#fff' : '#555'};font:bold 17px/1 system-ui;cursor:${target ? 'pointer' : 'default'}`, sym);
+      if (target) k.addEventListener('click', () => go(target)); else k.disabled = true;
+      w.appendChild(k);
+      w.appendChild(flEl('div', `font-size:11px;color:${target ? '#9aa3ad' : '#555'};margin-top:3px;white-space:nowrap`, escHtml(lbl)));
+      return w;
+    };
+    row.appendChild(b('«', pp ? fmtDT(pp) : '–', pp ? byTs(pp) : null));
+    row.appendChild(b('‹', T(prev), prev));
+    const mid = flEl('div', 'flex:1;min-width:0;padding:0 4px');
+    const sel = flEl('select', `width:100%;height:28px;border-radius:6px;background:#2c313b;color:${live ? '#7be08f' : '#fff'};border:1px solid ${live ? '#3fae5a' : '#4a505a'};font:bold 13.5px system-ui;text-align:center`);
+    if (!dead) sel.appendChild(new Option('aktuell (echtes Profil)', 'live', live, live));
+    for (const s of stands.slice().reverse()) sel.appendChild(new Option(`${fmtDT(s.ts)} · ${s.why || ''}`, String(s.ts), s.ts === curTs, s.ts === curTs));
+    sel.addEventListener('change', () => go(sel.value === 'live' ? 'live' : +sel.value));
+    mid.appendChild(sel);
+    row.appendChild(mid);
+    row.appendChild(b('›', T(next), next));
+    row.appendChild(b('»', nn ? fmtDT(nn) : '–', nn ? byTs(nn) : null));
+    body.appendChild(row);
+    bar.appendChild(body);
+    const x = flEl('button', 'background:none;border:0;color:#9aa3ad;font:18px system-ui;cursor:pointer;padding:0 2px', '✕');
+    x.title = 'Navigation beenden';
+    x.addEventListener('click', () => { ssSet('jaf_flnav', ''); bar.remove(); });
+    bar.appendChild(x);
+    document.body.appendChild(bar);
+  }
+  // einfache Profilansicht aus den Daten eines Stands (Stufe 1 bzw. externe Personen)
+  function flRenderL1(d, imgSrc, opt = {}) {
+    const sed = (d.sed || []).map((s) => {
+      const rows = Object.entries(s.props || {}).filter(([, v]) => v).map(([k, v]) => `<tr><td style="opacity:.65;padding:3px 14px 3px 0;vertical-align:top">${escHtml(k)}</td><td style="padding:3px 0">${escHtml(v)}</td></tr>`).join('');
+      const gname = s.g === '2' ? 'Sie' : s.g === '1' ? 'Er' : '';
+      return `<div style="flex:1;min-width:220px;background:rgba(128,128,128,.1);border-radius:8px;padding:12px 14px"><div style="font-weight:700;margin-bottom:6px">${escHtml(s.title || ((d.sed || []).length > 1 ? `Steckbrief (${gname})` : 'Steckbrief'))}${s.age ? ` · ${s.age} Jahre` : ''}</div><table style="border-collapse:collapse;font-size:13.5px">${rows || '<tr><td style="opacity:.6">keine Angaben</td></tr>'}</table></div>`;
+    }).join('');
+    const secs = (d.secs || []).map((x) => `<section style="margin-top:18px"><h2 class="profile-headline" style="font-size:18px;margin:0 0 6px">${escHtml(x.h)}</h2><div style="white-space:pre-wrap;font-size:14px;line-height:1.5">${escHtml(x.t)}</div></section>`).join('');
+    const img = imgSrc ? `<img src="${imgSrc}" alt="" style="width:220px;height:220px;object-fit:cover;border-radius:12px;flex:none">`
+      : `<div style="width:220px;height:220px;border-radius:12px;background:#5c6470;display:flex;align-items:center;justify-content:center;font:bold 72px system-ui;color:#fff;flex:none">${escHtml((d.nick || '?').slice(0, 1).toUpperCase())}</div>`;
+    return `<div class="jaf-fl-l1" style="max-width:960px;margin:24px auto 40px;padding:0 16px;color:inherit;font:14px/1.45 system-ui,sans-serif">` +
+      `<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">${opt.imgHtml || img}<div style="flex:1;min-width:240px">` +
+      `<h1 style="margin:0 0 4px;font-size:28px">${escHtml(d.nick || '')}</h1>` +
+      `<div style="opacity:.8">${escHtml([d.type, (d.ages || []).length ? (d.ages || []).join(' + ') + ' Jahre' : '', d.place].filter(Boolean).join(' · '))}</div>` +
+      (d.tagline ? `<div style="margin-top:8px;font-style:italic;opacity:.85">${escHtml(d.tagline)}</div>` : '') +
+      `<div class="profile-interaction-buttons" style="display:flex;gap:14px;margin-top:16px"><div class="profile-label-interaction-button profile-label-interaction-button--is-big jaf-fl-proto" style="display:none"><span class="profile-clubmail-button"></span></div></div>` +
+      `${opt.headExtra || ''}</div></div>` +
+      `<div class="jaf-fl-l1-block"></div>` +
+      (sed ? `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:22px">${sed}</div>` : '') + secs + '</div>';
+  }
+  function flArchiveView() {
+    const ts = flArchivParam();
+    const pid = flPagePid() || (isProfilePage() ? idOf(location.pathname) : '');
+    const p = pid && flGet(pid);
+    if (!ts || !p || flIsExt(pid)) return false;
+    const stands = flStands(pid);
+    const s = stands.find((x) => x.ts === ts) || stands[stands.length - 1];
+    if (!s) return false;
+    if (p.lastStand !== s.ts) { p.lastStand = s.ts; flPut(p); }
+    if (/[?&]flnav=1/.test(location.search)) ssSet('jaf_flnav', pid);
+    const host = document.querySelector('main.profile-container') || document.querySelector('main');
+    let wrap = document.querySelector('.jaf-fl-archive');
+    if (!wrap) {
+      wrap = flEl('div', 'min-height:60vh');
+      wrap.className = 'jaf-fl-archive';
+      if (host) { host.style.display = 'none'; host.insertAdjacentElement('beforebegin', wrap); }
+      else { const c = document.querySelector('#mfs_core, #page') || document.body; c.querySelectorAll(':scope > *:not(#jaf-panel)').forEach((e) => { if (!e.matches('header, nav, #main_navigation')) e.style.display = 'none'; }); c.appendChild(wrap); }
+    }
+    const imgSrc = flImg(s.img) || flImg(p.img);
+    if (s.html) {
+      if (typeof wrap.setHTMLUnsafe === 'function') wrap.setHTMLUnsafe(s.html); else wrap.innerHTML = s.html;
+      wrap.querySelectorAll('[class*="jaf-"]').forEach((e) => e.remove());
+      if (imgSrc) wrap.querySelectorAll('j-avatar [data-img_id] img, j-avatar [data-img_id] source').forEach((e) => { if (e.tagName === 'SOURCE') e.setAttribute('srcset', imgSrc); else { e.src = imgSrc; e.removeAttribute('data-src'); } });
+      const nh = [...wrap.querySelectorAll('j-setting-textarea')].find((e) => /profilnotiz/.test(norm(e.getAttribute('label') || '')));
+      const anchor = nh ? (nh.closest('j-expandable-content-box') || nh) : null;
+      const blk = flBlockEl(p);
+      if (anchor) anchor.insertAdjacentElement('afterend', blk); else wrap.prepend(blk);
+    } else {
+      wrap.innerHTML = flRenderL1(s.data || {}, imgSrc);
+      wrap.querySelector('.jaf-fl-l1-block').appendChild(flBlockEl(p));
+      if (s.data && s.data.pnote) wrap.querySelector('.jaf-fl-l1-block').insertAdjacentHTML('afterbegin', `<div style="margin-top:18px;padding:12px 16px;border-radius:8px;background:rgba(128,128,128,.08)"><div style="font-weight:600;font-size:13.5px;margin-bottom:4px">Profilnotiz (damals)</div><div style="white-space:pre-wrap;font-size:13px">${escHtml(s.data.pnote)}</div></div>`);
+    }
+    // aktive Inhalte der Kopie → echtes Profil (bzw. Hinweis, wenn es das Profil nicht mehr gibt)
+    if (!wrap.__jafBound) {
+      wrap.__jafBound = true;
+      wrap.addEventListener('click', (ev) => {
+        const path = ev.composedPath();
+        if (path.some((e) => e && e.classList && (e.classList.contains('jaf-fl-wrap') || e.classList.contains('jaf-fl-block') || e.id === 'jaf-fl-dd'))) return;
+        const act = path.find((e) => e && e.nodeType === 1 && (e.tagName === 'A' || e.tagName === 'BUTTON' || /^J-(BUTTON|CONTROL-BUTTON|CONTEXT-MENU|A|PILL|LINK)/.test(e.tagName)));
+        if (!act) return;
+        ev.preventDefault(); ev.stopPropagation();
+        const q = flGet(pid) || p;
+        if (flDead(q)) { flDeadPopup(q); return; }
+        const href = act.getAttribute && act.getAttribute('href');
+        if (href && !/^#|javascript:/.test(href) && !(idOf(href) === pid)) location.href = new URL(href, location.origin).href;
+        else location.href = flLiveUrl(q, false);
+      }, true);
+    }
+    if (flDead(p)) flDeadPopup(p);
+    if (ssGet('jaf_flnav') === pid || /[?&]flnav=1/.test(location.search)) flShowNav(p, s.ts);
+    document.title = `${p.nick || ''} · Profil-Archiv ${fmtDT(s.ts)}`;
+    return true;
+  }
+
+  // ---- Navigation „Profil verwalten“: Eintrag „Fickliste“ zwischen „Videos“ und „Homepages“, Kachel auf /edit/ ----
+  const FL_TILE_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 90"><rect width="120" height="90" fill="#c71b1b"/><g transform="translate(28 16) scale(.25)" fill="#fff"><path d="${FL_D}"/></g></svg>`);
+  function flEditNav() {
+    if (!/^\/edit\//.test(location.pathname)) return;
+    for (const ul of document.querySelectorAll('ul.catlinks')) {
+      if (ul.querySelector('.jaf-fl-sn')) continue;
+      const vid = [...ul.querySelectorAll('a')].find((a) => /\/edit\/video\/?$/.test(a.getAttribute('href') || ''));
+      if (!vid) continue;
+      const li = document.createElement('li');
+      li.className = 'jaf-fl-sn';
+      li.innerHTML = `<a href="${flOverviewUrl()}" class="${flOverviewPage() ? 'sn_on' : 'sn'}">Fickliste</a>`;
+      vid.closest('li').insertAdjacentElement('afterend', li);
+      if (flOverviewPage() || flExternPage()) ul.querySelectorAll('a.sn_on').forEach((a) => { if (!a.closest('.jaf-fl-sn')) a.className = 'sn'; });
+    }
+    if (/^\/edit\/?$/.test(location.pathname)) {
+      for (const ul of document.querySelectorAll('ul.profile_edit_list')) {
+        if (ul.querySelector('.jaf-fl-tile')) continue;
+        const vid = [...ul.querySelectorAll('li.profile_edit_card')].find((li) => li.querySelector('a[href$="/edit/video/"]'));
+        if (!vid) continue;
+        const li = vid.cloneNode(true);
+        li.className = 'profile_edit_card jaf-fl-tile';
+        const a = li.querySelector('a'); a.href = flOverviewUrl();
+        const img = li.querySelector('img'); if (img) img.style.backgroundImage = `url("${FL_TILE_IMG}")`;
+        const s = li.querySelector('strong'); if (s) s.textContent = 'Fickliste';
+        const n = li.querySelector('.normal'); if (n) n.textContent = 'Deine Ficks und Erinnerungen – nur für dich sichtbar.';
+        vid.insertAdjacentElement('afterend', li);
+      }
+    }
+  }
+
+  // ---- Seite „Meine Fickliste“ (/edit/homepage/?fickliste) ----
+  const K_FL_VIEW = 'jaf_fl_view'; // Filter/Sortierung (bleiben erhalten)
+  function flViewState() {
+    const v = Object.assign({ sort: 'date', dir: 'desc', dateDir: 'desc', user: '', wo: '', clubs: null, from: '', to: '', st: ['will', 'gef', 'nein', 'nie'] }, GM_getValue(K_FL_VIEW, {}) || {});
+    const q = (location.search.match(/[?&]status=(\w+)/) || [])[1];
+    if (q && FL_ST[q] && !window.__jafFlQ) { window.__jafFlQ = true; v.st = [q]; GM_setValue(K_FL_VIEW, v); }
+    return v;
+  }
+  function flAllClubs() {
+    const s = new Set();
+    for (const p of Object.values(getFl())) for (const m of p.meets || []) if (m.club) s.add(m.club);
+    return [...s].sort((a, b) => a.localeCompare(b, 'de'));
+  }
+  function flRows(v) {
+    const rows = [];
+    const onlyNoMeet = v.st.length && v.st.every((k) => k === 'will' || k === 'nein');
+    for (const p of Object.values(getFl())) {
+      if (!v.st.includes(p.status)) continue;
+      if (v.user && !norm([p.nick, ...(p.nicks || [])].join(' ')).includes(norm(v.user))) continue;
+      const ms = p.meets || [];
+      if (!ms.length && onlyNoMeet) { if (!v.wo && !v.from && !v.to && !v.clubs) rows.push({ p, m: null }); continue; }
+      for (const m of ms) {
+        if (v.wo && !norm(m.wo).includes(norm(v.wo))) continue;
+        if (v.clubs && !v.clubs.includes(m.club || '')) continue;
+        if (v.from && (m.date || '') < v.from) continue;
+        if (v.to && (m.date || '9999') > v.to) continue;
+        rows.push({ p, m });
+      }
+    }
+    const dd = v.dateDir === 'asc' ? 1 : -1;
+    const byDate = (a, b) => dd * ((a.m ? meetTs(a.m) : 0) - (b.m ? meetTs(b.m) : 0));
+    if (v.sort === 'name') rows.sort((a, b) => (v.dir === 'asc' ? 1 : -1) * String(a.p.nick || '').localeCompare(String(b.p.nick || ''), 'de', { sensitivity: 'base' }) || byDate(a, b));
+    else rows.sort((a, b) => (v.dir === 'asc' ? 1 : -1) * ((a.m ? meetTs(a.m) : 0) - (b.m ? meetTs(b.m) : 0)));
+    return rows;
+  }
+  function flRenderOverview() {
+    const c = document.getElementById('c');
+    if (!c) return;
+    const v = flViewState();
+    const save = () => { GM_setValue(K_FL_VIEW, v); flRenderOverview(); };
+    document.title = 'Meine Fickliste – JOYclub';
+    c.innerHTML = '';
+    c.classList.add('jaf-fl-page');
+    c.appendChild(flEl('h1', '', 'Meine Fickliste')).className = 'hide_for_mobile sp_bs';
+    c.appendChild(flEl('ol', '', `<li class="forelast"><a href="${location.origin}/edit/"><span>Profil verwalten</span></a></li><li class="last"><a href="${flOverviewUrl()}"><span>Meine Fickliste</span></a></li>`)).className = 'breadcrumb breadcrumb_ui hide_for_mobile';
+    c.appendChild(flEl('p', '', 'Nur für dich sichtbar. Jede Zeile ist ein Treffen – ein Klick öffnet die Eintragung, der Nick das Profil, „Profil-Archiv“ die gespeicherten Stände.')).className = 'c_hint_lo';
+    const addB = flBtn('+ Externen Fick zufügen', () => flAddExternal(), true);
+    addB.style.margin = '4px 0 12px';
+    c.appendChild(addB);
+    // Filter
+    const f = flEl('div', 'display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 12px;background:rgba(128,128,128,.1);border-radius:8px;padding:12px;margin-bottom:10px');
+    const fld = (label, el) => { const w = flEl('div', ''); w.appendChild(flEl('div', 'font-size:11.5px;opacity:.7;margin-bottom:3px', escHtml(label))); w.appendChild(el); f.appendChild(w); return el; };
+    const inp = (val, ph, type = 'text') => { const e = flEl('input', FL_INPUT_CSS + ';width:100%'); e.type = type; e.value = val || ''; if (ph) e.placeholder = ph; return e; };
+    const uIn = fld('Mitglied', inp(v.user, 'Name …'));
+    const dl = flEl('datalist'); dl.id = 'jaf-fl-nicks';
+    for (const n of [...new Set(Object.values(getFl()).flatMap((p) => [p.nick, ...(p.nicks || [])]).filter(Boolean))].sort()) dl.appendChild(new Option(n));
+    f.appendChild(dl);
+    uIn.setAttribute('list', 'jaf-fl-nicks');
+    // Vorschläge auch mitten im Nick: eigene Liste unter dem Feld
+    const sugg = flEl('div', 'position:relative');
+    uIn.parentElement.appendChild(sugg);
+    uIn.removeAttribute('list');
+    uIn.addEventListener('input', () => {
+      sugg.innerHTML = '';
+      const q = norm(uIn.value);
+      if (!q) return;
+      const l = [...dl.options].map((o) => o.value).filter((n) => norm(n).includes(q)).slice(0, 8);
+      if (!l.length || (l.length === 1 && norm(l[0]) === q)) return;
+      const box = flEl('div', 'position:absolute;left:0;right:0;top:2px;z-index:5;background:#25272b;border:1px solid #3a3d43;border-radius:6px;padding:4px 0;color:#fff');
+      for (const n of l) { const r = flEl('div', 'padding:4px 10px;cursor:pointer', escHtml(n)); r.addEventListener('mousedown', (e) => { e.preventDefault(); uIn.value = n; v.user = n; save(); }); box.appendChild(r); }
+      sugg.appendChild(box);
+    });
+    uIn.addEventListener('change', () => { v.user = uIn.value.trim(); save(); });
+    const wIn = fld('Wo (enthält)', inp(v.wo, 'z. B. Halloween'));
+    wIn.addEventListener('change', () => { v.wo = wIn.value.trim(); save(); });
+    // Clubs (Auswahl mit Checkboxen)
+    const clubs = flAllClubs();
+    const cBtn = flEl('button', FL_INPUT_CSS + ';width:100%;text-align:left;cursor:pointer', escHtml(v.clubs ? `${v.clubs.length} gewählt ▾` : 'alle ▾'));
+    fld('Clubs', cBtn);
+    cBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const old = document.getElementById('jaf-fl-clubs'); if (old) { old.remove(); return; }
+      const r = cBtn.getBoundingClientRect();
+      const dd = flEl('div', `position:fixed;left:${r.left}px;top:${r.bottom + 4}px;width:${Math.max(r.width, 220)}px;max-height:50vh;overflow:auto;z-index:2147483645;background:#25272b;border:1px solid #3a3d43;border-radius:6px;padding:6px 8px;color:#fff;box-shadow:0 6px 16px rgba(0,0,0,.6)`);
+      dd.id = 'jaf-fl-clubs';
+      const sel = new Set(v.clubs || [...clubs, '']);
+      for (const cl of [...clubs, '']) {
+        const lb = flEl('label', 'display:flex;gap:6px;align-items:center;padding:3px 0;cursor:pointer');
+        const cb = flEl('input'); cb.type = 'checkbox'; cb.checked = sel.has(cl);
+        cb.addEventListener('change', () => { if (cb.checked) sel.add(cl); else sel.delete(cl); v.clubs = sel.size === clubs.length + 1 ? null : [...sel]; GM_setValue(K_FL_VIEW, v); cBtn.textContent = v.clubs ? `${v.clubs.length} gewählt ▾` : 'alle ▾'; });
+        lb.appendChild(cb); lb.appendChild(flEl('span', cl ? '' : 'font-style:italic', escHtml(cl || 'unbekannt')));
+        dd.appendChild(lb);
+      }
+      document.body.appendChild(dd);
+      setTimeout(() => document.addEventListener('mousedown', function h(ev) { if (!dd.contains(ev.target) && ev.target !== cBtn) { dd.remove(); document.removeEventListener('mousedown', h); flRenderOverview(); } }), 0);
+    });
+    const fromIn = fld('Datum von', inp(v.from, '', 'date'));
+    fromIn.addEventListener('change', () => { v.from = fromIn.value; save(); });
+    const toIn = fld('Datum bis', inp(v.to, '', 'date'));
+    toIn.addEventListener('change', () => { v.to = toIn.value; save(); });
+    const rs = flEl('a', 'display:block;padding-top:20px;color:#e2b04a;font-weight:600;cursor:pointer', 'Filter zurücksetzen');
+    rs.addEventListener('click', (e) => { e.preventDefault(); Object.assign(v, { user: '', wo: '', clubs: null, from: '', to: '', st: ['will', 'gef', 'nein', 'nie'] }); save(); });
+    f.appendChild(rs);
+    c.appendChild(f);
+    // Liste
+    const rows = flRows(v);
+    const bar = flEl('div', 'display:flex;gap:8px;align-items:center;margin:8px 2px;font-size:13px;flex-wrap:wrap', `<span style="opacity:.7">${rows.length} ${rows.length === 1 ? 'Eintrag' : 'Einträge'} · Sortieren:</span>`);
+    const sb = (key, label) => {
+      const on = v.sort === key;
+      const dir = key === 'date' ? v.dateDir : v.dir;
+      const e = flEl('button', `border:1px solid ${on ? '#c71b1b' : '#6b6f76'};background:${on ? '#c71b1b' : 'transparent'};color:${on ? '#fff' : 'inherit'};border-radius:14px;padding:3px 12px;font:bold 13px system-ui;cursor:pointer`,
+        `${label}${on ? (dir === 'asc' ? ' ▲' : ' ▼') : ''}`);
+      e.addEventListener('click', () => {
+        if (v.sort === key) { if (key === 'date') v.dateDir = v.dateDir === 'asc' ? 'desc' : 'asc'; else v.dir = v.dir === 'asc' ? 'desc' : 'asc'; }
+        v.sort = key;
+        if (key === 'date') v.dir = v.dateDir;
+        save();
+      });
+      bar.appendChild(e);
+    };
+    sb('name', 'Name'); sb('date', 'Datum');
+    c.appendChild(bar);
+    const ul = flEl('div', 'display:flex;flex-direction:column;gap:8px');
+    ul.className = 'jaf-fl-list';
+    c.appendChild(ul);
+    for (const { p, m } of rows) {
+      const li = flEl('div', 'display:flex;gap:12px;align-items:center;padding:10px;border-radius:8px;background:rgba(128,128,128,.12);cursor:pointer');
+      li.className = 'jaf-fl-row';
+      const nickHref = flDead(p) ? flArchiveUrl(p) : flLiveUrl(p);
+      li.innerHTML = `${flAvatar(p, 56, '6px')}<div style="flex:1;min-width:0">` +
+        `<div class="jaf-fl-l1row" style="display:flex;align-items:center"><span class="jaf-fl-nk" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap">` +
+        `<a class="jaf-fl-nick" href="${escHtml(nickHref)}" target="_blank" style="color:inherit;text-decoration:none">${flNickHtml(p)}</a>` +
+        `${p.type ? `<span style="opacity:.6;font-size:12px">${escHtml(p.type)}</span>` : ''}${flIcon(p.status, { size: 16, redGef: true })}</span>` +
+        `<a class="jaf-fl-arch" href="${escHtml(flArchiveUrl(p))}" target="_blank" style="margin-left:10px;font-size:12.5px;opacity:.75;color:inherit">Profil-Archiv</a></div>` +
+        (m ? `<div style="font-size:13px">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${escHtml(m.wo || 'Party')}</a>` : escHtml(m.wo || '')}` +
+          ` · <span style="${m.club ? 'opacity:.85' : 'opacity:.55;font-style:italic'}">${escHtml(m.club || 'Club unbekannt')}</span></div>` +
+          (m.note ? `<div style="font-size:12.5px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(m.note)}</div>` : '')
+          : '<div style="font-size:13px;opacity:.6">noch keine Treffen</div>') +
+        `</div><div style="text-align:right;font-weight:600;font-size:13px;white-space:nowrap">${m && m.date ? fmtDate(m.date) : ''}<br><span style="opacity:.6;font-weight:normal">${m && m.time ? m.time : ''}</span></div>`;
+      li.addEventListener('click', (e) => {
+        if (e.composedPath().some((x) => x && x.tagName === 'A')) return;
+        flEntryPopup(flGet(p.id), null, { meetId: m && m.id });
+      });
+      ul.appendChild(li);
+    }
+    if (!rows.length) ul.appendChild(flEl('div', 'opacity:.6;padding:12px', 'Keine Einträge für diese Auswahl.'));
+    // „Profil-Archiv“ exakt untereinander: Breite der Nick-Spalte über alle sichtbaren Zeilen messen
+    requestAnimationFrame(() => {
+      const nks = [...ul.querySelectorAll('.jaf-fl-nk')];
+      nks.forEach((e) => { e.style.width = ''; });
+      const w = Math.max(0, ...nks.map((e) => e.getBoundingClientRect().width));
+      nks.forEach((e) => { e.style.width = `${Math.ceil(w)}px`; });
+    });
+    flRenderSide(v);
+    flLiveWorker();
+  }
+  function flRenderSide(v) {
+    const ts = document.getElementById('ts');
+    if (!ts) return;
+    const c = flCounts();
+    ts.innerHTML = '';
+    const w = flEl('div', '');
+    w.className = 'well well-sm';
+    w.appendChild(flEl('strong', '', 'Status')).className = 'h_2';
+    for (const k of FL_ORDER) {
+      const on = v.st.includes(k);
+      const r = flEl('div', `display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;margin-top:4px;${on ? 'background:rgba(128,128,128,.18)' : 'opacity:.55'}`,
+        `${flIcon(k, { size: 20, redGef: true })}<span>${escHtml(FL_ST[k].label)}</span><b style="margin-left:auto">${c[k]}</b>`);
+      r.addEventListener('click', () => { v.st = on ? v.st.filter((x) => x !== k) : [...v.st, k]; GM_setValue(K_FL_VIEW, v); flRenderOverview(); });
+      w.appendChild(r);
+    }
+    w.appendChild(flEl('p', 'font-size:12px;opacity:.7;margin-top:10px', 'Klick = Status ein-/ausblenden'));
+    const vis = visibilityFromDoc(document);
+    if (vis === 1) w.appendChild(flEl('p', 'font-size:12px;color:#ffb020;margin-top:6px', 'Lebendprüfung pausiert: Du bist sichtbar eingeloggt (Profilaufrufe wären als Besuch sichtbar).'));
+    ts.appendChild(w);
+  }
+
+  // ---- Lebendprüfung (nur auf „Meine Fickliste“, nur unsichtbar, je Profil höchstens 1×/Tag) ----
+  function flClassifyDoc(r, pid) {
+    const html = r.html || '';
+    let finalPath = ''; try { finalPath = new URL(r.url).pathname; } catch (e) { /* egal */ }
+    if (r.status === 404 || r.status === 410) return 'dead';
+    if (r.doc && parseProfileDoc(r.doc)) return /deaktiviert|pausiert/i.test(((r.doc.querySelector('.profile-base-info, header') || {}).textContent || '')) ? 'deact' : 'ok';
+    if (/(vorübergehend\s+)?deaktiviert|pausiert/i.test(html)) return 'deact';
+    if (finalPath && !new RegExp(`/(profile|my)/${pid}\\.`).test(finalPath)) return 'dead';
+    if (/nicht gefunden|existiert nicht|gelöscht/i.test(html)) return 'dead';
+    return '';
+  }
+  function flSetLive(p, live, why) {
+    const q = flGet(p.id) || p;
+    if (q.live === live) { q.checkTs = Date.now(); flPut(q); return; }
+    const names = { ok: 'wieder aktiv', deact: 'deaktiviert', dead: 'gelöscht' };
+    if (q.live || live !== 'ok') flHist(q, `${names[live] || live}${why ? ' (' + why + ')' : ''}`);
+    q.live = live; q.liveTs = Date.now(); q.checkTs = Date.now();
+    flPut(q);
+  }
+  async function flLiveWorker() {
+    if (window.__jafFlLive) return;
+    window.__jafFlLive = true;
+    try {
+      while (flOverviewPage()) {
+        if (document.visibilityState !== 'visible' || visibilityFromDoc(document) === 1) { await sleep(5000); continue; }
+        const p = Object.values(getFl()).find((x) => !flIsExt(x.id) && Date.now() - (x.checkTs || 0) > 864e5);
+        if (!p) break;
+        let res = '';
+        try { const r = await jfetch(location.origin + (p.path || `/profile/${p.id}.html`)); res = flClassifyDoc(r, p.id); } catch (e) { res = ''; }
+        if (res) flSetLive(p, res, 'Prüfung');
+        else {
+          const q = flGet(p.id); q.checkTs = Date.now(); flPut(q);
+          const u = GM_getValue(K_FL_UNKNOWN, []) || []; u.push({ ts: Date.now(), id: p.id, nick: p.nick }); GM_setValue(K_FL_UNKNOWN, u.slice(-50));
+          console.warn('[Alter-Filter] Fickliste: unbekannter Profilzustand', p.nick, p.id);
+        }
+        await sleep(2500 + Math.random() * 2000);
+        if (flOverviewPage() && !document.querySelector('#jaf-fl-entry, #jaf-fl-clubs')) flRenderOverview();
+      }
+    } finally { window.__jafFlLive = false; }
+  }
+
+  // ---- Externe Ficks (eigene Profilseite, editierbar wie das eigene Profil) ----
+  const FL_TYPES = ['Frau', 'Mann', 'Paar', 'Transfrau', 'Transmann', 'Frauen-Paar', 'Männer-Paar', 'Divers'];
+  const FL_SED_KEYS = ['Größe', 'Gewicht', 'Haarfarbe', 'Augenfarbe', 'Aussehen', 'Neigung', 'Sternzeichen', 'Dominant/Devot', 'Sadomaso', 'Raucher', 'Kinder'];
+  const FL_TEXT_KEYS = ['Über mich', 'Das mag ich', 'Das mag ich nicht'];
+  function flExtData(p) {
+    const d = Object.assign({ nick: p.nick, type: p.type || '', ages: [], place: '', tagline: '', sed: [], secs: [], pnote: p.pnote || '' }, p.extData || {});
+    d.nick = p.nick; d.type = p.type || d.type;
+    const n = /paar/i.test(d.type) ? 2 : 1;
+    while (d.sed.length < n) d.sed.push({ g: n === 2 ? (d.sed.length ? '1' : '2') : '', age: 0, title: n === 2 ? (d.sed.length ? 'Steckbrief (Er)' : 'Steckbrief (Sie)') : 'Steckbrief', props: {} });
+    d.sed = d.sed.slice(0, n);
+    return d;
+  }
+  function flExtSave(p, d, why = 'bearbeitet', img) {
+    const q = flGet(p.id) || p;
+    q.extData = d;
+    q.type = d.type || q.type;
+    if (img !== undefined) q.img = img;
+    flPut(q);
+    const stands = flStands(q.id);
+    stands.push({ ts: Date.now(), why, lvl: 1, data: Object.assign({}, d), img: q.img || '' });
+    flSetStands(q.id, stands);
+    return q;
+  }
+  async function flAddExternal(pre = {}) {
+    const res = await new Promise((resolve) => {
+      const { ov, box } = flOverlay('jaf-fl-add');
+      box.appendChild(flEl('div', 'display:flex;align-items:center;gap:10px;font:bold 20px system-ui;margin-bottom:12px', `<span style="font-size:22px">+</span>${flIcon('gef', { size: 22 })}<span>Externen Fick zufügen</span>`));
+      box.appendChild(flEl('div', 'font-size:12.5px;color:#9a9a9a;margin-bottom:4px', 'Name / Nick'));
+      const nm = flEl('input', FL_INPUT_CSS + ';width:100%'); nm.value = pre.name || '';
+      box.appendChild(nm);
+      box.appendChild(flEl('div', 'font-size:12.5px;color:#9a9a9a;margin:10px 0 4px', 'Profiltyp'));
+      const ty = flEl('select', FL_INPUT_CSS + ';width:100%');
+      for (const t of FL_TYPES) ty.appendChild(new Option(t, t, t === (pre.type || 'Frau'), t === (pre.type || 'Frau')));
+      box.appendChild(ty);
+      const lb = flEl('label', 'display:flex;gap:8px;align-items:center;margin-top:12px;cursor:pointer');
+      const wj = flEl('input'); wj.type = 'checkbox'; wj.checked = !!pre.wasJoy;
+      lb.appendChild(wj); lb.appendChild(flEl('span', '', 'war bei JOYclub'));
+      box.appendChild(lb);
+      if (pre.note) { box.appendChild(flEl('div', 'font-size:12.5px;color:#9a9a9a;margin:10px 0 4px', 'Profilnotiz')); box.appendChild(flEl('div', 'white-space:pre-wrap;background:#24262a;border-radius:6px;padding:6px 8px', escHtml(pre.note))); }
+      const err = flEl('div', 'color:#ffb020;margin-top:8px;min-height:1px');
+      box.appendChild(err);
+      const row = flEl('div', 'display:flex;gap:10px;justify-content:flex-end;margin-top:14px');
+      const done = (v) => { ov.remove(); resolve(v); };
+      const ok = () => {
+        const name = nm.value.trim();
+        if (!name) { err.textContent = 'Bitte einen Namen eingeben.'; return; }
+        let slug = joySlug(name) || 'fick', s = slug, i = 2;
+        while (flGet('x-' + s)) s = `${slug}_${i++}`;
+        done({ id: 'x-' + s, name, type: ty.value, wasJoy: wj.checked });
+      };
+      row.appendChild(flBtn('Abbrechen', () => done(null)));
+      row.appendChild(flBtn('Anlegen', ok, true));
+      box.appendChild(row);
+      nm.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); if (e.key === 'Escape') done(null); });
+      setTimeout(() => nm.focus(), 50);
+    });
+    if (!res) return null;
+    const p = { id: res.id, nick: res.name, type: res.type, ext: true, wasJoy: res.wasJoy, status: pre.status || 'gef', meets: [], hist: [], created: Date.now(), pnote: pre.note || '' };
+    if (res.wasJoy) p.live = 'dead';
+    flHist(p, res.wasJoy ? 'angelegt (war bei JOYclub)' : 'angelegt (extern)');
+    if (pre.cmDate) flHist(p, `gelöscht laut JOY-Team-Nachricht vom ${pre.cmDate}`);
+    flPut(p);
+    flExtSave(p, flExtData(p), 'angelegt');
+    // Party aus der Notiz vorschlagen
+    for (const d of flNoteDates(pre.note)) {
+      const e = await flSuggestPopup(d, pre.note);
+      const q = flGet(p.id);
+      if (e) { q.meets.push(Object.assign(flMeetFromEvent(e), { note: '' })); flPut(q); }
+      else if (e === undefined) { q.meets.push({ id: flNewId(), date: d, time: '', wo: '', url: '', club: '', note: '' }); flPut(q); }
+      else { q.dismissed = [...(q.dismissed || []), d]; flPut(q); }
+    }
+    return flGet(p.id);
+  }
+  // Bereich-Popup auf der externen Seite
+  function flExtEdit(p, area) {
+    const d = flExtData(p);
+    const { ov, box } = flOverlay('jaf-fl-extedit');
+    const titles = { head: 'Kopf bearbeiten', img: 'Profilbild', sed: 'Steckbrief bearbeiten', text: 'Texte bearbeiten' };
+    box.appendChild(flEl('div', 'font:bold 19px system-ui;margin-bottom:10px', escHtml(titles[area] || 'Bearbeiten')));
+    const lab = (t) => box.appendChild(flEl('div', 'font-size:12.5px;color:#9a9a9a;margin:8px 0 3px', escHtml(t)));
+    const inp = (v, w = '100%') => { const e = flEl('input', FL_INPUT_CSS + `;width:${w}`); e.value = v || ''; return e; };
+    const get = [];
+    let newImg;
+    if (area === 'head') {
+      lab('Profiltyp'); const ty = flEl('select', FL_INPUT_CSS + ';width:100%'); for (const t of FL_TYPES) ty.appendChild(new Option(t, t, t === d.type, t === d.type)); box.appendChild(ty);
+      lab('Alter (bei Paaren z. B. 34 + 38)'); const ag = inp((d.ages || []).join(' + ')); box.appendChild(ag);
+      lab('Ort'); const pl = inp(d.place); box.appendChild(pl);
+      lab('Kurztext'); const tg = inp(d.tagline); box.appendChild(tg);
+      get.push(() => { d.type = ty.value; d.ages = (ag.value.match(/\d{2,3}/g) || []).map(Number).slice(0, 2); d.place = pl.value.trim(); d.tagline = tg.value.trim(); });
+    } else if (area === 'img') {
+      const prev = flEl('div', 'margin:6px 0', flAvatar(p, 160, '12px'));
+      box.appendChild(prev);
+      const f = flEl('input'); f.type = 'file'; f.accept = 'image/*';
+      f.addEventListener('change', () => {
+        const file = f.files && f.files[0]; if (!file) return;
+        const fr = new FileReader();
+        fr.onload = () => { newImg = String(fr.result || ''); prev.innerHTML = `<img src="${newImg}" style="width:160px;height:160px;object-fit:cover;border-radius:12px">`; };
+        fr.readAsDataURL(file);
+      });
+      box.appendChild(f);
+    } else if (area === 'sed') {
+      const grid = flEl('div', 'display:flex;gap:14px;flex-wrap:wrap');
+      for (const s of flExtData(Object.assign({}, p, { extData: d, type: d.type })).sed) {
+        const col = flEl('div', 'flex:1;min-width:220px');
+        col.appendChild(flEl('div', 'font-weight:700;margin:4px 0', escHtml(s.title)));
+        const fields = {};
+        for (const k of FL_SED_KEYS) {
+          col.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin-top:5px', escHtml(k)));
+          const e = inp(s.props[k]); fields[k] = e; col.appendChild(e);
+        }
+        grid.appendChild(col);
+        get.push(() => { const ix = d.sed.findIndex((x) => x.title === s.title); const t = ix >= 0 ? d.sed[ix] : (d.sed.push(s), s); for (const k of FL_SED_KEYS) t.props[k] = fields[k].value.trim(); });
+      }
+      box.appendChild(grid);
+    } else {
+      for (const k of FL_TEXT_KEYS) {
+        lab(k);
+        const cur = (d.secs.find((x) => x.h === k) || {}).t || '';
+        const ta = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical'); ta.rows = 4; ta.value = cur; box.appendChild(ta);
+        get.push(() => { d.secs = d.secs.filter((x) => x.h !== k); if (ta.value.trim()) d.secs.push({ h: k, t: ta.value.trim() }); d.secs.sort((a, b) => FL_TEXT_KEYS.indexOf(a.h) - FL_TEXT_KEYS.indexOf(b.h)); });
+      }
+    }
+    const row = flEl('div', 'display:flex;gap:10px;justify-content:flex-end;margin-top:14px');
+    row.appendChild(flBtn('Abbrechen', () => ov.remove()));
+    row.appendChild(flBtn('Speichern', () => {
+      get.forEach((g) => g());
+      let img;
+      if (newImg) { img = flNewId(); GM_setValue(K_FLI + img, newImg); }
+      flExtSave(p, d, area === 'img' ? 'Profilbild geändert' : 'bearbeitet', img);
+      ov.remove();
+      flExternRender(true);
+    }, true));
+    box.appendChild(row);
+  }
+  async function flLinkJoy(p) {
+    const u = await flPrompt('Mit JOYclub-Profil verknüpfen', ['Füge den Link zum JOYclub-Profil dieser Person ein. Treffen, Status, Notizen und Archiv werden übernommen.'], '', 'Verknüpfen');
+    if (!u) return;
+    const id = idOf(u);
+    if (!id) { alert('Das ist kein Link zu einem JOYclub-Profil.'); return; }
+    if (flGet(id) && !confirm('Für dieses Profil gibt es schon einen Eintrag in der Fickliste. Zusammenführen?')) return;
+    const old = flGet(id) || {};
+    const q = Object.assign({}, p, old, {
+      id, ext: false, wasJoy: false, live: '', path: (String(u).match(/\/profile\/\d+\.[^?#]*/) || [`/profile/${id}.html`])[0],
+      meets: [...(old.meets || []), ...(p.meets || [])], hist: [...(old.hist || []), ...(p.hist || [])], status: p.status || old.status,
+    });
+    flHist(q, `verknüpft mit JOYclub-Profil (vorher extern: ${p.nick})`);
+    flSetStands(id, [...flStands(id), ...flStands(p.id)].sort((a, b) => a.ts - b.ts));
+    GM_deleteValue(K_FLA + p.id);
+    const m = getFl(); delete m[p.id]; setFl(m);
+    flPut(q);
+    location.href = location.origin + q.path;
+  }
+  function flExternRender(force = false) {
+    const c = document.getElementById('c');
+    if (!c) return;
+    const pid = 'x-' + flExternSlug();
+    const p = flGet(pid);
+    const ts = flArchivParam();
+    const sig = JSON.stringify([p, ts]);
+    if (!force && c.__jafSig === sig) return;
+    c.__jafSig = sig;
+    const tsEl = document.getElementById('ts'); if (tsEl) tsEl.style.display = 'none';
+    c.style.width = 'auto'; c.style.flex = '1';
+    c.className = (c.className || '').replace(/col-lg-6/, 'col-lg-9');
+    if (!p) { c.innerHTML = '<h1>Fickliste</h1><p>Diesen externen Eintrag gibt es nicht (mehr).</p>'; return; }
+    if (/[?&]flnav=1/.test(location.search)) ssSet('jaf_flnav', pid);
+    const stands = flStands(pid);
+    const s = ts ? (stands.find((x) => x.ts === ts) || stands[stands.length - 1]) : null;
+    const d = s ? s.data : flExtData(p);
+    const imgSrc = s ? (flImg(s.img) || flImg(p.img)) : flImg(p.img);
+    const pen = (area) => `<button type="button" class="jaf-fl-pen" data-a="${area}" title="Bearbeiten" style="background:none;border:0;color:inherit;opacity:.7;cursor:pointer;padding:2px 4px">${FL_PEN}</button>`;
+    const editable = !s;
+    c.innerHTML = '';
+    const wrap = flEl('div', '');
+    wrap.className = 'jaf-fl-extern';
+    let html = flRenderL1(d, imgSrc, { headExtra: editable ? `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">${pen('head')}<span style="opacity:.6;font-size:12px;align-self:center">Kopf</span>${pen('img')}<span style="opacity:.6;font-size:12px;align-self:center">Profilbild</span>${pen('sed')}<span style="opacity:.6;font-size:12px;align-self:center">Steckbrief</span>${pen('text')}<span style="opacity:.6;font-size:12px;align-self:center">Texte</span></div>` : '' });
+    wrap.innerHTML = html;
+    c.appendChild(wrap);
+    if (d.pnote || p.pnote) wrap.querySelector('.jaf-fl-l1-block').insertAdjacentHTML('beforeend', `<div style="margin-top:18px;padding:12px 16px;border-radius:8px;background:rgba(128,128,128,.08)"><div style="font-weight:600;font-size:13.5px;margin-bottom:4px">Profilnotiz</div><div style="white-space:pre-wrap;font-size:13px">${escHtml(s ? d.pnote : p.pnote)}</div></div>`);
+    wrap.querySelector('.jaf-fl-l1-block').appendChild(flBlockEl(p));
+    if (editable) {
+      wrap.querySelectorAll('.jaf-fl-pen').forEach((b) => b.addEventListener('click', () => flExtEdit(flGet(pid), b.getAttribute('data-a'))));
+      const lk = flBtn('Mit JOYclub-Profil verknüpfen', () => flLinkJoy(flGet(pid)));
+      lk.style.marginTop = '18px';
+      wrap.querySelector('.jaf-fl-l1').appendChild(lk);
+    }
+    // Button im Kopf (wie auf echten Profilen)
+    flInsertButtons();
+    document.title = `${p.nick} · Fickliste – JOYclub`;
+    if (flDead(p) || (flIsExt(pid) && !p.wasJoy && s)) { if (!wrap.__shown) { wrap.__shown = true; if (s) flDeadPopup(p); } }
+    if (ssGet('jaf_flnav') === pid) flShowNav(p, s ? s.ts : 0);
+  }
+
+  // ---- ClubMail: gelöschte Kontakte erkennen, JOY-Team-Löschmeldungen auswerten ----
+  function flByNick(nick) {
+    const k = norm(nick);
+    if (!k) return null;
+    return Object.values(getFl()).find((p) => (!flIsExt(p.id) || p.wasJoy) && [p.nick, ...(p.nicks || [])].some((n) => norm(n) === k)) || null;
+  }
+  function flAddStandData(pid, why, patch) {
+    const stands = flStands(pid);
+    const last = stands[stands.length - 1];
+    const data = Object.assign({}, last ? last.data : {}, patch);
+    stands.push({ ts: Date.now(), why, lvl: 1, data, img: last ? last.img : '' });
+    flSetStands(pid, stands);
+  }
+  function flParseDeletion(text) {
+    const t = String(text || '').replace(/\r/g, '');
+    const m = t.match(/Dein Kontakt\s+(.+?)\s+hat sich (?:leider )?gelöscht/i);
+    if (!m) return null;
+    const n = t.match(/Deine Anmerkungen:\s*\n?([\s\S]*?)\n?\s*Liebe Grüße/i);
+    return { nick: m[1].trim(), note: n ? n[1].replace(/\n{3,}/g, '\n\n').trim() : '' };
+  }
+  function flClubMail() {
+    // Unterhaltungsliste: Nick vorhanden, Link leer = gelöschtes Konto
+    for (const av of document.querySelectorAll('j-avatar-image.cm-conversation-list-item__avatar[title]')) {
+      if (av.__jafFl) continue;
+      av.__jafFl = true;
+      if (av.getAttribute('href') !== '') continue;
+      const p = flByNick(av.getAttribute('title'));
+      if (!p || p.live === 'dead') continue;
+      const item = av.closest('.cm-conversation-list-item') || av.parentElement;
+      const day = (((item && item.querySelector('.cm-conversation-list-item__meta')) || {}).textContent || '').match(/\d{2}\.\d{2}\.\d{4}/);
+      flSetLive(p, 'dead', `laut ClubMail, spätestens am ${day ? day[0] : fmtDay(Date.now())}`);
+    }
+    // Vorschau der JOY-Team-Meldungen in der Liste
+    for (const tx of document.querySelectorAll('.cm-conversation-list-item__text')) {
+      if (tx.__jafFl || !/hat sich (leider )?gelöscht/.test(tx.textContent || '')) continue;
+      tx.__jafFl = true;
+      const d = flParseDeletion((tx.textContent || '').replace(/\s+Hallo /, '\nHallo ').replace(/Deine Anmerkungen:/, '\nDeine Anmerkungen:\n').replace(/\s+Liebe Grüße/, '\nLiebe Grüße'));
+      const p = d && flByNick(d.nick);
+      if (p && p.live !== 'dead') flSetLive(p, 'dead', 'laut JOY-Team-Nachricht');
+    }
+    // geöffnete Unterhaltung: Kopf ohne Profil-Link / Fehlermeldung „existiert nicht oder wurde gelöscht“
+    const head = document.querySelector('.cm-conversation-header__name-readonly');
+    const gone = [...document.querySelectorAll('j-growl')].some((g) => /existiert nicht oder wurde gelöscht/.test(g.getAttribute('content') || g.textContent || ''));
+    if (head && gone && !head.__jafFl) { head.__jafFl = true; const p = flByNick(head.textContent.trim()); if (p && p.live !== 'dead') flSetLive(p, 'dead', 'laut ClubMail'); }
+    // JOY-Team-Meldung „Dein Kontakt … hat sich gelöscht“: Zusatz in der Sprechblase
+    for (const bub of document.querySelectorAll('.cm-message-bubble__content')) {
+      if (!/hat sich (leider )?gelöscht/.test(bub.textContent || '')) continue;
+      const d = flParseDeletion(bub.innerText || bub.textContent);
+      if (!d) continue;
+      const li = bub.closest('li');
+      const tm = li && li.querySelector('time[datetime]');
+      const day = tm ? fmtDate(tm.getAttribute('datetime')) : '';
+      const p = flByNick(d.nick);
+      const sig = `${d.nick}|${p ? p.id + p.live : '-'}`;
+      let ft = bub.querySelector(':scope > .jaf-fl-cmft');
+      if (ft && ft.__sig === sig) continue;
+      if (!ft) { ft = flEl('div', 'margin-top:12px;padding-top:10px;border-top:1px solid rgba(128,128,128,.35);display:flex;align-items:center;gap:10px;flex-wrap:wrap'); ft.className = 'jaf-fl-cmft'; bub.appendChild(ft); }
+      ft.__sig = sig;
+      ft.innerHTML = '';
+      if (p) {
+        if (p.live !== 'dead') flSetLive(p, 'dead', `gelöscht laut JOY-Team-Nachricht${day ? ' vom ' + day : ''}`);
+        if (d.note && d.note !== (p.pnote || '')) {
+          const q = flGet(p.id); q.pnote = d.note; flPut(q);
+          flAddStandData(p.id, 'Profilnotiz laut JOY-Team-Meldung', { pnote: d.note });
+        }
+        ft.appendChild(flEl('span', 'display:inline-flex;align-items:center;gap:7px;font-weight:600', `${flIcon(p.status, { size: 16, redGef: true })} In deiner Fickliste · als gelöscht vermerkt`));
+        const a = flBtn('Profil-Archiv', () => window.open(flArchiveUrl(flGet(p.id)), '_blank'));
+        ft.appendChild(a);
+      } else {
+        const b = flBtn('', async () => {
+          const q = await flAddExternal({ name: d.nick, note: d.note, wasJoy: true, cmDate: day });
+          if (q) { ft.__sig = ''; window.open(flUrl(q) + '&flnav=1', '_blank'); }
+        }, true);
+        b.innerHTML = `+ ${flIcon('gef', { size: 16 })} Zur Fickliste hinzufügen`;
+        b.style.display = 'inline-flex'; b.style.alignItems = 'center'; b.style.gap = '7px';
+        ft.appendChild(b);
+        const dates = flNoteDates(d.note);
+        let hint = 'übernimmt Nick und Anmerkungen';
+        if (dates.length) {
+          const mm = flPartyMatches(dates[0], d.note);
+          const e = mm.strong[0];
+          hint += e ? ` und den Vorschlag „${fmtDate(dates[0])} · ${e.club || e.name}“` : ` und das Datum ${fmtDate(dates[0])}`;
+        }
+        ft.appendChild(flEl('span', 'font-size:12px;opacity:.7;flex-basis:100%', escHtml(hint)));
+      }
+    }
+  }
+
+  // ---- Verschlüsselung der Fickliste in der Datensicherung (Schlüssel: eigener Nick) ----
+  function ownNick() {
+    const a = document.querySelector('.navigation_user_box a.user_link');
+    const t = a ? (a.childNodes[0] && a.childNodes[0].nodeType === 3 ? a.childNodes[0].nodeValue : a.textContent) : '';
+    return String(t || '').trim() || GM_getValue('jaf_own_nick', '');
+  }
+  const b64 = (buf) => { let s = ''; const u = new Uint8Array(buf); for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function flKey(nick, salt) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(norm(nick)), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  async function flEncrypt(obj, nick) {
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await flKey(nick, salt);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+    return { v: 1, alg: 'AES-GCM/PBKDF2-SHA256', salt: b64(salt), iv: b64(iv), data: b64(ct) };
+  }
+  async function flDecrypt(enc, nick) {
+    try {
+      const key = await flKey(nick, unb64(enc.salt));
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(enc.iv) }, key, unb64(enc.data));
+      return JSON.parse(new TextDecoder().decode(pt));
+    } catch (e) { return null; }
+  }
+  const FL_KEY_RE = /^jaf_fl/;
+  function flBackupPart() {
+    const o = {};
+    for (const k of GM_listValues()) if (FL_KEY_RE.test(k)) o[k] = GM_getValue(k);
+    return o;
+  }
+
+  // ---- Takt: alle Fickliste-Teile ----
+  let flVisitDone = '';
+  function flTick() {
+    const on = ownNick(); if (on && on !== GM_getValue('jaf_own_nick', '')) GM_setValue('jaf_own_nick', on);
+    flSaveEventPage();
+    flEditNav();
+    if (flOverviewPage() && !document.querySelector('.jaf-fl-page') && document.getElementById('c')) flRenderOverview();
+    if (flExternPage()) flExternRender();
+    flOwnPills();
+    flOwnBox();
+    if (isProfilePage() && !isOwnProfile()) {
+      const pid = idOf(location.pathname);
+      if (flArchivParam()) {
+        if (!document.querySelector('.jaf-fl-archive')) flArchiveView();
+        flInsertButtons();
+      } else {
+        flInsertButtons();
+        flProfileBlock();
+        const p = flGet(pid);
+        // Profil nicht (mehr) erreichbar → als gelöscht vermerken und das Archiv zeigen
+        if (p && !document.querySelector('main.profile-container, .profile-base-info__line-2') && !/♥/.test(document.title)) {
+          window.__jafFlMiss = (window.__jafFlMiss || 0) + 1;
+          if (window.__jafFlMiss === 5) {
+            if (p.live !== 'dead') flSetLive(p, 'dead', 'Profil nicht erreichbar');
+            if (flStands(pid).length) { location.replace(flArchiveUrl(flGet(pid), 0, flNavOn(pid) || /[?&]flnav=1/.test(location.search))); return; }
+            flDeadPopup(p);
+          }
+        } else window.__jafFlMiss = 0;
+        if (p) {
+          if (/[?&]flnav=1/.test(location.search)) ssSet('jaf_flnav', pid);
+          if (flNavOn(pid) && !document.getElementById('jaf-fl-nav')) flShowNav(p, 0);
+          // Besuch: neuer Archiv-Stand bei Änderungen; Profil lebt
+          const key = location.pathname + location.search;
+          if (flVisitDone !== key && profileAges().length) {
+            flVisitDone = key;
+            setTimeout(async () => {
+              try {
+                const q = flGet(pid);
+                if (q && q.live && q.live !== 'ok') flSetLive(q, 'ok', 'Profil aufgerufen');
+                await flSnapshot(pid, '', false);
+              } catch (e) { console.warn('[Alter-Filter] Fickliste-Archiv', e); }
+            }, 2500);
+          }
+        }
+      }
+    }
+    flDecorateCards();
+    if (/^\/clubmail\//.test(location.pathname)) flClubMail();
+  }
+  if (!IN_FRAME) setInterval(() => { try { flTick(); } catch (e) { console.warn('[Alter-Filter] Fickliste', e); } }, 1500);
+
   // ---------- Start ----------
+  // eigene Region: auf dem eigenen Profil lesen, sonst höchstens einmal täglich im Hintergrund
+  async function regionInit() {
+    try {
+      if (isOwnProfile()) { const pl = await waitFor(() => profilePlace(), 6000); if (pl) setOwnRegion(pl); return; }
+      const r = regionRec();
+      const id = sessionId();
+      if (!id || (r.region && Date.now() - (r.ts || 0) < 7 * 864e5) || Date.now() - (gmGet('jaf_region_try', 0) || 0) < 864e5) return;
+      gmSet('jaf_region_try', Date.now());
+      const doc = await fetchDoc(`${location.origin}/profile/${id}.html`);
+      const pl = profilePlace(doc); if (pl) setOwnRegion(pl);
+    } catch (e) { /* egal */ }
+  }
   async function init() {
     detectOwnType();
+    regionInit();
     await storeMigrationInit();
     if (await topGate()) return;
     if (isSettingsPage()) { await waitFor(() => document.getElementById('c'), 10000); renderSettingsPage(); }
@@ -7870,6 +9998,7 @@
   try {
     GM_registerMenuCommand('Alter-Filter: Alle Daten sichern (JSON)', () => downloadBackup());
     GM_registerMenuCommand('Alter-Filter: Alle Daten wiederherstellen (JSON)', () => restoreBackup());
+    GM_registerMenuCommand('Alter-Filter: Fremde Datensicherung importieren (mischen)', () => importForeignBackup());
     // nur zur Fehlersuche (nicht in der Sicherung, werden später entfernt)
     GM_registerMenuCommand('Alter-Filter: Unbekannte Profiltypen exportieren (CSV)', () => exportTypes());
     GM_registerMenuCommand('Alter-Filter: Online-Angaben exportieren (CSV)', () => exportOnlineTexts());

@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
 
-Stand: Version 1.75 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 1.76 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -423,11 +423,91 @@ Im Script-Speicher steht beim Verdrängten „entsperrt (Platz für neue Sperre,
 
 ---
 
+## Fickliste
+
+Auf jedem Profil, das das Skript einordnen kann (Mann, Frau, Paar, Trans*, … – keine Clubs, Veranstalter oder Business-Profile, nicht das eigene Profil), steht zwischen „Match!“/„Gefällt mir“ und „ClubMail“ ein zusätzlicher runder Button. Alles bleibt **nur für dich sichtbar** und wird nur im Skript-Speicher abgelegt.
+
+<img src="docs/fickliste-button.png" width="320" alt="Button Fickliste neben ClubMail">
+
+| Zustand | Symbol | Beschriftung |
+|---|---|---|
+| inaktiv | dünner Umriss | Ficken? |
+| will ich ficken | gefüllt | Will ich |
+| schon gefickt | gefüllt, roter Kreis | Gefickt |
+| will ich nicht | Umriss im roten Verbotsring | Nein, danke! |
+| nie wieder | gefüllt im roten Verbotsring | Nie wieder! |
+
+Ein Klick öffnet ein Menü im Stil von „Gefällt mir“. Angeboten werden alle anderen Zustände und – sobald ein Zustand gesetzt ist – „Fickstatus zurücksetzen“ (Mülltonne). Auf Karten (Suche, Gästelisten, Besucher …) zeigt ein kleines Symbol den Zustand.
+
+<img src="docs/fickliste-menue.png" width="340" alt="Menü des Fickliste-Buttons">
+
+### Ficklisteneintragung
+
+Jede Zustandsänderung öffnet das Popup „Ficklisteneintragung“:
+
+- **Profilnotiz** (JOYclub) – vorbelegt, Änderungen werden auf dem Profil gespeichert.
+- **Treffen** (beliebig viele, neueste oben): *wo*, *am*, *um* und eine *Ficknotiz*. Vorbelegt mit der Party, aus deren Gästeliste du das Profil geöffnet hast. „Party wählen …“ bietet die Partys von heute und die letzten 10 vergangenen (eigene Anmeldungen mit ★) und eine Suche. Ein eingefügter Party-Link wird gelesen: Name, Datum, Beginn und Club werden übernommen, der Link bleibt dahinter gespeichert.
+- **Anmerkungen** (allgemein).
+- **Profil zukünftig ignorieren** – bei „Nein, danke!“ und „Nie wieder!“ vorausgewählt. Ist das Profil schon ignoriert, steht „Dieses Profil wird derzeit ignoriert!“ darunter; Abwählen entsperrt es (und setzt es auf die eigene Whitelist). Ignorieren hebt einen Whitelist-Eintrag auf. Bei vollem Limit weicht eine automatische Sperre – eigene Listen haben Vorrang.
+- Enthält die Profilnotiz ein Datum ohne Treffen, schlägt das Skript passende Partys vor (Datum + Club oder Partyname; „am selben Tag“ als schwächere Vorschläge).
+
+„Speichern“ ist vorausgewählt (Strg+Enter), „Abbrechen“ ändert nichts. „Fickstatus zurücksetzen“ fragt: *Zurücksetzen* (Treffen und Archiv bleiben), *Zurücksetzen und Daten löschen* (alles zu dieser Person) oder *Abbrechen*.
+
+<img src="docs/fickliste-eintragung.png" width="420" alt="Popup Ficklisteneintragung"> <img src="docs/fickliste-zuruecksetzen.png" width="360" alt="Popup Fickstatus zurücksetzen">
+
+Unter der Profilnotiz zeigt das Profil die Einträge (neueste drei, dann „Mehr anzeigen“); der Stift öffnet dasselbe Popup.
+
+<img src="docs/fickliste-profil.png" width="400" alt="Fickliste-Block unter der Profilnotiz">
+
+### Profil-Archiv
+
+Beim Setzen eines Zustands und bei jedem späteren Profilbesuch mit Änderungen speichert das Skript einen **Stand**: Nick, Typ, Alter, Ort, Steckbrief(e), Profiltexte, deine damalige Profilnotiz und das **Profilbild in bester Qualität** (jedes neue Bild bleibt erhalten). Jeder Stand trägt Datum, Uhrzeit und Grund (z. B. „Fickstatus: Will ich → Gefickt“, „Profilbild geändert“, „Nick geändert“).
+
+„Profil-Archiv“ öffnet den zuletzt betrachteten Stand. Eine Navigation blättert vor und zurück (‹ ›), springt mit « » nur zu den Ständen direkt vor und nach einem Treffen und wählt in der Mitte jeden Stand oder „aktuell (echtes Profil)“. Sie erscheint auch auf dem echten Profil, wenn du aus der Fickliste kommst, und lässt sich für diesen Tab mit ✕ beenden. Aktive Inhalte der Kopie führen zum echten Profil; gibt es das Profil nicht mehr, erscheint mittig „Dieser Benutzer ist nicht mehr auf JOYclub – Du betrachtest eine statische Kopie seines alten Profils“ (schließt nach 10 s).
+
+<img src="docs/fickliste-archiv.png" width="640" alt="Profil-Archiv mit Navigation">
+
+### Meine Fickliste
+
+Unter **Profil verwalten → Fickliste** (zwischen „Videos“ und „Homepages“, auch als Kachel auf der Startseite der Profilverwaltung): jede Zeile ist ein Treffen. Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Wo“, Clubs (inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
+
+<img src="docs/fickliste-uebersicht.png" width="700" alt="Seite Meine Fickliste">
+
+Solange die Seite offen ist und du **unsichtbar** eingeloggt bist, prüft das Skript im Hintergrund höchstens einmal täglich je Profil, ob es noch existiert.
+
+### Eigenes Profil
+
+Hinter „Freunde“ steht der Reiter „Fickliste“; über „Account“ ein Kasten „Fickliste – Nur für dich sichtbar“ mit den Zählern je Zustand (Klick filtert), den letzten Ficks mit drei verschiedenen Personen und „Zu meiner Fickliste“.
+
+<img src="docs/fickliste-pill.png" width="560" alt="Reiter Fickliste"> <img src="docs/fickliste-eigenes-profil.png" width="300" alt="Kasten Fickliste im eigenen Profil">
+
+### Externe Ficks
+
+„+ Externen Fick zufügen“ legt eine eigene Seite im Stil eines JOYclub-Profils an (Adresse aus dem Namen). Profilbild, Typ, Ort, Kurztext, Steckbrief und Texte sind wie im eigenen Profil per Stift editierbar; jede Änderung wird ein Archiv-Stand. Mit „war bei JOYclub“ verhält sich der Eintrag wie ein gelöschtes Profil. Später lässt er sich mit einem echten JOYclub-Profil verknüpfen.
+
+### Gelöschte Kontakte (ClubMail)
+
+Unterhaltungen mit gelöschten Mitgliedern (Nick ohne Profil-Link) und die JOY-Team-Nachricht „Dein Kontakt … hat sich gelöscht“ markieren Einträge der Fickliste sofort als gelöscht; die Anmerkungen aus der Nachricht werden als Profilnotiz archiviert. Ist der Kontakt noch nicht in der Fickliste, steht in der Nachricht „+ Zur Fickliste hinzufügen“ – mit Nick, Anmerkungen und, wenn möglich, der passenden Party.
+
+<img src="docs/fickliste-clubmail.png" width="460" alt="Zusatz in der JOY-Team-Löschmeldung">
+
+Jede geöffnete Party-Seite wird (auch rückwirkend für vergangene Partys) mit Name, Beginn, Link und Club gemerkt – so lassen sich alte Treffen zuordnen. In alten Gästelisten tauchen gelöschte Profile nur noch als anonyme oder externe Anmeldung auf.
+
+Symbol: „sex-doggy“ von SVG Repo, als Umriss/Verbotsring abgewandelt.
+
+---
+
+## Region (Ruhrgebiet)
+
+Das Skript liest den Ort des eigenen Profils (Kreis bzw. kreisfreie Stadt) und ordnet ihn dem Ruhrgebiet, dem Rheinland oder „anderswo“ zu. Im **Ruhrgebiet** heißt alles „Oppa“ und „Omma“ (Oppa-Scan, Oppa-Schutz, Oppa-Liste, blockierte Oppas/Ommas, Standard-Bezeichnungen der Stufe 3 und damit auch neue Notizen); eigene Bezeichnungen bleiben unverändert, alte Notizen werden weiter erkannt. Ein Ortswechsel wirkt sofort.
+
+---
+
 ## Profilseiten
 
 - Im Slider „Dates & Events“ stehen Scan-Datum und AWO-Faktor der Partys (siehe [AWO-Faktor](#awo-faktor)).
 - Der Profiltyp im Profilkopf wird bei eingeschalteter visueller Einstufung zur Bezeichnung der Stufe (z. B. Opa, Oma, Geronto-Paar; Symbol in Stufe 3). Werte: höchste Quelle, in der das Mitglied gesehen wurde.
-- Alter, Typ und „zuletzt online“ werden mitgeschrieben; daraus berechnet das Skript Geburtsjahr-Spannen (bei Paaren für beide Personen).
+- Alter, Typ, „zuletzt online“ und „Profil zuletzt aufgerufen“ werden mitgeschrieben; daraus berechnet das Skript Geburtsjahr-Spannen (bei Paaren für beide Personen).
 - **Sternzeichen** aus dem Steckbrief grenzen den Geburtszeitraum weiter ein (Grenztage ±1 Tag; bei Paaren je Person über Geschlechts-Symbol und Alter zugeordnet). Passt ein Sternzeichen nicht zum Zeitraum, wird es ignoriert.
 
 ---
@@ -438,8 +518,9 @@ Im Tampermonkey-Menü:
 
 | Menüeintrag | Inhalt |
 |---|---|
-| Alle Daten sichern (JSON) | eine Datei mit allem: Einstellungen, Gesperrte, alle Konten, Vorgemerkte, Whitelist, Gruppen, Gedächtnis, Party-Stände … |
-| Alle Daten wiederherstellen (JSON) | ersetzt nach Rückfrage alle Daten durch eine Sicherung |
+| Alle Daten sichern (JSON) | eine Datei mit allem: Einstellungen, Gesperrte, alle Konten, Vorgemerkte, Whitelist, Gruppen, Gedächtnis, Party-Stände … Die **Fickliste** ist mit deinem Nick verschlüsselt (kein durchsuchbarer Klartext). |
+| Alle Daten wiederherstellen (JSON) | ersetzt nach Rückfrage alle Daten durch eine Sicherung; nach einem Nick-Wechsel wird der damalige Nick abgefragt (oder ohne Fickliste wiederherstellen) |
+| Fremde Datensicherung importieren (mischen) | übernimmt aus der Sicherung eines anderen Kontos nur das Wissen über andere Mitglieder: Typ, Geburtszeiträume (geschnitten), Sternzeichen, Online-Angaben, geprüfte Profile, Geschlechts-Zuordnung, unbekannte Typen. Abgleich über die Profil-ID; der zuletzt aufgerufene Stand gewinnt, bei Gleichstand der vollständigere, dann der eigene. Nicht übernommen: Partys/AWO, Einstellungen, Whitelist, Sperren, Ignorierliste, Gedächtnis, Vormerkliste, Sichtungen, Fickliste. Am Ende: neu / aktualisiert / eigene behalten. |
 | Unbekannte Profiltypen exportieren | vom Skript gefundene, unbekannte Profiltypen mit Beispielen |
 | Online-Angaben exportieren | vorkommende „zuletzt online“-Texte |
 | Fehlschläge des Party-Scans exportieren / löschen | gespeicherte Fehlschläge |
@@ -458,7 +539,9 @@ Die CSV-Exporte (`;`, Excel-tauglich) unterhalb der Sicherung dienen nur der Feh
 
 ## Technisches
 
-- **Speicher:** große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen als ein Tampermonkey-Wert je Mitglied (`jaf_log|/profile/…`); geändert wird nur, was sich ändert, andere Tabs werden über `GM_addValueChangeListener` informiert. Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`.
+- **Speicher:** große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen als ein Tampermonkey-Wert je Mitglied (`jaf_log|/profile/…`); geändert wird nur, was sich ändert, andere Tabs werden über `GM_addValueChangeListener` informiert. Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`; ab 1.76 `GM_xmlhttpRequest` mit `@connect image-user.feig-partner.de` (Profilbilder für das Profil-Archiv – Tampermonkey fragt einmal nach).
+- **Fickliste:** `jaf_fl` (Personen), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
+- **Orts-URLs:** ä→ae, ö→oe, ü→ue, ß→ss; Leerzeichen und Klammern → „_“ (z. B. „Mülheim (Ruhr)“ → `muelheim_ruhr`).
 - **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
 - **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
 - **Fehleranzeige:** Startfehler erscheinen in einem Panel mit „Alles zurücksetzen“.
