@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.78
+// @version      1.79
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -7209,6 +7209,11 @@
         if (pv) pv.closest('li').before(li);
         else { const t = menu.querySelector('li.menu_title'); if (t) t.after(li); else menu.prepend(li); }
       }
+      if (!menu.querySelector('.jaf-menu-fl')) {
+        const li = menuLi('jaf-menu-fl', flIcon('will', { size: 20, shadow: false }), 'Fickliste', flOverviewUrl(), null);
+        const scan = menu.querySelector('.jaf-menu-scan');
+        if (scan) scan.before(li); else { const t = menu.querySelector('li.menu_title'); if (t) t.after(li); else menu.prepend(li); }
+      }
       if (!menu.querySelector('.jaf-menu-schutz')) {
         const inv = [...menu.querySelectorAll('a[href]')].find((a) => pathOfHref(a) === '/edit/invisible');
         const li = menuLi('jaf-menu-schutz', opaIconSvg(18), opaT('Opa-Schutz'), settingsUrl(), null);
@@ -9057,6 +9062,10 @@
       }
     };
     render();
+    const to = flEl('a', 'display:inline-block;margin-top:10px;font-weight:600;text-decoration:underline;color:inherit;cursor:pointer', 'Zu meiner Fickliste');
+    to.className = 'jaf-fl-tolist';
+    to.href = flOverviewUrl(); to.target = '_blank';
+    el.appendChild(to);
     return el;
   }
   function flProfileBlock() {
@@ -9066,13 +9075,18 @@
     if (!p || (!p.status && !(p.meets || []).length && !p.notes)) { if (old && !old.closest('.jaf-fl-archive, .jaf-fl-extern')) old.remove(); return; }
     if (old && old.closest('.jaf-fl-archive, .jaf-fl-extern')) return; // dort baut die Seite den Block selbst
     const sig = JSON.stringify([p.status, p.meets, p.notes]);
-    if (old && old.__sig === sig) return;
+    // Platz: erstes Element der Badge-Liste der Seitenleiste (erscheint so direkt unter der Profilnotiz);
+    // ohne Badge-Liste hinter dem Notizkasten
+    const lists = [...document.querySelectorAll('j-list.profile-sidebar-container__badge-list')].filter((l) => !l.closest('.jaf-fl-archive'));
+    const list = lists.find((l) => visible(l)) || lists[0];
     const nh = noteHost();
     const anchor = nh && (nh.closest('j-expandable-content-box') || nh.closest('j-setting-container') || nh);
-    if (!anchor) return;
-    const el = flBlockEl(p);
+    if (!list && !anchor) return;
+    if (old && old.__sig === sig && (list ? old.parentElement === list && list.firstElementChild === old : true)) return;
+    const el = old && old.__sig === sig ? old : flBlockEl(p);
     el.__sig = sig;
-    if (old) old.replaceWith(el); else anchor.insertAdjacentElement('afterend', el);
+    if (old && old !== el) old.remove();
+    if (list) list.prepend(el); else anchor.insertAdjacentElement('afterend', el);
   }
 
   // ---- Symbole auf Karten (Suche, Gästelisten, Besucher …) ----
@@ -9417,12 +9431,35 @@
       nks.forEach((e) => { e.style.width = `${Math.ceil(w)}px`; });
     });
   }
+  // Treffen ohne Party-Link passt zu einer Party: gleicher Tag (oder Vortag ab 17 Uhr) und Name/Club im Text
+  function flMeetFitsEvent(m, ev, t) {
+    if (!m.date) return false;
+    const sd = isoDay(new Date(t));
+    const prev = isoDay(new Date(Date.parse(m.date + 'T12:00:00') - 864e5));
+    if (sd !== m.date && !(sd === prev && new Date(t).getHours() >= 17)) return false;
+    const txt = ' ' + flNormName([m.wo, m.club, m.note].join(' ')) + ' ';
+    const toks = txt.split(' ').filter((w) => w.length >= 3);
+    return [ev.club, ev.name, ev.location].map(flNormName).filter(Boolean).some((f) => f.split(' ').filter((w) => w.length >= 3)
+      .some((w) => txt.includes(' ' + w) || toks.some((n) => w.startsWith(n) || n.startsWith(w))));
+  }
   // Reiter „Fickliste“ auf einer Party-Seite (hinter „Opa-Liste“): alle Ficks dieser Party, alphabetisch
   function flEventTab() {
     if (!isEventPage()) return;
     const eid = eventIdOf(location.pathname);
     const rows = [];
-    for (const p of Object.values(getFl())) for (const m of p.meets || []) if (eid && (String(m.url || '').match(/\/event\/(\d+)\./) || [])[1] === eid) rows.push({ p, m });
+    // Party dieser Seite (für Treffen ohne Link: Datum + Name/Club)
+    const ev = Object.assign(flEventFromDoc(document, location.origin + location.pathname), getEvents()[eid] || {});
+    ev.url = location.origin + location.pathname;
+    const evT = flEvStart(ev);
+    for (const p0 of Object.values(getFl())) {
+      let changed = false;
+      for (const m of p0.meets || []) {
+        const mid = (String(m.url || '').match(/\/event\/(\d+)\./) || [])[1];
+        if (!mid && evT && flMeetFitsEvent(m, ev, evT)) { m.url = ev.url; if (!m.club && ev.club) m.club = ev.club; if (!m.time) m.time = `${pad2f(new Date(evT).getHours())}:${pad2f(new Date(evT).getMinutes())}`; changed = true; }
+      }
+      if (changed) { flHist(p0, `Treffen mit Party verknüpft: ${ev.name || eid}`); flPut(p0); }
+      for (const m of p0.meets || []) if (eid && (String(m.url || '').match(/\/event\/(\d+)\./) || [])[1] === eid) rows.push({ p: p0, m });
+    }
     rows.sort((a, b) => String(a.p.nick || '').localeCompare(String(b.p.nick || ''), 'de', { sensitivity: 'base' }) || meetTs(a.m) - meetTs(b.m));
     let li = document.querySelector('.jaf-fl-ev-tab');
     let pn = document.getElementById('jaf_fl_list');

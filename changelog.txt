@@ -1,6 +1,11 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.79 (23.10.2026)
+- Hamburger-Menü: erster Eintrag „Fickliste“ (mit Symbol) öffnet „Meine Fickliste“
+- Fremdes Profil: Fickliste-Block steht oben in der Badge-Liste (direkt unter der Profilnotiz statt ganz unten) und hat den Link „Zu meiner Fickliste“
+- Party-Seite: Treffen ohne Party-Link werden über Datum und Name/Club erkannt und verknüpft
+
 1.78 (23.10.2026)
 - Fickliste-Menü: Einträge zeigen neben dem Symbol wieder den Text (JOYclub-Menü bekommt den Text in sein internes Textfeld; fehlt er trotzdem, erscheint das Ersatz-Menü)
 

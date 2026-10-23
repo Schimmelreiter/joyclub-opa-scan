@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
 
-Stand: Version 1.78 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 1.79 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -455,7 +455,7 @@ Jede Zustandsänderung öffnet das Popup „Ficklisteneintragung“:
 
 <img src="docs/fickliste-eintragung.png" width="420" alt="Popup Ficklisteneintragung"> <img src="docs/fickliste-zuruecksetzen.png" width="360" alt="Popup Fickstatus zurücksetzen">
 
-Unter der Profilnotiz zeigt das Profil die Einträge (neueste drei, dann „Mehr anzeigen“); der Stift öffnet dasselbe Popup.
+Unter der Profilnotiz (oben in der Liste der Profil-Badges) zeigt das Profil die Einträge (neueste drei, dann „Mehr anzeigen“) und den Link „Zu meiner Fickliste“; der Stift öffnet dasselbe Popup.
 
 <img src="docs/fickliste-profil.png" width="400" alt="Fickliste-Block unter der Profilnotiz">
 
@@ -469,7 +469,7 @@ Beim Setzen eines Zustands und bei jedem späteren Profilbesuch mit Änderungen 
 
 ### Meine Fickliste
 
-Unter **Profil verwalten → Fickliste** (zwischen „Videos“ und „Homepages“, auch als Kachel auf der Startseite der Profilverwaltung): jede Zeile ist ein Treffen. Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Wo“, Clubs (inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
+Unter **Profil verwalten → Fickliste** (zwischen „Videos“ und „Homepages“, auch als Kachel auf der Startseite der Profilverwaltung und als erster Eintrag „Fickliste“ im Hamburger-Menü unter „Profil & Einstellungen“): jede Zeile ist ein Treffen. Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Wo“, Clubs (inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
 
 <img src="docs/fickliste-uebersicht.png" width="700" alt="Seite Meine Fickliste">
 
@@ -493,7 +493,7 @@ Unterhaltungen mit gelöschten Mitgliedern (Nick ohne Profil-Link) und die JOY-T
 
 ### Auf der Party-Seite
 
-Sind Treffen der Fickliste mit einer Party verknüpft, erscheint auf ihrer Seite hinter „Opa-Liste“ der Reiter **„Fickliste“**: alle Ficks dieser Party in alphabetischer Reihenfolge, genauso dargestellt wie in „Meine Fickliste“.
+Sind Treffen der Fickliste mit einer Party verknüpft, erscheint auf ihrer Seite hinter „Opa-Liste“ der Reiter **„Fickliste“**: alle Ficks dieser Party in alphabetischer Reihenfolge, genauso dargestellt wie in „Meine Fickliste“. Treffen ohne Party-Link, deren Datum (auch Vortag ab 17 Uhr) und „wo“/Club zur Party passen, werden dabei automatisch mit ihr verknüpft.
 
 <img src="docs/fickliste-party.png" width="640" alt="Reiter Fickliste auf der Party-Seite">
 
