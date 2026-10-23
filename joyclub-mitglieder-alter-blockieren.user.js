@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.76
+// @version      1.77
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -9371,6 +9371,71 @@
     else rows.sort((a, b) => (v.dir === 'asc' ? 1 : -1) * ((a.m ? meetTs(a.m) : 0) - (b.m ? meetTs(b.m) : 0)));
     return rows;
   }
+  // eine Zeile der Fickliste (Treffen bzw. Person ohne Treffen)
+  function flRowEl(p, m) {
+    const li = flEl('div', 'display:flex;gap:12px;align-items:center;padding:10px;border-radius:8px;background:rgba(128,128,128,.12);cursor:pointer');
+    li.className = 'jaf-fl-row';
+    const nickHref = flDead(p) ? flArchiveUrl(p) : flLiveUrl(p);
+    li.innerHTML = `${flAvatar(p, 56, '6px')}<div style="flex:1;min-width:0">` +
+      `<div class="jaf-fl-l1row" style="display:flex;align-items:center"><span class="jaf-fl-nk" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap">` +
+      `<a class="jaf-fl-nick" href="${escHtml(nickHref)}" target="_blank" style="color:inherit;text-decoration:none">${flNickHtml(p)}</a>` +
+      `${p.type ? `<span style="opacity:.6;font-size:12px">${escHtml(p.type)}</span>` : ''}${flIcon(p.status, { size: 16, redGef: true })}</span>` +
+      `<a class="jaf-fl-arch" href="${escHtml(flArchiveUrl(p))}" target="_blank" style="margin-left:10px;font-size:12.5px;opacity:.75;color:inherit">Profil-Archiv</a></div>` +
+      (m ? `<div style="font-size:13px">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${escHtml(m.wo || 'Party')}</a>` : escHtml(m.wo || '')}` +
+        ` · <span style="${m.club ? 'opacity:.85' : 'opacity:.55;font-style:italic'}">${escHtml(m.club || 'Club unbekannt')}</span></div>` +
+        (m.note ? `<div style="font-size:12.5px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(m.note)}</div>` : '')
+        : '<div style="font-size:13px;opacity:.6">noch keine Treffen</div>') +
+      `</div><div style="text-align:right;font-weight:600;font-size:13px;white-space:nowrap">${m && m.date ? fmtDate(m.date) : ''}<br><span style="opacity:.6;font-weight:normal">${m && m.time ? m.time : ''}</span></div>`;
+    li.addEventListener('click', (e) => {
+      if (e.composedPath().some((x) => x && x.tagName === 'A')) return;
+      flEntryPopup(flGet(p.id), null, { meetId: m && m.id });
+    });
+    return li;
+  }
+  // „Profil-Archiv“ exakt untereinander: Breite der Nick-Spalte über alle sichtbaren Zeilen messen
+  function flAlignNicks(ul) {
+    requestAnimationFrame(() => {
+      const nks = [...ul.querySelectorAll('.jaf-fl-nk')];
+      nks.forEach((e) => { e.style.width = ''; });
+      const w = Math.max(0, ...nks.map((e) => e.getBoundingClientRect().width));
+      nks.forEach((e) => { e.style.width = `${Math.ceil(w)}px`; });
+    });
+  }
+  // Reiter „Fickliste“ auf einer Party-Seite (hinter „Opa-Liste“): alle Ficks dieser Party, alphabetisch
+  function flEventTab() {
+    if (!isEventPage()) return;
+    const eid = eventIdOf(location.pathname);
+    const rows = [];
+    for (const p of Object.values(getFl())) for (const m of p.meets || []) if (eid && (String(m.url || '').match(/\/event\/(\d+)\./) || [])[1] === eid) rows.push({ p, m });
+    rows.sort((a, b) => String(a.p.nick || '').localeCompare(String(b.p.nick || ''), 'de', { sensitivity: 'base' }) || meetTs(a.m) - meetTs(b.m));
+    let li = document.querySelector('.jaf-fl-ev-tab');
+    let pn = document.getElementById('jaf_fl_list');
+    if (!rows.length) { if (li) li.remove(); if (pn) pn.remove(); return; }
+    if (!li) {
+      const opa = document.querySelector('.jaf-opa-list-tab');
+      const dates = document.querySelector('.event_detail_tab_content ul.nav-tabs > li > a[href="#date_pane"]');
+      const after = opa || (dates && dates.closest('li'));
+      const content = document.querySelector('.event_detail_tab_content > .tab-content') || (document.getElementById('information') || {}).parentElement;
+      if (!after || !content) return;
+      li = document.createElement('li');
+      li.setAttribute('role', 'presentation'); li.className = 'jaf-fl-ev-tab'; li.title = 'Fickliste';
+      li.innerHTML = '<a href="#jaf_fl_list" data-toggle="tab" aria-controls="jaf_fl_list">Fickliste</a>';
+      after.after(li);
+      pn = document.createElement('div');
+      pn.id = 'jaf_fl_list'; pn.className = 'tab-pane'; pn.setAttribute('role', 'tabpanel');
+      pn.innerHTML = '<div class="jaf-fl-list" style="display:flex;flex-direction:column;gap:8px;padding:12px 0"></div>';
+      content.appendChild(pn);
+      const tabPane = pn, tabLi = li;
+      li.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); showOwnTab(tabLi, tabPane); flAlignNicks(tabPane); });
+    }
+    const sig = JSON.stringify(rows.map((r) => [r.p.id, r.p.status, r.p.live, r.p.nick, r.m]));
+    const ul = pn.querySelector('.jaf-fl-list');
+    if (ul.__sig === sig) return;
+    ul.__sig = sig;
+    ul.innerHTML = '';
+    for (const { p, m } of rows) ul.appendChild(flRowEl(p, m));
+    flAlignNicks(ul);
+  }
   function flRenderOverview() {
     const c = document.getElementById('c');
     if (!c) return;
@@ -9461,34 +9526,9 @@
     const ul = flEl('div', 'display:flex;flex-direction:column;gap:8px');
     ul.className = 'jaf-fl-list';
     c.appendChild(ul);
-    for (const { p, m } of rows) {
-      const li = flEl('div', 'display:flex;gap:12px;align-items:center;padding:10px;border-radius:8px;background:rgba(128,128,128,.12);cursor:pointer');
-      li.className = 'jaf-fl-row';
-      const nickHref = flDead(p) ? flArchiveUrl(p) : flLiveUrl(p);
-      li.innerHTML = `${flAvatar(p, 56, '6px')}<div style="flex:1;min-width:0">` +
-        `<div class="jaf-fl-l1row" style="display:flex;align-items:center"><span class="jaf-fl-nk" style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap">` +
-        `<a class="jaf-fl-nick" href="${escHtml(nickHref)}" target="_blank" style="color:inherit;text-decoration:none">${flNickHtml(p)}</a>` +
-        `${p.type ? `<span style="opacity:.6;font-size:12px">${escHtml(p.type)}</span>` : ''}${flIcon(p.status, { size: 16, redGef: true })}</span>` +
-        `<a class="jaf-fl-arch" href="${escHtml(flArchiveUrl(p))}" target="_blank" style="margin-left:10px;font-size:12.5px;opacity:.75;color:inherit">Profil-Archiv</a></div>` +
-        (m ? `<div style="font-size:13px">${m.url ? `<a href="${escHtml(m.url)}" target="_blank" style="color:#e2b04a;text-decoration:none">${escHtml(m.wo || 'Party')}</a>` : escHtml(m.wo || '')}` +
-          ` · <span style="${m.club ? 'opacity:.85' : 'opacity:.55;font-style:italic'}">${escHtml(m.club || 'Club unbekannt')}</span></div>` +
-          (m.note ? `<div style="font-size:12.5px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(m.note)}</div>` : '')
-          : '<div style="font-size:13px;opacity:.6">noch keine Treffen</div>') +
-        `</div><div style="text-align:right;font-weight:600;font-size:13px;white-space:nowrap">${m && m.date ? fmtDate(m.date) : ''}<br><span style="opacity:.6;font-weight:normal">${m && m.time ? m.time : ''}</span></div>`;
-      li.addEventListener('click', (e) => {
-        if (e.composedPath().some((x) => x && x.tagName === 'A')) return;
-        flEntryPopup(flGet(p.id), null, { meetId: m && m.id });
-      });
-      ul.appendChild(li);
-    }
+    for (const { p, m } of rows) ul.appendChild(flRowEl(p, m));
     if (!rows.length) ul.appendChild(flEl('div', 'opacity:.6;padding:12px', 'Keine Einträge für diese Auswahl.'));
-    // „Profil-Archiv“ exakt untereinander: Breite der Nick-Spalte über alle sichtbaren Zeilen messen
-    requestAnimationFrame(() => {
-      const nks = [...ul.querySelectorAll('.jaf-fl-nk')];
-      nks.forEach((e) => { e.style.width = ''; });
-      const w = Math.max(0, ...nks.map((e) => e.getBoundingClientRect().width));
-      nks.forEach((e) => { e.style.width = `${Math.ceil(w)}px`; });
-    });
+    flAlignNicks(ul);
     flRenderSide(v);
     flLiveWorker();
   }
@@ -9914,6 +9954,7 @@
       }
     }
     flDecorateCards();
+    flEventTab();
     if (/^\/clubmail\//.test(location.pathname)) flClubMail();
   }
   if (!IN_FRAME) setInterval(() => { try { flTick(); } catch (e) { console.warn('[Alter-Filter] Fickliste', e); } }, 1500);

@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.77 (23.10.2026)
+- Party-Seite: Reiter „Fickliste“ hinter „Opa-Liste“ mit allen Ficks dieser Party (alphabetisch, Darstellung wie „Meine Fickliste“)
+
 1.76 (23.10.2026)
 - Neu: Fickliste – Button zwischen „Match!“ und „ClubMail“ mit fünf Zuständen (Ficken?, Will ich, Gefickt, Nein danke!, Nie wieder!), Menü im JOYclub-Stil, Symbole auf Karten
 - Popup „Ficklisteneintragung“: Profilnotiz, beliebig viele Treffen (wo/am/um/Ficknotiz, Party wählen, Party-Link einlesen), Anmerkungen, „Profil zukünftig ignorieren“ (entsperren → Whitelist; eigene Listen haben beim Limit Vorrang); Party-Vorschläge aus Datumsangaben der Notiz

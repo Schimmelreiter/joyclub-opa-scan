@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
 
-Stand: Version 1.76 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 1.77 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -490,6 +490,12 @@ Hinter „Freunde“ steht der Reiter „Fickliste“; über „Account“ ein K
 Unterhaltungen mit gelöschten Mitgliedern (Nick ohne Profil-Link) und die JOY-Team-Nachricht „Dein Kontakt … hat sich gelöscht“ markieren Einträge der Fickliste sofort als gelöscht; die Anmerkungen aus der Nachricht werden als Profilnotiz archiviert. Ist der Kontakt noch nicht in der Fickliste, steht in der Nachricht „+ Zur Fickliste hinzufügen“ – mit Nick, Anmerkungen und, wenn möglich, der passenden Party.
 
 <img src="docs/fickliste-clubmail.png" width="460" alt="Zusatz in der JOY-Team-Löschmeldung">
+
+### Auf der Party-Seite
+
+Sind Treffen der Fickliste mit einer Party verknüpft, erscheint auf ihrer Seite hinter „Opa-Liste“ der Reiter **„Fickliste“**: alle Ficks dieser Party in alphabetischer Reihenfolge, genauso dargestellt wie in „Meine Fickliste“.
+
+<img src="docs/fickliste-party.png" width="640" alt="Reiter Fickliste auf der Party-Seite">
 
 Jede geöffnete Party-Seite wird (auch rückwirkend für vergangene Partys) mit Name, Beginn, Link und Club gemerkt – so lassen sich alte Treffen zuordnen. In alten Gästelisten tauchen gelöschte Profile nur noch als anonyme oder externe Anmeldung auf.
 
