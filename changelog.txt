@@ -1,6 +1,13 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.82 (24.10.2026)
+- Fickliste: Profile auf anderen Plattformen und Messenger-Kontakte („Auch auf …“, + Profil anderswo) mit einheitlichen Links für Telegram, WhatsApp, Threema und Signal; „Profil gelöscht“ je Profil; Filter „Plattform“
+- Fickliste: Export und Import für den Abgleich mit poppen.de (Format fickliste v1/poppen 2.1, verschlüsselt mit dem Nick), automatisches Verknüpfen über Links und IDs, Rückfrage bei Konflikten, Zusammenfassung
+- Treffen-Links mit Plattform-Symbol; Personen ohne JOYclub-Profil verlinken auf ihr Profil dort
+- ClubMail-Übersicht zählt als Interaktion (Opa-Scan-Button, Teil des Opa-Scans aus dem Menü; Notiz-Quelle „ClubMail“); eigene Konten zählen nie
+- Gelöschte Konten in der ClubMail: Nick durchgestrichen, Link aufs Profil-Archiv, letztes Archivbild statt Platzhalter
+
 1.81 (23.10.2026)
 - Fickliste: Reihenfolge „Nie wieder!“ vor „Nein, danke!“ in Menüs, Filtern und Zählern
 - Meine Fickliste: „Nein, danke!“ beim ersten Aufruf und nach „Filter zurücksetzen“ ausgeblendet; Filter „Was/Wo (enthält)“ und „Wo“ (statt Clubs)

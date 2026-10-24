@@ -167,7 +167,9 @@ Am Ende eine Zusammenfassung je Scan: geprüft, neu ignoriert, verdrängt, „Li
 
 ## Profilbesucher und Interaktionen
 
-Seiten `/my_joy/visitors/` (Reiter „Profilbesuche“, Quelle **Profilbesucher**) und `/my_joy/voting/top/` („Mögen mich“, Quelle **Interaktionen**). JOYclub wechselt die Reiter ohne Neuladen – das Skript folgt der Adresse.
+Seiten `/my_joy/visitors/` (Reiter „Profilbesuche“, Quelle **Profilbesucher**), `/my_joy/voting/top/` („Mögen mich“, Quelle **Interaktionen**) und `/clubmail/` (ClubMail-Übersicht, ebenfalls Quelle **Interaktionen**). JOYclub wechselt die Reiter ohne Neuladen – das Skript folgt der Adresse.
+
+- **ClubMail:** Jede Unterhaltung mit einem Mitglied zählt als Interaktion (Schwellen der Zeile „Interaktionen“, Datum der letzten Nachricht). Nachrichteninhalte werden weder gelesen noch gespeichert. Partys, Clubs, JOY-Team, gelöschte Konten und eigene Konten (eingeloggtes und das Zweitkonto aus „Partys synchronisieren“) zählen nicht; jedes Mitglied zählt nur einmal. Die Notiz nennt „ClubMail“ als Quelle. Der Opa-Scan aus dem Menü prüft die ClubMail zusammen mit „Mögen mich“.
 
 - **Beim Ansehen:** Karten werden eingefärbt wie Gästelisten (rotes X bei Ignorierten, Klick → Popup „Du ignorierst …“), auch nachgeladene. Für bekannte Mitglieder wird das Datum am Abzeichen als „zuletzt gesehen“ gespeichert (siehe Quellen).
 - **Datum:** „Heute“, „Gestern“, Wochentag (der letzte Tag dieses Namens, 2–6 Tage zurück) oder `TT.MM.` (laufendes Jahr, läge es in der Zukunft: Vorjahr).
@@ -494,9 +496,37 @@ Gehört eine Person zu mehreren Profilen (z. B. Paarprofil, ihr eigenes und sein
 
 <img src="docs/fickliste-verknuepfen.png" width="420" alt="Popup Verknüpfte Profile">
 
+### Profile anderswo („Auch auf …“)
+
+Jede Person kann Profile auf anderen Plattformen und Messenger-Kontakte haben: poppen.de, xHamster, Eronity, SpicyMatch, Kaufmich, Fetish.com, Gays.com, Telegram, WhatsApp, Threema, Signal oder „Andere …“ (freier Name). „+ Profil anderswo“ im Fickliste-Block öffnet die Verwaltung; je Profil lässt sich „Profil gelöscht“ setzen. Im Block, in „Meine Fickliste“ und bei Treffen-Links zeigt ein kleines Plattform-Symbol die Herkunft; „Meine Fickliste“ hat dafür den Filter **Plattform**.
+
+| Plattform | Eingabe | gespeichert als |
+|---|---|---|
+| Telegram | `@Name`, `t.me/Name`, `telegram.me/Name` | `https://t.me/Name` (Vergleich ohne Groß/klein, Anzeige wie eingegeben) |
+| WhatsApp | Telefonnummer in jeder Schreibweise oder `wa.me`-Link | `https://wa.me/<Ländervorwahl+Nummer>` (ohne Vorwahl: +49), Anzeige „+49 177 1234567“ |
+| Threema | 8-stellige ID oder `threema.id`-Link | `https://threema.id/ID` (Großbuchstaben) |
+| Signal | Telefonnummer / `signal.me`-Link / Benutzername | `https://signal.me/#p/+49…`; Benutzername nur als Text mit Kopieren-Knopf |
+| andere | Profil-Link oder Name | Link vollständig |
+
+Unter poppen.de schlägt die Verwaltung importierte poppen-Einträge vor; ein Klick führt sie mit dieser Person zusammen (gemeinsamer Status – der neuere gewinnt –, alle Treffen und Profile).
+
+<img src="docs/fickliste-auch-auf.png" width="420" alt="Popup Auch auf">
+
+### Abgleich mit poppen.de (Export/Import)
+
+„Exportieren“ und „Importieren“ in „Meine Fickliste“ tauschen die Fickliste mit dem Skript auf poppen.de aus (Datei oder Zwischenablage). Format `fickliste` v1 (poppen 2.1): Exporte sind mit dem eigenen Nick verschlüsselt (AES-GCM 256, PBKDF2-SHA256, 150 000 Runden), unverschlüsselte Dateien werden auch gelesen.
+
+- **Erkennen:** Jeder Link wird mit allen bekannten Profilen verglichen – vereinheitlicht (Groß/klein, http/https, www., Umlaut-Kodierung, ?-Zusätze egal) und über die Profil-ID. Treffer → Verknüpfen und alle weiteren Links übernehmen; passt ein Eintrag zu zwei verschiedenen Personen, fragt das Skript „Zusammenführen / Getrennt lassen“; ohne Treffer entsteht eine neue Person (der Nick verlinkt dann auf ihr Profil dort, „Profil-Archiv“ gibt es nur mit JOYclub-Ständen).
+- **Status:** je Profil gewinnt die neuere Änderung; ändert poppen.de den Status einer Person, gilt er für das primäre Profil und die synchron gehaltenen.
+- **Treffen:** gleiche Treffen-ID → nur Fehlendes ergänzen; sonst gleich bei Plattform, Profil, Datum, Was, Wo und Link; ansonsten neu – nie überschrieben. Felder: `where` = „was“, `club` = „wo“.
+- **Verknüpfte JOYclub-Profile** bleiben vollständig erhalten (eigener Status, „synchron halten“, Treffen je Profil); unbekannte Felder werden unverändert durchgereicht.
+- Am Ende: neu / automatisch verknüpft / Konflikte / unverändert.
+
+<img src="docs/fickliste-import.png" width="420" alt="Popup Import">
+
 ### Gelöschte Kontakte (ClubMail)
 
-Unterhaltungen mit gelöschten Mitgliedern (Nick ohne Profil-Link) und die JOY-Team-Nachricht „Dein Kontakt … hat sich gelöscht“ markieren Einträge der Fickliste sofort als gelöscht; die Anmerkungen aus der Nachricht werden als Profilnotiz archiviert. Ist der Kontakt noch nicht in der Fickliste, steht in der Nachricht „+ Zur Fickliste hinzufügen“ – mit Nick, Anmerkungen und, wenn möglich, der passenden Party.
+Unterhaltungen mit gelöschten Mitgliedern (Nick ohne Profil-Link) und die JOY-Team-Nachricht „Dein Kontakt … hat sich gelöscht“ markieren Einträge der Fickliste sofort als gelöscht. Ist das Mitglied in der Fickliste, erscheint sein Nick durchgestrichen, ein Klick öffnet das Profil-Archiv und statt des Platzhalters steht das letzte Profilbild aus dem Archiv (unbekannte Konten bleiben, wie JOYclub sie zeigt); die Anmerkungen aus der Nachricht werden als Profilnotiz archiviert. Ist der Kontakt noch nicht in der Fickliste, steht in der Nachricht „+ Zur Fickliste hinzufügen“ – mit Nick, Anmerkungen und, wenn möglich, der passenden Party.
 
 <img src="docs/fickliste-clubmail.png" width="460" alt="Zusatz in der JOY-Team-Löschmeldung">
 
@@ -555,8 +585,9 @@ Die CSV-Exporte (`;`, Excel-tauglich) unterhalb der Sicherung dienen nur der Feh
 ## Technisches
 
 - **Speicher:** große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen als ein Tampermonkey-Wert je Mitglied (`jaf_log|/profile/…`); geändert wird nur, was sich ändert, andere Tabs werden über `GM_addValueChangeListener` informiert. Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`; ab 1.76 `GM_xmlhttpRequest` mit `@connect image-user.feig-partner.de` (Profilbilder für das Profil-Archiv – Tampermonkey fragt einmal nach).
-- **Fickliste:** `jaf_fl` (Personen), `jaf_fl_groups` (verknüpfte Profile), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
+- **Fickliste:** `jaf_fl` (Personen, mit `profiles` für andere Plattformen und `statusAt`), `jaf_fl_groups` (verknüpfte Profile), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
 - **Orts-URLs:** ä→ae, ö→oe, ü→ue, ß→ss; Leerzeichen und Klammern → „_“ (z. B. „Mülheim (Ruhr)“ → `muelheim_ruhr`).
+- **Eigene Konten:** `jaf_own_accs` (Zweitkonto aus „Partys synchronisieren“) – zählen nie als Interaktion.
 - **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
 - **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
 - **Fehleranzeige:** Startfehler erscheinen in einem Panel mit „Alles zurücksetzen“.
