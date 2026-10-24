@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.86
+// @version      1.87
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -27,131 +27,230 @@
 
 (function () {
   'use strict';
-  // ---------- API-Rekorder (läuft ab Seitenstart, nur wenn in den Experten-Einstellungen eingeschaltet) ----------
-  // Schneidet fetch/XMLHttpRequest mit: je Adresse und Payload-Aufbau die ersten 2 Beispiele, Dauerläufer nur einmal,
-  // Listen auf 2 Einträge + Gesamtzahl gekürzt. Vor dem Speichern geschwärzt: E-Mail, Passwörter/Token/Schlüssel,
-  // Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt.
+  // ---------- API-Rekorder 2 (läuft ab Seitenstart: wenn eingeschaltet oder wenn eine Schnittstelle des Skripts 5× in Folge versagte) ----------
+  // Je Adresse/Payload-Aufbau die ersten 2 Beispiele (Dauerläufer 1), Listen auf 2 Einträge + Gesamtzahl gekürzt.
+  // Geschwärzt: E-Mail, Passwörter/Token/Schlüssel/Sitzungskennungen, Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt.
+  // Zu jedem Aufruf: Seite, Titel, Seitenart, Auslöser (letzter Klick/Scrollen/Laden), Frame; dazu eine Zeitleiste.
   const K_API_REC = 'jaf_api_rec';   // an/aus
-  const K_API_LOG = 'jaf_api_log';   // { key: { m, path, sig, n, first, last, poll, isNew, ex: [{ ts, url, status, req, res }] } }
-  const API_MAX_KEYS = 600;
+  const K_API_LOG = 'jaf_api_log';   // { key: { m, path, sig, op, n, first, last, poll, isNew, feat, ex: [{ ts, when, url, status, ctx, hdr, req, res }] } }
+  const K_API_TL = 'jaf_api_tl';     // Zeitleiste [{ ts, t: 'seite'|'klick'|'aufruf', … }]
+  const K_API_FB = 'jaf_api_fb';     // Rückfälle je Vorgang { feat: { n, last, err, rec: ts bis } }
+  const API_MAX_KEYS = 800;
+  const API_FB_LIMIT = 5;            // so viele Rückfälle in Folge → Aufrufe dieses Vorgangs wieder mitschneiden
+  // Vorgänge des Skripts mit Schnittstelle → ihre Aufrufe (werden nur bei Rückfällen wieder erfasst)
+  const API_FEAT_RE = {
+    Ignorieren: /\/contact\/ignore$/,
+    Notiz: /\/user_fav\/user_note$|\/profilev3\/save_note$/,
+    Gästeliste: /\/event\/guests_scroll_data$/,
+    ClubMail: /\/clubmailv3\/get_conversation_list$/,
+  };
+  // bereits untersucht bzw. uninteressant → nicht mehr erfassen
+  const API_SKIP_RE = [
+    /^cfnimg\.joyclub\./, /^image-user\./, /\/smiley\//, /\/adsl\//, /\/newsbox\//, /\/frontend_vector_event\//, /\/support\/zendesk/, /\/notification\/auto_update/,
+    /\/clubmailv3\/(clubmail_auto_update|get_latest_message_list_of_conversation|read_conversation|get_conversation_info|send_personal_message|switch_archive_conversation|reload_conversation|get_hint_list_for_message)$/,
+    /\/my_joy\/(visits_likes_banner|features|messenger_contacts)$/, /\/geo\/suggestion\//, /\/profile\/beautify_text$/, /\/webauth\/access_token$/,
+    /apiv2\.joyclub\.com\/users\/:id\/notes/, /\/ajax\/contact_layer/, /^identity\.joyclub\.com\/authorize/,
+  ];
+  const API_SKIP_OPS = new Set(['ownClubmailUserSettings', 'getOwnClubMailUserSettings', 'isAuthorisationAllowed', 'getAchievementListByUserId', 'getAvatarByUserId', 'getGroupCount',
+    'getMainAlbum', 'getProfileAlbumList', 'profileAlbumGetRegularAlbumByProfileAlbumId', 'profileAlbumGetUserImage', 'getProfileAlbumUserById', 'getProfileMainAlbumByUserId',
+    'getFeedSettingsByUserId', 'getFriendFeedByUserId', 'getSeekingGenderList', 'getOwnCoinBalance', 'getReceivedComplimentsByUserId', 'getReceivedLikesByUserId', 'getMatchesByUserId',
+    'getProfileVisitors', 'markGroupFeedAsRead', 'getGroupFeedByGroupId', 'getGroupFeedSubscriptionByGroupId', 'readMyJoyVisitors', 'readMyJoyReceivedLikes', 'getEventPaymentConfig']);
   const apiRedactKey = (k) => {
     const s = String(k).toLowerCase();
-    if (/pass|token|secret|auth|session|csrf|xsrf|cookie|signature|apikey|api_key|bearer|credential|nonce|otp/.test(s)) return 'Zugang';
+    if (/pass|token|secret|auth|session|csrf|xsrf|cookie|signature|apikey|api_key|bearer|credential|nonce|otp|cache_killer|jwt/.test(s)) return 'Zugang';
     if (/mail/.test(s)) return 'E-Mail';
     if (/phone|telefon|mobile|handy|whatsapp|msisdn/.test(s)) return 'Telefon';
     if (/^(lat|lng|lon|long|latitude|longitude|geo|geolocation|coords?|coordinates|zip|zipcode|postal|postcode|plz|street|strasse|address|adresse|housenumber)$/.test(s)) return 'Geo';
-    if (/^(text|message|messages|msg|body|content|preview|snippet|subject|description|about|aboutme|about_me|motto|teaser|profiletext|profile_text|bio|comment|note|notes|caption|html)$/.test(s) || /message|profiletext|freetext/.test(s)) return 'Text';
+    if (/^(text|message|messages|msg|body|content|preview|snippet|subject|description|about|aboutme|about_me|motto|teaser|profiletext|profile_text|bio|comment|note|notes|caption|html|user_note|alt_text|received_text)$/.test(s) || /message_content|profiletext|freetext/.test(s)) return 'Text';
     return '';
   };
-  function apiRedact(v, depth = 0, keyHint = '') {
+  const apiJsonish = (s) => typeof s === 'string' && /^\s*[[{]/.test(s) && (() => { try { JSON.parse(s); return true; } catch (e) { return false; } })();
+  function apiRedact(v, depth = 0, keyHint = '', key = '') {
     if (v == null) return v;
     if (typeof v === 'string') {
+      if (key === 'query' && /^\s*(query|mutation|fragment)\b/.test(v)) return v.length > 20000 ? v.slice(0, 20000) + '…' : v; // GraphQL-Abfrage: vollständig
+      if (apiJsonish(v) && keyHint !== 'Text' && keyHint !== 'Zugang') return { '(JSON)': apiRedact(JSON.parse(v), depth + 1, '', key) };
       if (keyHint) return `[${keyHint}]`;
       let s = v.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[E-Mail]').replace(/(?:\+|00)\d[\d\s/()-]{7,}\d|\b0\d{2,4}[\s/-]?\d{5,}\b/g, '[Telefon]');
       if (/^(Bearer |ey[A-Za-z0-9_-]{10,}\.)/.test(s)) s = '[Zugang]';
-      return s.length > 160 ? `${s.slice(0, 80)}… (${s.length} Zeichen)` : s;
+      return s.length > 300 ? `${s.slice(0, 160)}… (${s.length} Zeichen)` : s;
     }
     if (typeof v === 'number' || typeof v === 'boolean') return keyHint && keyHint !== 'Text' ? `[${keyHint}]` : v;
-    if (depth > 8) return '[…]';
+    if (depth > 16) return '[…]';
     if (Array.isArray(v)) {
-      const out = v.slice(0, 2).map((x) => apiRedact(x, depth + 1, keyHint));
+      const out = v.slice(0, 2).map((x) => apiRedact(x, depth + 1, keyHint, key));
       if (v.length > 2) out.push({ '…': `insgesamt ${v.length} Einträge` });
       return out;
     }
     if (typeof v === 'object') {
       const o = {};
-      for (const [k, x] of Object.entries(v)) o[k] = apiRedact(x, depth + 1, apiRedactKey(k) || (keyHint === 'Geo' ? 'Geo' : ''));
+      for (const [k, x] of Object.entries(v)) o[k] = apiRedact(x, depth + 1, apiRedactKey(k) || (keyHint === 'Geo' ? 'Geo' : ''), k);
       return o;
     }
     return String(v);
   }
   const apiShape = (v, d = 0) => {
-    if (v == null || typeof v !== 'object' || d > 2) return typeof v;
+    if (v == null || typeof v !== 'object' || d > 3) return typeof v;
     if (Array.isArray(v)) return '[' + (v.length ? apiShape(v[0], d + 1) : '') + ']';
     return '{' + Object.keys(v).sort().map((k) => `${k}:${apiShape(v[k], d + 1)}`).join(',') + '}';
   };
   function apiPath(u) {
     let url;
-    try { url = new URL(u, location.href); } catch (e) { return { path: String(u).slice(0, 200), query: '', host: '' }; }
+    try { url = new URL(u, location.href); } catch (e) { return { path: String(u).slice(0, 200), qk: '', host: '', example: '' }; }
     const path = url.pathname.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':uuid').replace(/\b[0-9a-f]{24,}\b/gi, ':hex').replace(/\d{3,}/g, ':id');
     const qk = [...url.searchParams.keys()].sort();
     const q = new URLSearchParams();
     for (const [k, x] of url.searchParams) q.append(k, apiRedactKey(k) ? `[${apiRedactKey(k)}]` : apiRedact(x));
     return { host: url.host, path, qk: qk.join(','), example: url.origin + url.pathname + (q.toString() ? '?' + q.toString() : '') };
   }
+  // Request-Body → Objekt (Formulare: data-JSON wird zerlegt)
   function apiParseBody(b) {
     if (b == null) return null;
+    const unJson = (o) => { for (const k of Object.keys(o)) if (apiJsonish(o[k])) o[k] = JSON.parse(o[k]); return o; };
     if (typeof b === 'string') {
       try { return JSON.parse(b); } catch (e) { /* weiter */ }
-      if (/^[\w.%[\]-]+=/.test(b)) { const o = {}; for (const [k, x] of new URLSearchParams(b)) o[k] = x; return o; }
+      if (/^[\w.%[\]-]+=/.test(b)) { const o = {}; for (const [k, x] of new URLSearchParams(b)) o[k] = x; return unJson(o); }
       return `(Text, ${b.length} Zeichen)`;
     }
-    if (typeof FormData !== 'undefined' && b instanceof FormData) { const o = {}; for (const [k, x] of b.entries()) o[k] = typeof x === 'string' ? x : '(Datei)'; return o; }
-    if (typeof URLSearchParams !== 'undefined' && b instanceof URLSearchParams) { const o = {}; for (const [k, x] of b) o[k] = x; return o; }
+    if (typeof FormData !== 'undefined' && b instanceof FormData) { const o = {}; for (const [k, x] of b.entries()) o[k] = typeof x === 'string' ? x : '(Datei)'; return unJson(o); }
+    if (typeof URLSearchParams !== 'undefined' && b instanceof URLSearchParams) { const o = {}; for (const [k, x] of b) o[k] = x; return unJson(o); }
     return `(${Object.prototype.toString.call(b).slice(8, -1)})`;
   }
+  const apiHdrNames = (h) => {
+    try {
+      if (!h) return [];
+      if (typeof Headers !== 'undefined' && h instanceof Headers) return [...h.keys()];
+      if (Array.isArray(h)) return h.map((x) => x[0]);
+      return Object.keys(h);
+    } catch (e) { return []; }
+  };
+  // ---- Zusammenhang: Seite, Auslöser, Zeitleiste ----
+  const apiLocal = (t) => { const d = new Date(t); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+  function apiPageKind(p = location.pathname) {
+    const L = [[/^\/profile\/\d+\./, 'Profil'], [/^\/my\/\d+\./, 'Profil'], [/^\/event\/\d+\./, 'Party-Seite'], [/^\/ignore/, 'Ignorierliste'], [/^\/clubmail/, 'ClubMail'],
+      [/^\/my_joy\/visitors/, 'Profilbesuche'], [/^\/my_joy\/voting/, 'Mögen mich'], [/^\/kontakte/, 'Kontakte'], [/^\/gruppen?\/|^\/group/, 'Gruppe'], [/^\/dates_partys\/events\/registrations/, 'Eventanmeldungen'],
+      [/^\/dates_partys/, 'Dates & Partys'], [/^\/(search|suche|mitglieder)/, 'Mitgliedersuche'], [/^\/edit\//, 'Profil verwalten'], [/^\/my_joy\/feed/, 'Startseite/Feed']];
+    for (const [re, n] of L) if (re.test(p)) return n;
+    return 'sonstige';
+  }
+  const apiCtx = { click: null, scroll: 0, load: Date.now() };
+  const apiFrameName = () => { try { return window.top === window ? '' : (/^jaf-/.test(window.name || '') ? 'Hintergrund-Frame des Skripts' : 'Frame'); } catch (e) { return 'Frame'; } };
+  function apiTrigger(now) {
+    if (apiCtx.click && now - apiCtx.click.ts < 3000) return `Klick: ${apiCtx.click.label}`;
+    if (now - apiCtx.scroll < 2000) return 'beim Scrollen';
+    if (now - apiCtx.load < 6000) return 'beim Laden';
+    return 'automatisch (z. B. Aktualisierung)';
+  }
+  const apiPageInfo = () => ({ page: location.pathname, title: (document.title || '').slice(0, 80), kind: apiPageKind(), frame: apiFrameName() });
+  let apiTl = null;
+  function apiTlAdd(e) { (apiTl = apiTl || []).push(Object.assign({ ts: Date.now(), when: apiLocal(Date.now()) }, e)); }
   let apiBuf = null;
   let apiFlushT = 0;
   function apiFlush() {
     apiFlushT = 0;
-    if (!apiBuf) return;
-    const log = GM_getValue(K_API_LOG, {}) || {};
-    for (const [k, e] of Object.entries(apiBuf)) {
-      const o = log[k];
-      if (!o) { if (Object.keys(log).length < API_MAX_KEYS) log[k] = e; continue; }
-      o.n += e.n; o.last = e.last;
-      if (e.poll) o.poll = true;
-      for (const x of e.ex) if (o.ex.length < (o.poll ? 1 : 2)) o.ex.push(x);
+    if (apiBuf) {
+      const log = GM_getValue(K_API_LOG, {}) || {};
+      for (const [k, e] of Object.entries(apiBuf)) {
+        const o = log[k];
+        if (!o) { if (Object.keys(log).length < API_MAX_KEYS) log[k] = e; continue; }
+        o.n += e.n; o.last = e.last;
+        if (e.poll) o.poll = true;
+        for (const x of e.ex) if (o.ex.length < (o.poll ? 1 : 2)) o.ex.push(x);
+      }
+      apiBuf = null;
+      GM_setValue(K_API_LOG, log);
     }
-    apiBuf = null;
-    GM_setValue(K_API_LOG, log);
+    if (apiTl) {
+      const tl = (GM_getValue(K_API_TL, []) || []).concat(apiTl).slice(-3000);
+      apiTl = null;
+      GM_setValue(K_API_TL, tl);
+    }
   }
-  function apiNote(method, url, reqBody, status, resBody, ctype) {
+  const apiSched = () => { if (!apiFlushT) apiFlushT = setTimeout(apiFlush, 3000); };
+  // aktive Erfassung: global an, oder Vorgang mit Rückfällen
+  function apiRecState() {
+    let on = false, forced = [];
+    try {
+      on = !!GM_getValue(K_API_REC, false);
+      const fb = GM_getValue(K_API_FB, {}) || {};
+      forced = Object.entries(fb).filter(([, x]) => x && x.rec && x.rec > Date.now()).map(([f]) => f);
+    } catch (e) { /* egal */ }
+    return { on, forced };
+  }
+  const API_STATE = apiRecState();
+  function apiNote(method, url, reqBody, status, resBody, ctype, hdrs) {
     try {
       const p = apiPath(url);
       if (!/joyclub\.(de|com)$/.test(p.host)) return;
       if (/\.(js|css|png|jpe?g|gif|webp|svg|woff2?|ico|mp4)$/i.test(p.path)) return;
+      if (/html|image\/|font\/|css|javascript/i.test(ctype || '')) return; // ganze Seiten und Dateien sind keine Schnittstellen
+      const full = p.host + p.path;
+      const feat = Object.keys(API_FEAT_RE).find((f) => API_FEAT_RE[f].test(full)) || '';
+      const forced = feat && API_STATE.forced.includes(feat);
+      if (!API_STATE.on && !forced) return;
+      if (feat && !forced) return;                       // bekannt und funktioniert
+      if (API_SKIP_RE.some((re) => re.test(full))) return;
       const req = apiParseBody(reqBody);
-      const key = `${method.toUpperCase()} ${p.host}${p.path}?${p.qk} ${apiShape(req)}`;
+      const op = req && typeof req === 'object' && req.operationName ? req.operationName : '';
+      if (op && API_SKIP_OPS.has(op)) return;
+      const key = `${method.toUpperCase()} ${full}?${p.qk} ${op ? 'op=' + op + ' ' : ''}${apiShape(req)}`;
       apiBuf = apiBuf || {};
       const now = Date.now();
-      let e = apiBuf[key];
       // Dauerläufer: mind. 3 Aufrufe in gleichmäßigen Abständen (≥ 3 s) → nur ein Beispiel
       const known = (window.__jafApiSeen = window.__jafApiSeen || {});
       const tl = (known[key] = (known[key] || []).concat(now).slice(-3));
       const d1 = tl.length === 3 ? tl[1] - tl[0] : 0, d2 = tl.length === 3 ? tl[2] - tl[1] : 0;
       const poll = d1 >= 3000 && d2 >= 3000 && Math.abs(d1 - d2) <= Math.max(d1, d2) * 0.25;
-      const prev = tl.length > 1;
-      if (!e) e = apiBuf[key] = { m: method.toUpperCase(), path: p.host + p.path, sig: apiShape(req), n: 0, first: now, last: now, poll: false, isNew: true, ex: [] };
+      let e = apiBuf[key];
+      if (!e) e = apiBuf[key] = { m: method.toUpperCase(), path: full, sig: apiShape(req), op, n: 0, first: now, last: now, poll: false, isNew: true, feat: forced ? feat : '', ex: [] };
       e.n++; e.last = now;
       if (poll) e.poll = true;
-      if (e.ex.length < (e.poll ? 1 : 2) && !(poll && prev)) {
+      const ctx = Object.assign(apiPageInfo(), { trigger: apiTrigger(now) });
+      if (e.ex.length < (e.poll ? 1 : 2) && !poll) {
         let res = resBody;
         if (typeof res === 'string') { try { res = JSON.parse(res); } catch (x) { res = `(${ctype || 'Text'}, ${res.length} Zeichen)`; } }
-        e.ex.push({ ts: now, url: p.example, status, req: apiRedact(req), res: apiRedact(res) });
+        e.ex.push({ ts: now, when: apiLocal(now), url: p.example, status, ctx, hdr: (hdrs || []).map((h) => String(h).toLowerCase()), req: apiRedact(req), res: apiRedact(res) });
       }
-      if (!apiFlushT) apiFlushT = setTimeout(apiFlush, 3000);
+      apiTlAdd({ t: 'aufruf', key: `${method.toUpperCase()} ${full}${op ? ' ' + op : ''}`, status, page: ctx.page, trigger: ctx.trigger, frame: ctx.frame });
+      apiSched();
     } catch (err) { /* Rekorder darf nie stören */ }
   }
   (function apiHook() {
-    let on = false;
-    try { on = !!GM_getValue(K_API_REC, false); } catch (e) { on = false; }
-    if (!on) return;
+    if (!API_STATE.on && !API_STATE.forced.length) return;
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     // Firefox: Funktionen für die Seite freigeben
     const ex = (f) => { try { return typeof exportFunction === 'function' ? exportFunction(f, W) : f; } catch (e) { return f; } };
+    // Zusammenhang: Seitenaufruf, Klicks (nur Beschriftung), Scrollen
+    try {
+      document.addEventListener('DOMContentLoaded', () => { apiCtx.load = Date.now(); if (API_STATE.on) { apiTlAdd(Object.assign({ t: 'seite' }, apiPageInfo())); apiSched(); } }, { once: true });
+      document.addEventListener('click', (ev) => {
+        try {
+          const path = ev.composedPath ? ev.composedPath() : [ev.target];
+          const el = path.find((x) => x && x.nodeType === 1 && (/^(A|BUTTON|J-BUTTON|J-CONTROL-BUTTON|J-CONTEXT-MENU-ITEM|J-PILL|LABEL|SUMMARY)$/.test(x.tagName) || (x.getAttribute && x.getAttribute('role') === 'button'))) || path[0];
+          if (!el || !el.getAttribute) return;
+          if (/^(INPUT|TEXTAREA)$/.test(el.tagName) && !/^(checkbox|radio|submit|button)$/i.test(el.type || '')) return;
+          const lab = (el.getAttribute('aria-label') || el.getAttribute('title') || (el.textContent || '').replace(/\s+/g, ' ').trim() || el.tagName.toLowerCase()).slice(0, 60);
+          apiCtx.click = { ts: Date.now(), label: lab };
+          if (API_STATE.on) { apiTlAdd(Object.assign({ t: 'klick', label: lab }, apiPageInfo())); apiSched(); }
+        } catch (e) { /* egal */ }
+      }, true);
+      window.addEventListener('scroll', () => { apiCtx.scroll = Date.now(); }, true);
+    } catch (e) { /* egal */ }
     try {
       const of = W.fetch;
       if (typeof of === 'function' && !of.__jafRec) {
         const nf = function (input, init) {
-          const url = typeof input === 'string' ? input : (input && input.url) || String(input);
-          const method = (init && init.method) || (input && input.method) || 'GET';
-          const body = init && init.body;
+          const isReq = input && typeof input === 'object' && typeof input.url === 'string';
+          const url = typeof input === 'string' ? input : (isReq ? input.url : String(input));
+          const method = (init && init.method) || (isReq && input.method) || 'GET';
+          const hdrs = apiHdrNames(init && init.headers).concat(isReq ? apiHdrNames(input.headers) : []);
+          let bodyP = Promise.resolve(init && init.body);
+          if (isReq && !(init && init.body) && !/^(GET|HEAD)$/i.test(method)) { try { bodyP = input.clone().text(); } catch (e) { /* egal */ } }
           const pr = of.apply(this, arguments);
           pr.then((r) => {
             const ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
-            if (/json/.test(ct)) r.clone().text().then((t) => apiNote(method, url, body, r.status, t, ct)).catch(() => apiNote(method, url, body, r.status, null, ct));
-            else apiNote(method, url, body, r.status, `(${ct || '?'})`, ct);
+            const resP = /json/.test(ct) ? r.clone().text() : Promise.resolve(`(${ct || '?'})`);
+            Promise.all([bodyP.catch(() => null), resP.catch(() => null)]).then(([b, t]) => apiNote(method, url, b, r.status, t, ct, hdrs));
           }).catch(() => {});
           return pr;
         };
@@ -160,15 +259,16 @@
       }
       const XP = W.XMLHttpRequest && W.XMLHttpRequest.prototype;
       if (XP && !XP.__jafRec) {
-        const oo = XP.open, os = XP.send;
-        XP.open = ex(function (m, u) { this.__jafM = m; this.__jafU = u; return oo.apply(this, arguments); });
+        const oo = XP.open, os = XP.send, oh = XP.setRequestHeader;
+        XP.open = ex(function (m, u) { this.__jafM = m; this.__jafU = u; this.__jafH = []; return oo.apply(this, arguments); });
+        XP.setRequestHeader = ex(function (n) { try { (this.__jafH = this.__jafH || []).push(n); } catch (e) { /* egal */ } return oh.apply(this, arguments); });
         XP.send = ex(function (b) {
           const x = this;
           try {
             x.addEventListener('load', () => {
               let t = null; const ct = x.getResponseHeader ? x.getResponseHeader('content-type') || '' : '';
               try { t = (x.responseType === '' || x.responseType === 'text') ? x.responseText : (x.responseType === 'json' ? JSON.stringify(x.response) : `(${x.responseType})`); } catch (e) { t = null; }
-              apiNote(x.__jafM || 'GET', x.__jafU || '', b, x.status, /json/.test(ct) || x.responseType === 'json' ? t : `(${ct || '?'})`, ct);
+              apiNote(x.__jafM || 'GET', x.__jafU || '', b, x.status, /json/.test(ct) || x.responseType === 'json' ? t : `(${ct || '?'})`, ct, x.__jafH);
             });
           } catch (e) { /* egal */ }
           return os.apply(this, arguments);
@@ -3086,6 +3186,13 @@
     return r.ok;
   }
   async function bgUnignore(id) {
+    if (!CONFIG.DRY_RUN) {
+      const a = await apiIgnore(id, false);
+      if (a.ok) { ignoredSet(id, '', false); return { ok: true, msg: 'entsperrt (Schnittstelle)' }; }
+    }
+    return bgUnignorePage(id);
+  }
+  async function bgUnignorePage(id) {
     const doc = await fetchDoc(ignoreUrl());
     const f = doc.getElementById('user_ignore_stop_' + id);
     if (!f) { saveIgnored(parseIgnoreList(doc)); return { ok: true, msg: 'stand nicht (mehr) auf der Ignorierliste' }; }
@@ -3096,6 +3203,13 @@
     return doc2.getElementById('user_ignore_stop_' + id) ? { ok: false, msg: 'Entsperren fehlgeschlagen – steht noch auf der Ignorierliste' } : { ok: true, msg: 'entsperrt' };
   }
   async function bgIgnore(id, name) {
+    if (!CONFIG.DRY_RUN) {
+      const a = await apiIgnore(id, true);
+      if (a.ok) { ignoredSet(id, name, true); return { ok: true, msg: 'ignoriert (Schnittstelle)' }; }
+    }
+    return bgIgnorePage(id, name);
+  }
+  async function bgIgnorePage(id, name) {
     const doc = await fetchDoc(ignoreUrl());
     if (doc.getElementById('user_ignore_stop_' + id)) { saveIgnored(parseIgnoreList(doc)); return { ok: true, msg: 'war bereits ignoriert' }; }
     const f = doc.getElementById('user_ignore');
@@ -3811,7 +3925,14 @@
   // ---- Gästeliste unsichtbar komplett laden: dieselbe Event-Seite in einem verdeckten Frame ----
   // Der Frame (Name „jaf-bg-<m|alle>“) öffnet dort den Reiter, lädt per Scrollen/„Mehr Ergebnisse“ alles nach
   // und schickt die Einträge (HTML) zurück. Auf der sichtbaren Seite ändert sich bis dahin nichts.
-  function bgLoadGuests(gender, onProgress, timeoutMs = 180000) {
+  async function bgLoadGuests(gender, onProgress, timeoutMs = 180000) {
+    const eid = eventIdOf(location.pathname);
+    if (eid && gender === 'alle') {
+      try { const l = await apiGuests(eid, 'alle', onProgress); if (l && l.length) return l; } catch (e) { /* Seitenweg */ }
+    }
+    return bgLoadGuestsFrame(gender, onProgress, timeoutMs);
+  }
+  function bgLoadGuestsFrame(gender, onProgress, timeoutMs = 180000) {
     return new Promise((resolve, reject) => {
       const f = document.createElement('iframe');
       f.name = 'jaf-bg-' + gender;
@@ -5404,6 +5525,193 @@
 
 
 
+
+  // ---------- Schnittstellen (API) mit Rückfall auf den Seitenweg ----------
+  // Formular-Aufrufe wie JOYclub selbst: cache_killer (Attribut data-cache-killer der Seite) + data (JSON).
+  // Gelesen-Markierungen (readMyJoy…) ruft das Skript nie auf.
+  function apiCacheKiller() {
+    const el = document.querySelector('[data-cache-killer]');
+    const v = el && el.getAttribute('data-cache-killer');
+    if (v) { if (GM_getValue('jaf_ck', '') !== v) GM_setValue('jaf_ck', v); return v; }
+    return GM_getValue('jaf_ck', '') || '';
+  }
+  async function joyPost(path, data, timeout = 20000) {
+    const ck = apiCacheKiller();
+    if (!ck) throw new Error('cache_killer unbekannt');
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const t = ctl ? setTimeout(() => ctl.abort(), timeout) : 0;
+    try {
+      const r = await fetch(location.origin + path, {
+        method: 'POST', credentials: 'include', signal: ctl ? ctl.signal : undefined,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
+        body: new URLSearchParams({ cache_killer: ck, data: JSON.stringify(data) }).toString(),
+      });
+      const j = await r.json();
+      if (!r.ok || !j || (j.status_code && j.status_code !== 200) || (j.error && j.error.code)) throw new Error(`HTTP ${r.status}${j && j.error && j.error.message ? ' – ' + j.error.message : ''}`);
+      return j.content;
+    } finally { if (t) clearTimeout(t); }
+  }
+  async function joyGet(path) {
+    const r = await fetch(location.origin + path, { credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+    const j = await r.json();
+    if (!r.ok || !j || (j.status_code && j.status_code !== 200) || (j.error && j.error.code)) throw new Error(`HTTP ${r.status}${j && j.error && j.error.message ? ' – ' + j.error.message : ''}`);
+    return j.content;
+  }
+  // Rückfälle zählen; nach API_FB_LIMIT in Folge: Aufrufe dieses Vorgangs 7 Tage mitschneiden
+  function apiResult(feat, ok, err = '') {
+    const fb = GM_getValue(K_API_FB, {}) || {};
+    const x = fb[feat] || { n: 0 };
+    if (ok) { if (!x.n && !x.rec) return; x.n = 0; x.rec = 0; x.okTs = Date.now(); }
+    else {
+      x.n = (x.n || 0) + 1; x.last = Date.now(); x.err = String(err).slice(0, 200);
+      (x.hist = x.hist || []).push({ ts: Date.now(), when: apiLocal(Date.now()), err: x.err });
+      x.hist = x.hist.slice(-20);
+      if (x.n >= API_FB_LIMIT && !(x.rec > Date.now())) {
+        x.rec = Date.now() + 7 * 864e5;
+        console.warn(`[Alter-Filter] Schnittstelle „${feat}“ ${x.n}× in Folge fehlgeschlagen – Mitschnitt läuft (Rekorder)`);
+        try { if (typeof log === 'function') log(`Schnittstelle „${feat}“ fiel ${x.n}× auf die Seite zurück – Rekorder schneidet mit, bitte bei Gelegenheit exportieren.`); } catch (e) { /* egal */ }
+      }
+    }
+    fb[feat] = x;
+    GM_setValue(K_API_FB, fb);
+  }
+  const apiHealthy = (feat) => { const x = (GM_getValue(K_API_FB, {}) || {})[feat]; return !x || (x.n || 0) < API_FB_LIMIT; };
+  async function apiTry(feat, fn) {
+    if (!apiHealthy(feat) && Math.random() < 0.8) return { ok: false, skipped: true }; // nach Ausfall nur noch gelegentlich probieren
+    try { const v = await fn(); apiResult(feat, true); return { ok: true, v }; }
+    catch (e) { apiResult(feat, false, e.message || e); return { ok: false, err: e.message || String(e) }; }
+  }
+  // Ignorierliste im Skript-Speicher nachführen
+  function ignoredSet(id, name, on) {
+    const l = getIgnored();
+    for (const p of Object.keys(l)) if (idOf(p) === String(id)) delete l[p];
+    if (on) {
+      const p = Object.keys(getLog()).find((x) => idOf(x) === String(id)) || Object.keys(getAccounts()).find((x) => idOf(x) === String(id)) || `/profile/${id}.html`;
+      l[p] = { name: name || '', url: location.origin + p, id: String(id) };
+    }
+    saveIgnored(l);
+  }
+  const apiIgnore = (id, on) => apiTry('Ignorieren', () => joyPost('/contact/ignore', { fav_user_id: Number(id), ignore: !!on }));
+  const apiNoteGet = (id) => apiTry('Notiz', async () => { const c = await joyGet(`/user_fav/user_note?user_id=${encodeURIComponent(id)}`); return typeof c === 'string' ? c : (c && typeof c.user_note === 'string' ? c.user_note : ''); });
+  const apiNoteSet = (id, text) => apiTry('Notiz', () => joyPost('/profilev3/save_note', { fav_user_id: Number(id), user_note: text }));
+  // Notiztexte wie auf der Profilseite bilden
+  function noteWithLine(old, text) {
+    if (old.includes(text.replace(/ am .*/, ''))) return null;
+    return old ? `${old}\n${text}` : text;
+  }
+  function noteWhitelisted(old, line) {
+    const lines = old.split(/\r?\n/);
+    const kept = lines.filter((l) => !ownNoteRe().test(l)).filter((l, i, arr) => l.trim() || (i > 0 && i < arr.length - 1));
+    if (!kept.some((l) => l.trim() === line)) kept.push(line);
+    const v = kept.join('\n').replace(/^\n+|\n+$/g, '');
+    return v === old.trim() ? null : v;
+  }
+  function noteCleaned(old) {
+    const lines = old.split(/\r?\n/);
+    if (!lines.some((l) => ownNoteRe().test(l))) return null;
+    return lines.filter((l) => !ownNoteRe().test(l)).join('\n').replace(/^\n+|\n+$/g, '');
+  }
+  // Auftrag ohne Profilaufruf erledigen; null = Seitenweg nötig
+  async function apiActJob(cur, source) {
+    if (CONFIG.DRY_RUN) return null;
+    const id = idOf(cur.path || cur.url || '');
+    if (!id) return null;
+    const noteOp = async (val) => {
+      if (val == null) return { ok: true, msg: 'Notiz war bereits aktuell' };
+      const s = await apiNoteSet(id, val);
+      return s.ok ? { ok: true, msg: 'Notiz gespeichert (Schnittstelle)' } : null;
+    };
+    if (cur.action === 'note' || cur.action === 'clean') {
+      const g = await apiNoteGet(id);
+      if (!g.ok) return null;
+      const r = await noteOp(cur.action === 'note' ? noteWhitelisted(g.v || '', cur.line) : noteCleaned(g.v || ''));
+      return r ? { result: 'note', msg: r.msg } : null;
+    }
+    if (cur.action === 'sync') {
+      if (!cur.type) return null;
+      const kind = cur.kind || judge({ type: cur.type, ages: cur.ages || [] }, cur.source || 'Sync').kind || toKind(cur.reason, cur.type);
+      const g = await apiNoteGet(id);
+      if (!g.ok) return null;
+      const n = await noteOp(noteWhitelisted(g.v || '', noteText(cur.source || 'Sync', kind, cur.ts || Date.now(), cur.type)));
+      if (!n) return null;
+      if (!cur.block) return { result: 'note', msg: n.msg };
+      const b = await apiIgnore(id, true);
+      if (!b.ok) return null;
+      ignoredSet(id, cur.name, true);
+      return { result: 'ignored', msg: `${n.msg}; ignoriert (Schnittstelle)` };
+    }
+    if (cur.action) return null;
+    // normales Ignorieren: nur mit bekanntem Typ und Alter (sonst muss das Profil geprüft werden)
+    if (cur.verify || !cur.type || /^Typ |\|/.test(cur.type) || !(cur.ages || []).length) return null;
+    if (isWhiteMember(cur)) return { result: 'skipped', msg: 'Whitelist' };
+    const c = { name: cur.name, path: cur.path, type: cur.type, ages: cur.ages };
+    const jj = judge(c, cur.source || source);
+    if (!cur.force && !typeOkFor(c.type)) return { result: 'skipped', msg: `Profiltyp „${c.type}“` };
+    const kind = cur.kind || jj.kind || toKind(cur.reason, c.type);
+    cur.kind = kind;
+    let noteMsg = '';
+    if (CONFIG.WRITE_NOTE) {
+      const g = await apiNoteGet(id);
+      if (!g.ok) return null;
+      const n = await noteOp(noteWithLine((g.v || '').trim(), noteText(cur.via || cur.source || source, kind, Date.now(), c.type)));
+      if (!n) return null;
+      noteMsg = n.msg === 'Notiz war bereits aktuell' ? 'Notiz schon vorhanden' : n.msg;
+    }
+    const b = await apiIgnore(id, true);
+    if (!b.ok) return null;
+    addDone(cur.path, Object.assign({}, cur, { ages: c.ages, type: c.type }), 'Schnittstelle');
+    ignoredSet(id, cur.name, true);
+    clearFailed(cur.path);
+    return { result: 'ignored', msg: [noteMsg, 'ignoriert (Schnittstelle)'].filter(Boolean).join('; '), type: c.type, ages: c.ages };
+  }
+  // Gästeliste einer Party seitenweise (Karten als HTML); null = Seitenweg
+  async function apiGuests(eventId, gender = 'alle', onProgress) {
+    const out = [], seen = new Set();
+    for (let page = 1; page <= 300; page++) {
+      const r = await apiTry('Gästeliste', () => joyPost('/event/guests_scroll_data', { event_id: Number(eventId), gender, page }));
+      if (!r.ok) return page === 1 ? null : (out.length ? out : null);
+      const el = (r.v && r.v.elements) || [];
+      let add = 0;
+      for (const h of el) {
+        const k = (String(h).match(/\/(?:profile|my)\/(\d+)\./) || [])[1] || h.slice(0, 200);
+        if (seen.has(k)) continue;
+        seen.add(k); out.push(h); add++;
+      }
+      if (onProgress) onProgress(out.length);
+      if (!el.length || !add) break;
+      await sleep(rand(250, 600));
+    }
+    return out;
+  }
+  // ClubMail-Unterhaltungen (Mitglieder) seitenweise; null = Seitenweg
+  async function apiClubMail(max, stopDay) {
+    const own = ownIds();
+    const out = [];
+    let param = { limit: 25, offset: null, descending: true, archive: null, unread: null, conversation_type: null, contact_folder_id: null };
+    for (let i = 0; i < 400; i++) {
+      const r = await apiTry('ClubMail', () => joyPost('/clubmailv3/get_conversation_list', param));
+      if (!r.ok) return i === 0 ? null : out;
+      const list = (r.v && r.v.conversation_list) || [];
+      let older = false;
+      for (const c of list) {
+        const day = c.sort_time ? isoDay(new Date(c.sort_time * 1000)) : null;
+        if (stopDay && day && day < stopDay) older = true;
+        if (c.conversation_type !== 'P') continue;
+        const u = (c.user_list || []).find((x) => String(x.id) !== String((r.v.page_down_parameter || {}).owner_id) && !own.has(String(x.id))) ||
+          (c.last_message && c.last_message.from_user && !own.has(String(c.last_message.from_user.id)) ? c.last_message.from_user : null);
+        if (!u || !u.profile_url || !/\/profile\/\d+\./.test(u.profile_url) || u.is_deleted) continue;
+        const path = cleanPath(new URL(u.profile_url).pathname);
+        const ug = u.gender && u.gender.universal_gender != null ? String(u.gender.universal_gender) : '';
+        out.push({ path, url: location.origin + path, id: String(u.id), name: u.name || '', ages: [u.age, u.age2].map(Number).filter((n) => n >= 18 && n <= 120),
+          gender: ug && ug !== '0' ? ug : '', type: ug && ug !== '0' ? typeFromGender(ug) : '', day, dayTxt: day || '', imgSrc: (((u.avatar_alt || {}).fallback_image_source_set || {}).source_list || []).map((s) => s.resource_path).find((s) => /image_(240|300|360)_/.test(s || '')) || '' });
+      }
+      if (out.length >= max || older || !list.length || !r.v.page_down_parameter) break;
+      param = r.v.page_down_parameter;
+      await sleep(rand(300, 700));
+    }
+    return out;
+  }
+
   // ---------- API-Rekorder: Bedienung (Experten-Einstellungen) ----------
   const API_FEATURES = [
     ['Profilbesucher', /visit/i], ['Mögen mich / Interaktionen', /vot|like|kiss|interaction/i], ['ClubMail', /clubmail|conversation|message|messenger/i],
@@ -5420,11 +5728,17 @@
     const log = GM_getValue(K_API_LOG, {}) || {};
     const entries = Object.entries(log).map(([key, e]) => Object.assign({ key }, e, { candidateFor: API_FEATURES.filter(([, re]) => re.test(e.path)).map(([n]) => n) }));
     const covered = new Set(entries.flatMap((e) => e.candidateFor));
-    const out = { format: 'jaf-api-rec', v: 1, script: (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '', ts: Date.now(),
+    const fb = GM_getValue(K_API_FB, {}) || {};
+    const out = { format: 'jaf-api-rec', v: 2, script: (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '', ts: Date.now(), when: apiLocal(Date.now()),
+      viaApi: Object.keys(API_FEAT_RE), fallbacks: fb,
       entries, candidates: Object.fromEntries(API_FEATURES.map(([n]) => [n, entries.filter((e) => e.candidateFor.includes(n)).map((e) => e.key)])),
-      notYetApi: API_FEATURES.map(([n]) => n), noEndpointSeen: API_FEATURES.map(([n]) => n).filter((n) => !covered.has(n)) };
+      noEndpointSeen: API_FEATURES.map(([n]) => n).filter((n) => !covered.has(n)),
+      timeline: GM_getValue(K_API_TL, []) || [] };
     for (const e of Object.values(log)) e.isNew = false;
     GM_setValue(K_API_LOG, log);
+    // nach dem Export gelten die Aufrufe wieder als bekannt
+    for (const x of Object.values(fb)) if (x && x.rec) x.rec = 0;
+    GM_setValue(K_API_FB, fb);
     return JSON.stringify(out, null, 1);
   }
   function apiRecControl() {
@@ -5436,13 +5750,20 @@
     lb.appendChild(cb); lb.appendChild(document.createTextNode('an'));
     const info = document.createElement('span');
     info.className = 'jaf-api-info';
-    const upd = () => { const st = apiRecStats(); info.textContent = `${st.n} erfasst, davon ${st.neu} neu`; };
+    const warn = document.createElement('div');
+    warn.style.cssText = 'flex-basis:100%;color:#ffb300;font-size:12.5px';
+    const upd = () => {
+      const st = apiRecStats(); info.textContent = `${st.n} erfasst, davon ${st.neu} neu`;
+      const fb = GM_getValue(K_API_FB, {}) || {};
+      const l = Object.entries(fb).filter(([, x]) => x && x.rec > Date.now());
+      warn.textContent = l.length ? l.map(([f, x]) => `Schnittstelle geändert? „${f}“ fiel ${x.n}× auf die Seite zurück (zuletzt ${apiLocal(x.last)}: ${x.err}) – Mitschnitt läuft, bitte bei Gelegenheit exportieren.`).join(' ') : '';
+    };
     cb.addEventListener('change', () => { GM_setValue(K_API_REC, cb.checked); upd(); });
     const ex = document.createElement('a'); ex.href = '#'; ex.textContent = 'Exportieren';
     ex.addEventListener('click', (e) => { e.preventDefault(); flDownload(`joyclub-api-rekorder-${isoDay(new Date())}.json`, apiRecExport()); upd(); });
     const cl = document.createElement('a'); cl.href = '#'; cl.textContent = 'Leeren';
-    cl.addEventListener('click', (e) => { e.preventDefault(); GM_setValue(K_API_LOG, {}); upd(); });
-    w.append(lb, info, ex, cl);
+    cl.addEventListener('click', (e) => { e.preventDefault(); GM_setValue(K_API_LOG, {}); GM_setValue(K_API_TL, []); upd(); });
+    w.append(lb, info, ex, cl, warn);
     upd();
     return w;
   }
@@ -5759,7 +6080,18 @@
     });
   }
   // Warnung vor einem Vorgang mit Profilaufrufen. true = weiter, false = abgebrochen
+  // Vor einem Vorgang: Funktionieren die Schnittstellen, wird erst gefragt, wenn wirklich ein Profil geöffnet werden muss
   async function visGuard() {
+    if (apiHealthy('Ignorieren') && apiHealthy('Notiz')) {
+      let v = visibilityFromDoc(document);
+      if (v == null) { try { v = await fetchVisibility(); } catch (e) { v = null; } }
+      if (v !== 1) { gmSet(K_VIS_RUN, { mode: 'invisible', prev: v === 5 ? 5 : 3, ts: Date.now() }); lastVis = { v, ts: Date.now() }; return true; }
+      gmSet(K_VIS_RUN, { mode: 'lazy', ts: Date.now() });
+      return true;
+    }
+    return visGuardNow();
+  }
+  async function visGuardNow() {
     let v = visibilityFromDoc(document);
     if (v == null) { try { v = await fetchVisibility(); } catch (e) { v = null; } }
     if (v !== 1) { gmSet(K_VIS_RUN, { mode: 'invisible', prev: v === 5 ? 5 : 3, ts: Date.now() }); lastVis = { v, ts: Date.now() }; return true; }
@@ -5897,6 +6229,9 @@
   }
   // Profil im Hintergrund-Frame bearbeiten (Auftrag aus dem GM-Speicher); vorher Sichtbarkeit prüfen
   async function actJob(item, source) {
+    try { const a = await apiActJob(item, source); if (a) return a; } catch (e) { /* Seitenweg */ }
+    const vr = visRun();
+    if (vr && vr.mode === 'lazy' && !(await visGuardNow())) throw Object.assign(new Error('Abgebrochen (sichtbar eingeloggt)'), { fatal: true });
     await visEnforce();
     const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
     gmSet('jaf_bg_job_' + jobId, { item, source: item.source || source });
@@ -7374,7 +7709,9 @@
       const max = stopDay ? 100000 : CONFIG.MYJOY_FIRST_MAX;
       bgUi(null, 'Lade die Liste im Hintergrund …', 0.02, stats());
       const fname = `jaf-bg-mj-${key}-${stopDay ? stopDay.replace(/-/g, '') : '0'}-${max}-${Date.now().toString(36)}`;
-      const data = await bgFrameG(location.origin + pg.path, fname, (n) => bgUi(null, `Lade die Liste … ${n} Einträge`, 0.05, null), 30 * 60000);
+      let data = null;
+      if (key === 'ClubMail') { try { const l = await apiClubMail(max, stopDay); if (l) data = { cards: l }; } catch (e) { data = null; } }
+      if (!data) data = await bgFrameG(location.origin + pg.path, fname, (n) => bgUi(null, `Lade die Liste … ${n} Einträge`, 0.05, null), 30 * 60000);
       let cards = (data.cards || []).filter((c) => !stopDay || !c.day || c.day >= stopDay);
       bgUi(null, `${cards.length} Einträge geladen`, 0.1, stats());
       recordAccounts(cards.filter((c) => c.path && c.ages.length));

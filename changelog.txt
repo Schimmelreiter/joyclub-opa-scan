@@ -1,6 +1,11 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.87 (24.10.2026)
+- Schnittstellen statt Seitenaufrufen (mit automatischem Rückfall): Ignorieren/Entsperren, Profilnotiz lesen/schreiben, Gästeliste der geöffneten Party, ClubMail-Scan
+- Sichtbarkeits-Warnung erst, wenn wirklich ein Profil geöffnet werden muss
+- API-Rekorder 2: Zusammenhang je Aufruf (Seite, Titel, Seitenart, Auslöser, Frame, Uhrzeit), Zeitleiste, Kopfzeilen-Namen, Formular-Daten als JSON, GraphQL vollständig, kein Rauschen; bekannte Aufrufe nur noch nach 5 Rückfällen in Folge (dann auch bei ausgeschaltetem Rekorder, mit Hinweis)
+
 1.86 (24.10.2026)
 - „Auch auf:“ steht immer im Fickliste-Kasten, mit breitem „+“-Knopf am Ende (ersetzt „+ Profil anderswo“); 14 px Abstand zwischen den Profilen
 - Plattform-Symbole zeigen die echten Favicons (einmal im Browser geladen und gespeichert, nicht im Skript enthalten); Kürzel als Ersatz und für „Andere …“

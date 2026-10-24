@@ -594,9 +594,25 @@ Die CSV-Exporte (`;`, Excel-tauglich) unterhalb der Sicherung dienen nur der Feh
 
 ---
 
-## API-Rekorder
+## Schnittstellen und API-Rekorder
 
-In den Experten-Einstellungen (Abschnitt „API-Rekorder“, Standard aus, wirkt sofort): Das Skript startet dafür schon beim Seitenaufbau (`@run-at document-start`, `unsafeWindow`) und schneidet mit, welche Schnittstellen JOYclub selbst über `fetch`/`XMLHttpRequest` benutzt – je Adresse und Payload-Aufbau die ersten 2 Beispiele, regelmäßig wiederholte Abfragen nur einmal, Listen auf 2 Einträge plus Gesamtzahl gekürzt. Vor dem Speichern geschwärzt: E-Mail-Adressen, Passwörter/Token/Zugangsschlüssel, Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt. Anzeige „X erfasst, davon Y neu“, „Exportieren“ (JSON, markiert Kandidaten für bisherige Seiten-Lösungen und führt die Liste „noch nicht über die API“), „Leeren“.
+**Schnittstellen:** Wo es geht, arbeitet das Skript über die Schnittstellen, die JOYclub selbst benutzt – schneller und ohne Profilaufruf (also ohne sichtbaren Besuch):
+
+| Vorgang | Schnittstelle | Seitenweg (Rückfall) |
+|---|---|---|
+| Ignorieren / Entsperren | `contact/ignore` | Profilmenü bzw. Ignorierliste |
+| Profilnotiz lesen / schreiben | `user_fav/user_note`, `profilev3/save_note` | Notiz-Editor auf dem Profil |
+| Gästeliste der geöffneten Party | `event/guests_scroll_data` | Hintergrund-Frame |
+| ClubMail-Scan | `clubmailv3/get_conversation_list` (mit Alter, Geschlecht, gelöschten Konten) | Hintergrund-Frame |
+
+Antwortet eine Schnittstelle nicht wie erwartet, nimmt das Skript automatisch den Seitenweg. Profile werden nur noch geöffnet, wenn ihr Alter unklar ist; erst dann erscheint auch die Warnung „Du bist sichtbar eingeloggt“. Gelesen-Markierungen von JOYclub ruft das Skript nie auf.
+
+**API-Rekorder** (Experten-Einstellungen, Standard aus, wirkt sofort): Das Skript startet dafür schon beim Seitenaufbau (`@run-at document-start`, `unsafeWindow`) und schneidet mit, welche Schnittstellen JOYclub über `fetch`/`XMLHttpRequest` benutzt – je Adresse und Payload-Aufbau 2 Beispiele, regelmäßige Abfragen nur einmal, Listen auf 2 Einträge plus Gesamtzahl gekürzt; Formular-Daten (`data`) werden als JSON zerlegt, GraphQL-Abfragen vollständig, Kopfzeilen nur mit Namen. Geschwärzt: E-Mail-Adressen, Passwörter/Token/Sitzungskennungen (auch `cache_killer`), Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt.
+
+- **Zusammenhang je Aufruf:** Seite, Titel, Seitenart, Auslöser (Beschriftung des letzten Klicks, „beim Scrollen“, „beim Laden“), Hintergrund-Frame ja/nein, Uhrzeit. Dazu eine **Zeitleiste** aller Seiten, Klicks und Aufrufe – man muss sich nicht merken, was man wann getan hat. Eingetippte Texte werden nie erfasst.
+- **Nicht mehr erfasst:** bereits untersuchte Aufrufe sowie Symbole, Werbung und Tracking.
+- **Änderungen erkennen:** Fällt ein Vorgang **5× in Folge** auf den Seitenweg zurück, schneidet der Rekorder dessen Aufrufe wieder mit – auch wenn er ausgeschaltet ist – und zeigt einen Hinweis; das endet, sobald die Schnittstelle wieder klappt, nach dem Export, spätestens nach 7 Tagen.
+- „Exportieren“ (JSON mit Aufrufen, Rückfällen und Zeitleiste), „Leeren“, Anzeige „X erfasst, davon Y neu“.
 
 <img src="docs/einstellungen-experten.png" width="520" alt="Experten-Einstellungen mit API-Rekorder">
 
@@ -609,7 +625,7 @@ Beim Ansehen von „Mögen mich“, „Profilbesuche“ und der ClubMail merkt s
 - **Speicher:** große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen als ein Tampermonkey-Wert je Mitglied (`jaf_log|/profile/…`); geändert wird nur, was sich ändert, andere Tabs werden über `GM_addValueChangeListener` informiert. Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`; ab 1.76 `GM_xmlhttpRequest` mit `@connect image-user.feig-partner.de` (Profilbilder für das Profil-Archiv – Tampermonkey fragt einmal nach).
 - **Fickliste:** `jaf_fl` (Personen, mit `profiles` für andere Plattformen und `statusAt`), `jaf_fl_groups` (verknüpfte Profile), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
 - **Orts-URLs:** ä→ae, ö→oe, ü→ue, ß→ss; Leerzeichen und Klammern → „_“ (z. B. „Mülheim (Ruhr)“ → `muelheim_ruhr`).
-- **Profilinfos:** `jaf_pi_<id>` (Nick, frühere Nicks, Typ, Alter, Bild), `jaf_pi_idx`, `jaf_pi_nick`; **API-Rekorder:** `jaf_api_rec`, `jaf_api_log`; ab 1.83 `@run-at document-start` und `@grant unsafeWindow`.
+- **Profilinfos:** `jaf_pi_<id>` (Nick, frühere Nicks, Typ, Alter, Bild), `jaf_pi_idx`, `jaf_pi_nick`; **API-Rekorder:** `jaf_api_rec`, `jaf_api_log`, `jaf_api_tl` (Zeitleiste), `jaf_api_fb` (Rückfälle); ab 1.83 `@run-at document-start` und `@grant unsafeWindow`.
 - **Eigene Konten:** `jaf_own_accs` (Zweitkonto aus „Partys synchronisieren“) – zählen nie als Interaktion.
 - **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
 - **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
