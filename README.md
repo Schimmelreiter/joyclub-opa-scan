@@ -507,7 +507,9 @@ Gehört eine Person zu mehreren Profilen (z. B. Paarprofil, ihr eigenes und sein
 
 ### Profile anderswo („Auch auf …“)
 
-Jede Person kann Profile auf anderen Plattformen und Messenger-Kontakte haben: poppen.de, xHamster, Eronity, SpicyMatch, Kaufmich, Fetish.com, Gays.com, Telegram, WhatsApp, Threema, Signal oder „Andere …“ (freier Name). „Auch auf …“ in der Ficklisteneintragung (erreichbar von überall, auch per Klick auf eine Zeile in „Meine Fickliste“) oder „+ Profil anderswo“ im Fickliste-Block öffnen die Verwaltung; je Profil lässt sich „Profil gelöscht“ setzen. Im Block, in „Meine Fickliste“ und bei Treffen-Links zeigt ein kleines Plattform-Symbol die Herkunft; „Meine Fickliste“ hat dafür den Filter **Plattform**.
+Jede Person kann Profile auf anderen Plattformen und Messenger-Kontakte haben: poppen.de, xHamster, Eronity, SpicyMatch, Kaufmich, Fetish.com, Gays.com, Telegram, WhatsApp, Threema, Signal oder „Andere …“ (freier Name). Der breite Knopf **„+“** am Ende der Zeile „Auch auf:“ im Fickliste-Kasten (Profilseite und Seite externer Ficks; ohne Profile direkt hinter „Auch auf:“) und „Auch auf …“ in der Ficklisteneintragung (erreichbar von überall, auch per Klick auf eine Zeile in „Meine Fickliste“) öffnen die Verwaltung; je Profil lässt sich „Profil gelöscht“ setzen. Im Kasten, in der Verwaltung, in „Meine Fickliste“ (auch im Filter **Plattform**) und bei Treffen-Links zeigt das Favicon der Plattform die Herkunft (Tooltip: Plattformname, ggf. „Profil gelöscht“).
+
+Die Favicons sind nicht im Skript enthalten: Jedes wird einmal im Browser über den Favicon-Dienst von Google geladen und dauerhaft im Tampermonkey-Speicher abgelegt (`jaf_pf_icons`; neue Berechtigung `@connect www.google.com`, `gstatic.com`). Bis dahin – und für „Andere …“ – erscheint ein Kästchen mit Kürzel (wie im Bild). Die Symbole gehören den jeweiligen Markeninhabern.
 
 | Plattform | Eingabe | gespeichert als |
 |---|---|---|

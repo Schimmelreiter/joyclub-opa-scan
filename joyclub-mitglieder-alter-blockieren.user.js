@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.85
+// @version      1.86
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -17,6 +17,8 @@
 // @grant        unsafeWindow
 // @connect      image-user.feig-partner.de
 // @connect      cfnimg.feig-partner.de
+// @connect      www.google.com
+// @connect      gstatic.com
 // @run-at       document-start
 // @homepageURL  https://github.com/Schimmelreiter/joyclub-opa-scan
 // @updateURL    https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
@@ -9569,18 +9571,18 @@
   // p.profiles = [{ pf, pfName?, url, name, uid?, dead?, …unbekannte Felder aus dem Austausch }]
   // Personen ohne JOYclub-Profil aus dem Austausch: id „x-<pf>-<uid>“, p.main = { pf, uid, nick, url }
   const FL_PF = {
-    joyclub: { label: 'JOYclub', ab: 'J', bg: '#c71b1b' },
-    poppen: { label: 'poppen.de', ab: 'P', bg: '#d6246e' },
-    xhamster: { label: 'xHamster', ab: 'xH', bg: '#d9700b' },
-    eronity: { label: 'Eronity', ab: 'Er', bg: '#7b3fb5' },
-    spicymatch: { label: 'SpicyMatch', ab: 'SM', bg: '#b4440f' },
-    kaufmich: { label: 'Kaufmich', ab: 'KM', bg: '#a3164f' },
-    fetish: { label: 'Fetish.com', ab: 'Fe', bg: '#3f3f46' },
-    gays: { label: 'Gays.com', ab: 'G', bg: '#2563eb' },
-    telegram: { label: 'Telegram', ab: 'TG', bg: '#1f8bc4' },
-    whatsapp: { label: 'WhatsApp', ab: 'WA', bg: '#1f8a3a' },
-    threema: { label: 'Threema', ab: 'Th', bg: '#3c3c3c' },
-    signal: { label: 'Signal', ab: 'Si', bg: '#3a6fd8' },
+    joyclub: { label: 'JOYclub', ab: 'J', bg: '#c71b1b', dom: 'joyclub.de' },
+    poppen: { label: 'poppen.de', ab: 'P', bg: '#d6246e', dom: 'poppen.de' },
+    xhamster: { label: 'xHamster', ab: 'xH', bg: '#d9700b', dom: 'xhamster.com' },
+    eronity: { label: 'Eronity', ab: 'Er', bg: '#7b3fb5', dom: 'eronity.com' },
+    spicymatch: { label: 'SpicyMatch', ab: 'SM', bg: '#b4440f', dom: 'spicymatch.com' },
+    kaufmich: { label: 'Kaufmich', ab: 'KM', bg: '#a3164f', dom: 'kaufmich.com' },
+    fetish: { label: 'Fetish.com', ab: 'Fe', bg: '#3f3f46', dom: 'fetish.com' },
+    gays: { label: 'Gays.com', ab: 'G', bg: '#2563eb', dom: 'gays.com' },
+    telegram: { label: 'Telegram', ab: 'TG', bg: '#1f8bc4', dom: 'telegram.org' },
+    whatsapp: { label: 'WhatsApp', ab: 'WA', bg: '#1f8a3a', dom: 'whatsapp.com' },
+    threema: { label: 'Threema', ab: 'Th', bg: '#3c3c3c', dom: 'threema.ch' },
+    signal: { label: 'Signal', ab: 'Si', bg: '#3a6fd8', dom: 'signal.org' },
     other: { label: 'Andere …', ab: '?', bg: '#5c6470' },
   };
   const FL_PF_HINT = {
@@ -9588,9 +9590,34 @@
     signal: 'Telefonnummer, signal.me-Link oder Benutzername', other: 'Link oder Name',
   };
   const flPfLabel = (pf, pfName) => (pf === 'other' && pfName ? pfName : (FL_PF[pf] || FL_PF.other).label.replace(' …', ''));
+  // Favicons: einmal im Browser laden (Google-Favicon-Dienst, 32 px) und dauerhaft speichern – nicht im Skript enthalten
+  const K_PF_ICONS = 'jaf_pf_icons'; // { pf: data:-URL | { fail: ts } }
+  let pfIcons = null;
+  const pfLoading = new Set();
+  function flPfIcon(pf) {
+    const d = FL_PF[pf];
+    if (!d || !d.dom) return '';
+    if (!pfIcons) pfIcons = GM_getValue(K_PF_ICONS, {}) || {};
+    const v = pfIcons[pf];
+    if (typeof v === 'string') return v;
+    if (v && v.fail && Date.now() - v.fail < 7 * 864e5) return '';
+    if (!pfLoading.has(pf)) {
+      pfLoading.add(pf);
+      flFetchImage(`https://www.google.com/s2/favicons?sz=32&domain=${d.dom}`).then((data) => {
+        const all = GM_getValue(K_PF_ICONS, {}) || {};
+        all[pf] = /^data:image\//.test(data || '') ? data : { fail: Date.now() };
+        GM_setValue(K_PF_ICONS, all);
+        pfIcons = all;
+        if (typeof all[pf] === 'string') document.querySelectorAll(`span.jaf-pf[data-pf="${pf}"]`).forEach((e) => { e.outerHTML = flPfBadge(pf, { size: parseInt(e.style.height, 10) || 16, title: e.title }); });
+      });
+    }
+    return '';
+  }
   function flPfBadge(pf, opt = {}) {
     const d = FL_PF[pf] || FL_PF.other;
     const sz = opt.size || 16;
+    const ic = pf !== 'other' ? flPfIcon(pf) : '';
+    if (ic) return `<img class="jaf-pf" data-pf="${escHtml(pf)}" src="${ic}" alt="" title="${escHtml(opt.title || flPfLabel(pf, opt.pfName))}" style="width:${sz}px;height:${sz}px;vertical-align:-3px;flex:none;border-radius:3px">`;
     const ab = pf === 'other' && opt.pfName ? opt.pfName.slice(0, 2) : d.ab;
     return `<span class="jaf-pf" data-pf="${escHtml(pf || 'other')}" title="${escHtml(opt.title || flPfLabel(pf, opt.pfName))}" style="display:inline-flex;align-items:center;justify-content:center;min-width:${sz}px;height:${sz}px;padding:0 3px;` +
       `border-radius:4px;background:${d.bg};color:#fff;font:bold ${Math.round(sz * 0.58)}px system-ui,sans-serif;line-height:1;vertical-align:-3px;box-sizing:border-box;flex:none">${escHtml(ab)}</span>`;
@@ -9711,18 +9738,27 @@
     }
     return [...s];
   }
-  function flProfilesHtml(p) {
+  function flProfilesHtml(p, opt = {}) {
     const l = (p.profiles || []).filter((x) => !(x.pf === 'joyclub' && x.uid && flGet(String(x.uid))));
     if (flForeignMain(p)) l.unshift(Object.assign({ main: true }, p.main));
-    if (!l.length) return '';
-    return '<div class="jaf-fl-also" style="font-size:12.5px;margin-top:6px;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center"><span style="opacity:.8">Auch auf:</span>' + l.map((x) => {
+    if (!l.length && !opt.plus) return '';
+    const plus = opt.plus ? `<button type="button" class="jaf-fl-plus" data-pid="${escHtml(p.id)}" title="Profil auf einer anderen Plattform oder Messenger-Kontakt zufügen" style="min-width:40px;height:22px;padding:0 12px;border-radius:11px;border:1px solid rgba(128,128,128,.6);background:rgba(128,128,128,.18);color:inherit;font:bold 15px/1 system-ui;cursor:pointer">+</button>` : '';
+    return '<div class="jaf-fl-also" style="font-size:12.5px;margin-top:6px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center"><span style="opacity:.8">Auch auf:</span>' + l.map((x) => {
       const nm = escHtml(flProfName(x));
-      const inner = `${flPfBadge(x.pf, { pfName: x.pfName })}<span style="${x.dead ? 'text-decoration:line-through;opacity:.6' : ''}">${nm}</span>`;
+      const inner = `${flPfBadge(x.pf, { pfName: x.pfName, title: flPfLabel(x.pf, x.pfName) + (x.dead ? ' (Profil gelöscht)' : '') })}<span style="${x.dead ? 'text-decoration:line-through;opacity:.6' : ''}">${nm}</span>`;
       if (x.url) return `<a href="${escHtml(x.url)}" target="_blank" rel="noopener noreferrer" style="color:inherit;display:inline-flex;gap:5px;align-items:center;text-decoration:none">${inner}</a>`;
       return `<span style="display:inline-flex;gap:5px;align-items:center">${inner}<button type="button" class="jaf-fl-copy" data-t="${escHtml(x.name || '')}" title="Kopieren" style="background:none;border:0;color:inherit;opacity:.7;cursor:pointer;padding:0 2px;font-size:13px">⧉</button></span>`;
-    }).join('') + '</div>';
+    }).join('') + plus + '</div>';
   }
   document.addEventListener('click', (e) => {
+    const pb = e.target && e.target.closest && e.target.closest('.jaf-fl-plus');
+    if (pb) {
+      e.preventDefault(); e.stopPropagation();
+      const pid = pb.getAttribute('data-pid');
+      const p = flGet(pid);
+      if (p) flProfilesPopup(pid);
+      return;
+    }
     const b = e.target && e.target.closest && e.target.closest('.jaf-fl-copy');
     if (!b) return;
     e.preventDefault(); e.stopPropagation();
@@ -9810,7 +9846,7 @@
         box.appendChild(flEl('div', 'color:#9a9a9a;font-size:13px;margin-bottom:10px', `Profile von ${escHtml(p.nick || '')} auf anderen Plattformen und Messenger-Kontakte.`));
         (p.profiles || []).forEach((x, i) => {
           const row = flEl('div', 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid #3a3d43;border-radius:8px;padding:7px 10px;margin-bottom:6px;background:#24262a');
-          row.appendChild(flEl('span', 'display:inline-flex;gap:6px;align-items:center;flex:1;min-width:150px', `${flPfBadge(x.pf, { pfName: x.pfName, size: 18 })}<span style="${x.dead ? 'text-decoration:line-through;opacity:.6' : ''}">${escHtml(flProfName(x))}</span>`));
+          row.appendChild(flEl('span', 'display:inline-flex;gap:6px;align-items:center;flex:1;min-width:150px', `${flPfBadge(x.pf, { pfName: x.pfName, size: 18, title: flPfLabel(x.pf, x.pfName) + (x.dead ? ' (Profil gelöscht)' : '') })}<span style="${x.dead ? 'text-decoration:line-through;opacity:.6' : ''}">${escHtml(flProfName(x))}</span>`));
           const lb = flEl('label', 'display:flex;gap:5px;align-items:center;font-size:12.5px;cursor:pointer');
           const c = flEl('input'); c.type = 'checkbox'; c.checked = !!x.dead;
           c.addEventListener('change', () => { const q = flGet(pid); q.profiles[i].dead = c.checked || undefined; if (!c.checked) delete q.profiles[i].dead; flHist(q, `${flPfLabel(x.pf, x.pfName)}: Profil ${c.checked ? 'gelöscht' : 'wieder da'}`); flPut(q); render(); });
@@ -10462,7 +10498,7 @@
       (when ? `<div style="font-size:12.5px;opacity:.7">${escHtml(when)}</div>` : '') +
       (m.note ? `<div style="font-size:13px;margin-top:3px;white-space:pre-wrap">${escHtml(m.note)}</div>` : '') + '</div>';
   }
-  function flBlockEl(p) {
+  function flBlockEl(p, opt = {}) {
     const el = flEl('div', 'margin:12px 0;padding:14px 16px;border-top:3px solid rgba(128,128,128,.35);border-radius:8px;background:rgba(128,128,128,.08)');
     el.className = 'jaf-fl-block';
     const st = p.status || '';
@@ -10487,7 +10523,7 @@
     el.appendChild(head);
     if (p.notes) el.appendChild(flEl('div', 'font-size:13px;margin-top:8px;white-space:pre-wrap;opacity:.9', escHtml(p.notes)));
     const lh = flLinkedHtml(p.id); if (lh) el.insertAdjacentHTML('beforeend', lh);
-    const ph = flProfilesHtml(p); if (ph) el.insertAdjacentHTML('beforeend', ph);
+    const ph = flProfilesHtml(p, { plus: opt.plus !== false && !/[?&]archiv=/.test(location.search) }); if (ph) el.insertAdjacentHTML('beforeend', ph);
     const list = flEl('div', 'margin-top:4px');
     el.appendChild(list);
     let all = false;
@@ -10503,14 +10539,7 @@
     const to = flEl('a', 'display:inline-block;margin-top:10px;font-weight:600;text-decoration:underline;color:inherit;cursor:pointer', 'Zu meiner Fickliste');
     to.className = 'jaf-fl-tolist';
     to.href = flOverviewUrl(); to.target = '_blank';
-    const foot = flEl('div', 'display:flex;gap:16px;align-items:baseline;flex-wrap:wrap');
-    foot.appendChild(to);
-    const ap = flEl('a', 'font-size:12.5px;color:#e2b04a;font-weight:600;cursor:pointer', '+ Profil anderswo');
-    ap.className = 'jaf-fl-addprof';
-    ap.title = 'Profil auf einer anderen Plattform oder Messenger-Kontakt zufügen';
-    ap.addEventListener('click', async (e) => { e.preventDefault(); e.stopPropagation(); if (!flGet(p.id)) flPut(Object.assign({}, p)); await flProfilesPopup(p.id); });
-    foot.appendChild(ap);
-    el.appendChild(foot);
+    el.appendChild(to);
     return el;
   }
   function flProfileBlock() {
@@ -10756,7 +10785,7 @@
       if (imgSrc) wrap.querySelectorAll('j-avatar [data-img_id] img, j-avatar [data-img_id] source').forEach((e) => { if (e.tagName === 'SOURCE') e.setAttribute('srcset', imgSrc); else { e.src = imgSrc; e.removeAttribute('data-src'); } });
       const nh = [...wrap.querySelectorAll('j-setting-textarea')].find((e) => /profilnotiz/.test(norm(e.getAttribute('label') || '')));
       const anchor = nh ? (nh.closest('j-expandable-content-box') || nh) : null;
-      const blk = flBlockEl(p);
+      const blk = flBlockEl(p, { plus: false });
       if (anchor) anchor.insertAdjacentElement('afterend', blk); else wrap.prepend(blk);
     } else {
       wrap.innerHTML = flRenderL1(s.data || {}, imgSrc);
@@ -11349,7 +11378,7 @@
     wrap.innerHTML = html;
     c.appendChild(wrap);
     if (d.pnote || p.pnote) wrap.querySelector('.jaf-fl-l1-block').insertAdjacentHTML('beforeend', `<div style="margin-top:18px;padding:12px 16px;border-radius:8px;background:rgba(128,128,128,.08)"><div style="font-weight:600;font-size:13.5px;margin-bottom:4px">Profilnotiz</div><div style="white-space:pre-wrap;font-size:13px">${escHtml(s ? d.pnote : p.pnote)}</div></div>`);
-    wrap.querySelector('.jaf-fl-l1-block').appendChild(flBlockEl(p));
+    wrap.querySelector('.jaf-fl-l1-block').appendChild(flBlockEl(p, { plus: editable }));
     if (editable) {
       wrap.querySelectorAll('.jaf-fl-pen').forEach((b) => b.addEventListener('click', () => flExtEdit(flGet(pid), b.getAttribute('data-a'))));
       const lk = flBtn('Mit JOYclub-Profil verknüpfen', () => flLinkJoy(flGet(pid)));
@@ -11679,7 +11708,7 @@
     }
     // Fickliste-Block oben in der Badge-Liste
     const list = wrap.querySelector('j-list.profile-sidebar-container__badge-list');
-    const blk = flBlockEl(p);
+    const blk = flBlockEl(p, { plus: !s });
     blk.classList.add('jaf-fl-vblock');
     if (list) list.prepend(blk); else (wrap.querySelector('aside') || wrap).prepend(blk);
     if (editable) {
