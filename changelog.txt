@@ -1,6 +1,13 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.83 (24.10.2026)
+- Login-Seite: auch ohne laufenden Scan automatisch anmelden, wenn der Browser die Felder ausgefüllt hat („Angemeldet bleiben“, höchstens 1× in 30 min, Hinweis bei Fehlschlag)
+- Wartungsseiten auch ohne Scan: Neuladen zur angegebenen Uhrzeit bzw. nach 5–30 min; mehr Uhrzeit-Schreibweisen; „Seite nicht gefunden“ 1× neu laden, dann vermerken
+- API-Rekorder in den Experten-Einstellungen (Mitschnitt geschwärzt, Export mit Kandidaten); Skript startet dafür bei document-start
+- Profilinfos nebenbei (Mögen mich, Profilbesuche, ClubMail): Nick-Verlauf, Typ, Alter, kleines Profilbild; gelöschte Konten in der ClubMail mit gemerktem Bild
+- Automatische Whitelist: Freunde und „persönlich bekannt“ (30 Tage Schonfrist), Prüfung vor jedem Ignorieren, vom Skript Ignorierte werden entsperrt
+
 1.82 (24.10.2026)
 - Fickliste: Profile auf anderen Plattformen und Messenger-Kontakte („Auch auf …“, + Profil anderswo) mit einheitlichen Links für Telegram, WhatsApp, Threema und Signal; „Profil gelöscht“ je Profil; Filter „Plattform“
 - Fickliste: Export und Import für den Abgleich mit poppen.de (Format fickliste v1/poppen 2.1, verschlüsselt mit dem Nick), automatisches Verknüpfen über Links und IDs, Rückfrage bei Konflikten, Zusammenfassung

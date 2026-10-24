@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.82
+// @version      1.83
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -14,9 +14,10 @@
 // @grant        GM_addValueChangeListener
 // @grant        GM_setClipboard
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @connect      image-user.feig-partner.de
 // @connect      cfnimg.feig-partner.de
-// @run-at       document-idle
+// @run-at       document-start
 // @homepageURL  https://github.com/Schimmelreiter/joyclub-opa-scan
 // @updateURL    https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
 // @downloadURL  https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
@@ -24,6 +25,159 @@
 
 (function () {
   'use strict';
+  // ---------- API-Rekorder (läuft ab Seitenstart, nur wenn in den Experten-Einstellungen eingeschaltet) ----------
+  // Schneidet fetch/XMLHttpRequest mit: je Adresse und Payload-Aufbau die ersten 2 Beispiele, Dauerläufer nur einmal,
+  // Listen auf 2 Einträge + Gesamtzahl gekürzt. Vor dem Speichern geschwärzt: E-Mail, Passwörter/Token/Schlüssel,
+  // Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt.
+  const K_API_REC = 'jaf_api_rec';   // an/aus
+  const K_API_LOG = 'jaf_api_log';   // { key: { m, path, sig, n, first, last, poll, isNew, ex: [{ ts, url, status, req, res }] } }
+  const API_MAX_KEYS = 600;
+  const apiRedactKey = (k) => {
+    const s = String(k).toLowerCase();
+    if (/pass|token|secret|auth|session|csrf|xsrf|cookie|signature|apikey|api_key|bearer|credential|nonce|otp/.test(s)) return 'Zugang';
+    if (/mail/.test(s)) return 'E-Mail';
+    if (/phone|telefon|mobile|handy|whatsapp|msisdn/.test(s)) return 'Telefon';
+    if (/^(lat|lng|lon|long|latitude|longitude|geo|geolocation|coords?|coordinates|zip|zipcode|postal|postcode|plz|street|strasse|address|adresse|housenumber)$/.test(s)) return 'Geo';
+    if (/^(text|message|messages|msg|body|content|preview|snippet|subject|description|about|aboutme|about_me|motto|teaser|profiletext|profile_text|bio|comment|note|notes|caption|html)$/.test(s) || /message|profiletext|freetext/.test(s)) return 'Text';
+    return '';
+  };
+  function apiRedact(v, depth = 0, keyHint = '') {
+    if (v == null) return v;
+    if (typeof v === 'string') {
+      if (keyHint) return `[${keyHint}]`;
+      let s = v.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[E-Mail]').replace(/(?:\+|00)\d[\d\s/()-]{7,}\d|\b0\d{2,4}[\s/-]?\d{5,}\b/g, '[Telefon]');
+      if (/^(Bearer |ey[A-Za-z0-9_-]{10,}\.)/.test(s)) s = '[Zugang]';
+      return s.length > 160 ? `${s.slice(0, 80)}… (${s.length} Zeichen)` : s;
+    }
+    if (typeof v === 'number' || typeof v === 'boolean') return keyHint && keyHint !== 'Text' ? `[${keyHint}]` : v;
+    if (depth > 8) return '[…]';
+    if (Array.isArray(v)) {
+      const out = v.slice(0, 2).map((x) => apiRedact(x, depth + 1, keyHint));
+      if (v.length > 2) out.push({ '…': `insgesamt ${v.length} Einträge` });
+      return out;
+    }
+    if (typeof v === 'object') {
+      const o = {};
+      for (const [k, x] of Object.entries(v)) o[k] = apiRedact(x, depth + 1, apiRedactKey(k) || (keyHint === 'Geo' ? 'Geo' : ''));
+      return o;
+    }
+    return String(v);
+  }
+  const apiShape = (v, d = 0) => {
+    if (v == null || typeof v !== 'object' || d > 2) return typeof v;
+    if (Array.isArray(v)) return '[' + (v.length ? apiShape(v[0], d + 1) : '') + ']';
+    return '{' + Object.keys(v).sort().map((k) => `${k}:${apiShape(v[k], d + 1)}`).join(',') + '}';
+  };
+  function apiPath(u) {
+    let url;
+    try { url = new URL(u, location.href); } catch (e) { return { path: String(u).slice(0, 200), query: '', host: '' }; }
+    const path = url.pathname.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':uuid').replace(/\b[0-9a-f]{24,}\b/gi, ':hex').replace(/\d{3,}/g, ':id');
+    const qk = [...url.searchParams.keys()].sort();
+    const q = new URLSearchParams();
+    for (const [k, x] of url.searchParams) q.append(k, apiRedactKey(k) ? `[${apiRedactKey(k)}]` : apiRedact(x));
+    return { host: url.host, path, qk: qk.join(','), example: url.origin + url.pathname + (q.toString() ? '?' + q.toString() : '') };
+  }
+  function apiParseBody(b) {
+    if (b == null) return null;
+    if (typeof b === 'string') {
+      try { return JSON.parse(b); } catch (e) { /* weiter */ }
+      if (/^[\w.%[\]-]+=/.test(b)) { const o = {}; for (const [k, x] of new URLSearchParams(b)) o[k] = x; return o; }
+      return `(Text, ${b.length} Zeichen)`;
+    }
+    if (typeof FormData !== 'undefined' && b instanceof FormData) { const o = {}; for (const [k, x] of b.entries()) o[k] = typeof x === 'string' ? x : '(Datei)'; return o; }
+    if (typeof URLSearchParams !== 'undefined' && b instanceof URLSearchParams) { const o = {}; for (const [k, x] of b) o[k] = x; return o; }
+    return `(${Object.prototype.toString.call(b).slice(8, -1)})`;
+  }
+  let apiBuf = null;
+  let apiFlushT = 0;
+  function apiFlush() {
+    apiFlushT = 0;
+    if (!apiBuf) return;
+    const log = GM_getValue(K_API_LOG, {}) || {};
+    for (const [k, e] of Object.entries(apiBuf)) {
+      const o = log[k];
+      if (!o) { if (Object.keys(log).length < API_MAX_KEYS) log[k] = e; continue; }
+      o.n += e.n; o.last = e.last;
+      if (e.poll) o.poll = true;
+      for (const x of e.ex) if (o.ex.length < (o.poll ? 1 : 2)) o.ex.push(x);
+    }
+    apiBuf = null;
+    GM_setValue(K_API_LOG, log);
+  }
+  function apiNote(method, url, reqBody, status, resBody, ctype) {
+    try {
+      const p = apiPath(url);
+      if (!/joyclub\.(de|com)$/.test(p.host)) return;
+      if (/\.(js|css|png|jpe?g|gif|webp|svg|woff2?|ico|mp4)$/i.test(p.path)) return;
+      const req = apiParseBody(reqBody);
+      const key = `${method.toUpperCase()} ${p.host}${p.path}?${p.qk} ${apiShape(req)}`;
+      apiBuf = apiBuf || {};
+      const now = Date.now();
+      let e = apiBuf[key];
+      // Dauerläufer: mind. 3 Aufrufe in gleichmäßigen Abständen (≥ 3 s) → nur ein Beispiel
+      const known = (window.__jafApiSeen = window.__jafApiSeen || {});
+      const tl = (known[key] = (known[key] || []).concat(now).slice(-3));
+      const d1 = tl.length === 3 ? tl[1] - tl[0] : 0, d2 = tl.length === 3 ? tl[2] - tl[1] : 0;
+      const poll = d1 >= 3000 && d2 >= 3000 && Math.abs(d1 - d2) <= Math.max(d1, d2) * 0.25;
+      const prev = tl.length > 1;
+      if (!e) e = apiBuf[key] = { m: method.toUpperCase(), path: p.host + p.path, sig: apiShape(req), n: 0, first: now, last: now, poll: false, isNew: true, ex: [] };
+      e.n++; e.last = now;
+      if (poll) e.poll = true;
+      if (e.ex.length < (e.poll ? 1 : 2) && !(poll && prev)) {
+        let res = resBody;
+        if (typeof res === 'string') { try { res = JSON.parse(res); } catch (x) { res = `(${ctype || 'Text'}, ${res.length} Zeichen)`; } }
+        e.ex.push({ ts: now, url: p.example, status, req: apiRedact(req), res: apiRedact(res) });
+      }
+      if (!apiFlushT) apiFlushT = setTimeout(apiFlush, 3000);
+    } catch (err) { /* Rekorder darf nie stören */ }
+  }
+  (function apiHook() {
+    let on = false;
+    try { on = !!GM_getValue(K_API_REC, false); } catch (e) { on = false; }
+    if (!on) return;
+    const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    // Firefox: Funktionen für die Seite freigeben
+    const ex = (f) => { try { return typeof exportFunction === 'function' ? exportFunction(f, W) : f; } catch (e) { return f; } };
+    try {
+      const of = W.fetch;
+      if (typeof of === 'function' && !of.__jafRec) {
+        const nf = function (input, init) {
+          const url = typeof input === 'string' ? input : (input && input.url) || String(input);
+          const method = (init && init.method) || (input && input.method) || 'GET';
+          const body = init && init.body;
+          const pr = of.apply(this, arguments);
+          pr.then((r) => {
+            const ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
+            if (/json/.test(ct)) r.clone().text().then((t) => apiNote(method, url, body, r.status, t, ct)).catch(() => apiNote(method, url, body, r.status, null, ct));
+            else apiNote(method, url, body, r.status, `(${ct || '?'})`, ct);
+          }).catch(() => {});
+          return pr;
+        };
+        nf.__jafRec = true;
+        W.fetch = ex(nf);
+      }
+      const XP = W.XMLHttpRequest && W.XMLHttpRequest.prototype;
+      if (XP && !XP.__jafRec) {
+        const oo = XP.open, os = XP.send;
+        XP.open = ex(function (m, u) { this.__jafM = m; this.__jafU = u; return oo.apply(this, arguments); });
+        XP.send = ex(function (b) {
+          const x = this;
+          try {
+            x.addEventListener('load', () => {
+              let t = null; const ct = x.getResponseHeader ? x.getResponseHeader('content-type') || '' : '';
+              try { t = (x.responseType === '' || x.responseType === 'text') ? x.responseText : (x.responseType === 'json' ? JSON.stringify(x.response) : `(${x.responseType})`); } catch (e) { t = null; }
+              apiNote(x.__jafM || 'GET', x.__jafU || '', b, x.status, /json/.test(ct) || x.responseType === 'json' ? t : `(${ct || '?'})`, ct);
+            });
+          } catch (e) { /* egal */ }
+          return os.apply(this, arguments);
+        });
+        XP.__jafRec = true;
+      }
+    } catch (e) { /* egal */ }
+  })();
+
+  // Alles Weitere erst, wenn das Dokument geparst ist (Skript startet wegen des Rekorders bei document-start)
+  const __jafMain = () => {
   // ---------- Speicher ----------
   // Große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen ab 1.74 als
   // EIN Tampermonkey-Wert JE MITGLIED („jaf_log|/profile/…“) statt als ein riesiger Wert. Der Rest des Skripts
@@ -121,30 +275,48 @@
     return res;
   }
 
-  // ---------- Login-Seite (identity.joyclub.com): nur einloggen, wenn das Skript den Login angestoßen hat ----------
+  // ---------- Login-Seite (identity.joyclub.com): „Angemeldet bleiben“ setzen, nur mit vom Browser ausgefüllten Feldern klicken,
+  // automatisch höchstens 1× je 30 min (gemeinsam mit dem Login aus einem laufenden Scan) ----------
   if (location.hostname === 'identity.joyclub.com') {
     (async () => {
+      if (!/\/ui\/login\//.test(location.pathname)) return;
       const K = 'jaf_login_pending';
       const p = gmGet(K, null);
-      if (!p || !p.auto || p.tried || Date.now() - p.ts > 5 * 60000) return; // Login von Hand → nichts tun
+      const scripted = !!(p && p.auto && !p.tried && Date.now() - p.ts <= 5 * 60000);
+      const last = GM_getValue('jaf_login_try', 0) || 0;
+      if (!scripted && Date.now() - last < 30 * 60000) return;
       const sl = (ms) => new Promise((r) => setTimeout(r, ms));
       const q = (sel) => document.querySelector(sel);
+      const report = (msg) => { if (scripted) gmSet('jaf_login_result', { token: p.token, ok: false, msg, ts: Date.now() }); };
+      const hint = (msg) => {
+        if (document.getElementById('jaf-login-hint')) return;
+        const b = document.createElement('div');
+        b.id = 'jaf-login-hint';
+        b.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:2147483647;background:#3a2a10;border:1px solid #ffb300;color:#fff;border-radius:8px;padding:10px 16px;font:14px system-ui;box-shadow:0 6px 18px rgba(0,0,0,.5);max-width:90vw';
+        b.textContent = msg;
+        document.body.appendChild(b);
+      };
+      const auto = (el) => { try { return el.matches(':autofill'); } catch (e) { try { return el.matches(':-webkit-autofill'); } catch (e2) { return false; } } };
+      const filled = (el) => !!el && (!!el.value || auto(el));
       let user = null, pw = null;
-      for (let i = 0; i < 40 && !(user && pw); i++) { user = q('[data-e2e="input-username"] input'); pw = q('[data-e2e="input-password"] input[type="password"]'); await sl(500); }
-      await sl(2500); // Passwort-Manager füllen lassen
-      const report = (msg) => gmSet('jaf_login_result', { token: p.token, ok: false, msg, ts: Date.now() });
+      for (let i = 0; i < 40 && !(user && pw); i++) { user = q('[data-e2e="input-username"] input') || q('input[autocomplete="username"]'); pw = q('[data-e2e="input-password"] input[type="password"]') || q('input[autocomplete="current-password"]'); if (!(user && pw)) await sl(500); }
       if (!user || !pw) { report('Login-Formular nicht gefunden'); return; }
-      if (!user.value || !pw.value) { report('Benutzername/Passwort nicht ausgefüllt'); return; }
-      gmSet(K, Object.assign({}, p, { tried: Date.now() }));
-      const cb = q('[data-e2e="checkbox-autologin"] input[type="checkbox"]');
+      for (let i = 0; i < 20 && !(filled(user) && filled(pw)); i++) await sl(500); // Passwort-Manager füllen lassen
+      if (!filled(user) || !filled(pw)) { report('Benutzername/Passwort nicht ausgefüllt'); return; }
+      GM_setValue('jaf_login_try', Date.now());
+      if (scripted) gmSet(K, Object.assign({}, p, { tried: Date.now() }));
+      const cb = q('[data-e2e="checkbox-autologin"] input[type="checkbox"]') || q('input[type="checkbox"][aria-label="Angemeldet bleiben"]');
       if (cb && !cb.checked) { cb.click(); await sl(300); }
       // Cloudflare-Prüfung (Turnstile) abwarten, falls vorhanden
-      for (let i = 0; i < 40; i++) { const t = q('input[name="cf-turnstile-response"]'); if (!t || t.value) break; await sl(500); }
+      for (let i = 0; i < 60; i++) { const t = q('input[name="cf-turnstile-response"]'); if (!t || t.value) break; await sl(500); }
       const btn = q('j-button[data-e2e="button-submit"]');
       const inner = btn && btn.shadowRoot && btn.shadowRoot.querySelector('button');
       if (inner) inner.click(); else if (btn) btn.click(); else { report('Login-Button nicht gefunden'); return; }
       await sl(20000);
-      if (location.hostname === 'identity.joyclub.com') report('Login nicht abgeschlossen (z. B. Cloudflare-Prüfung oder falsche Daten)');
+      if (location.hostname === 'identity.joyclub.com' && /\/ui\/login\//.test(location.pathname)) {
+        report('Login nicht abgeschlossen (z. B. Cloudflare-Prüfung oder falsche Daten)');
+        hint('Opa-Scan: Bitte einmal selbst auf „Login“ klicken – der Browser gibt gespeicherte Passwörter oft erst nach einem Klick frei.');
+      }
     })();
     return;
   }
@@ -440,6 +612,8 @@
     VISIT_REASON: 'Profilbesucher',
     LIKE_NOTE_TEXT: 'Whitelist: Interaktion am {datum}',      // „Nicht mehr ignorieren“ auf „Mögen mich“
     LIKE_REASON: 'Interaktion',
+    FRIEND_REASON: 'Freund',                 // automatische Whitelist: Freunde (/kontakte/friendship.html)
+    KNOWN_REASON: 'persönlich bekannt',      // automatische Whitelist: Kontakte mit „Persönlich bekannt“
     MOD_NOTE_TEXT: 'Whitelist: Moderator der Gruppe "{gruppe}"',
     PROFILE_PATH_RE: /^\/profile\/\d+\.[^/]+\.html$/i,
 
@@ -4952,7 +5126,8 @@
   function parseUntil(txt) {
     const now = new Date();
     let h = null, m = 0;
-    let mm = (txt || '').match(/bis\s+(?:voraussichtlich\s+|ca\.\s*|etwa\s+|circa\s+)*(\d{1,2})(?:[:.](\d{2}))?\s*Uhr/i);
+    let mm = (txt || '').match(/(?:bis|ab|um|gegen)\s+(?:voraussichtlich\s+|ca\.\s*|etwa\s+|circa\s+|spätestens\s+)*(\d{1,2})(?:[:.](\d{2}))?\s*Uhr/i) ||
+      (txt || '').match(/\b(\d{1,2})[:.](\d{2})\s*Uhr/i) || (txt || '').match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
     if (mm) { h = +mm[1]; m = +(mm[2] || 0); }
     else if ((mm = (txt || '').match(/until\s+(?:approximately\s+|about\s+|approx\.\s*)*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i))) {
       h = (+mm[1] % 12) + (/pm/i.test(mm[3]) ? 12 : 0); m = +(mm[2] || 0);
@@ -5088,9 +5263,9 @@
       // Rückkehr aus dem Login-Fenster: Erfolg melden und Fenster schließen
       const tok = new URLSearchParams(location.search).get('jaf_login');
       if (tok) { gmSet(K_LOGIN_RESULT, { token: tok, ok: true, ts: Date.now() }); if (window.name === 'jaf-login') setTimeout(() => window.close(), 500); }
-      return false;
+      return plainSpecialPage(null);
     }
-    if (!scanActive()) return false;
+    if (!scanActive()) return g.type === 'maint' && /wartung|maintenance|nicht erreichbar|gleich wieder|bald wieder/i.test(`${g.text || ''} ${document.title}`) ? plainSpecialPage(g) : false;
     if (/^\/webauth\//.test(location.pathname)) return true; // Login-Weiterleitung läuft gerade
     const p = panel(); p.innerHTML = '<b>Alter-Filter</b><br>';
     if (g.type === 'maint') {
@@ -5225,6 +5400,272 @@
     return bgFrameMain(); // Gästeliste m/p/alle
   }
 
+
+
+  // ---------- API-Rekorder: Bedienung (Experten-Einstellungen) ----------
+  const API_FEATURES = [
+    ['Profilbesucher', /visit/i], ['Mögen mich / Interaktionen', /vot|like|kiss|interaction/i], ['ClubMail', /clubmail|conversation|message|messenger/i],
+    ['Ignorierliste', /ignor|block/i], ['Partys / Gästelisten', /event|guest|registration|date/i], ['Gruppen', /group|gruppe/i],
+    ['Mitgliedersuche', /search|suche|finder|member/i], ['Profile', /profile|user/i], ['Kontakte / Freunde', /contact|friend|kontakt|fav/i],
+    ['Profilnotiz', /note|notiz/i], ['Sichtbarkeit', /visib|invisible|online/i],
+  ];
+  function apiRecStats() {
+    const log = GM_getValue(K_API_LOG, {}) || {};
+    const l = Object.values(log);
+    return { n: l.length, neu: l.filter((e) => e.isNew).length };
+  }
+  function apiRecExport() {
+    const log = GM_getValue(K_API_LOG, {}) || {};
+    const entries = Object.entries(log).map(([key, e]) => Object.assign({ key }, e, { candidateFor: API_FEATURES.filter(([, re]) => re.test(e.path)).map(([n]) => n) }));
+    const covered = new Set(entries.flatMap((e) => e.candidateFor));
+    const out = { format: 'jaf-api-rec', v: 1, script: (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '', ts: Date.now(),
+      entries, candidates: Object.fromEntries(API_FEATURES.map(([n]) => [n, entries.filter((e) => e.candidateFor.includes(n)).map((e) => e.key)])),
+      notYetApi: API_FEATURES.map(([n]) => n), noEndpointSeen: API_FEATURES.map(([n]) => n).filter((n) => !covered.has(n)) };
+    for (const e of Object.values(log)) e.isNew = false;
+    GM_setValue(K_API_LOG, log);
+    return JSON.stringify(out, null, 1);
+  }
+  function apiRecControl() {
+    const w = document.createElement('div');
+    w.style.cssText = 'display:flex;gap:12px;align-items:center;flex-wrap:wrap';
+    const lb = document.createElement('label');
+    lb.style.cssText = 'display:flex;gap:6px;align-items:center;cursor:pointer';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!GM_getValue(K_API_REC, false);
+    lb.appendChild(cb); lb.appendChild(document.createTextNode('an'));
+    const info = document.createElement('span');
+    info.className = 'jaf-api-info';
+    const upd = () => { const st = apiRecStats(); info.textContent = `${st.n} erfasst, davon ${st.neu} neu`; };
+    cb.addEventListener('change', () => { GM_setValue(K_API_REC, cb.checked); upd(); });
+    const ex = document.createElement('a'); ex.href = '#'; ex.textContent = 'Exportieren';
+    ex.addEventListener('click', (e) => { e.preventDefault(); flDownload(`joyclub-api-rekorder-${isoDay(new Date())}.json`, apiRecExport()); upd(); });
+    const cl = document.createElement('a'); cl.href = '#'; cl.textContent = 'Leeren';
+    cl.addEventListener('click', (e) => { e.preventDefault(); GM_setValue(K_API_LOG, {}); upd(); });
+    w.append(lb, info, ex, cl);
+    upd();
+    return w;
+  }
+
+  // ---------- Sonderseiten ohne laufenden Scan: Wartung → zur angegebenen Uhrzeit bzw. 5, 10, 15 … 30 min neu laden; „nicht gefunden“ → 1× neu laden ----------
+  const K_NOTFOUND = 'jaf_notfound'; // [{ url, ts }]
+  function plainSpecialPage(g) {
+    if (IN_FRAME) return false;
+    let n = 0;
+    try { n = +(sessionStorage.getItem('jaf_maint_n') || 0); } catch (e) { n = 0; }
+    if (g && g.type === 'maint') {
+      const step = Math.min(30, 5 * (n + 1)) * 60000;
+      const until = g.until && g.until > Date.now() ? g.until + rand(30000, 90000) : Date.now() + step;
+      try { sessionStorage.setItem('jaf_maint_n', String(g.until && g.until > Date.now() ? 0 : n + 1)); } catch (e) { /* egal */ }
+      const b = document.createElement('div');
+      b.id = 'jaf-maint';
+      b.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:2147483646;background:#3a2a10;border:1px solid #ffb300;color:#fff;border-radius:8px;padding:10px 16px;font:14px system-ui;box-shadow:0 6px 18px rgba(0,0,0,.5)';
+      b.textContent = `Opa-Scan: JOYclub-Wartung erkannt – die Seite lädt um ${fmtHM(until)} neu${g.until ? ' (Uhrzeit laut Wartungsseite)' : ''}.`;
+      (document.body || document.documentElement).appendChild(b);
+      setTimeout(() => location.reload(), Math.max(10000, until - Date.now()));
+      return true;
+    }
+    try { sessionStorage.removeItem('jaf_maint_n'); } catch (e) { /* egal */ }
+    // „Seite nicht gefunden“
+    const err = document.querySelector('.error_page_container');
+    const t = `${document.title} ${(err && err.textContent) || ''}`;
+    if (err && /404|nicht gefunden|existiert nicht/i.test(t)) {
+      const key = 'jaf_nf_' + location.pathname + location.search;
+      let tried = false;
+      try { tried = !!sessionStorage.getItem(key); sessionStorage.setItem(key, '1'); } catch (e) { tried = true; }
+      if (!tried) { setTimeout(() => location.reload(), 1500); return true; }
+      const l = (GM_getValue(K_NOTFOUND, []) || []).filter((x) => x.url !== location.href).slice(-49);
+      l.push({ url: location.href, ts: Date.now() });
+      GM_setValue(K_NOTFOUND, l);
+      console.log('[Alter-Filter] Seite nicht gefunden (auch nach Neuladen):', location.href);
+    }
+    return false;
+  }
+
+  // ---------- Automatische Whitelist: Freunde und „persönlich bekannt“ (Kontakte) ----------
+  const K_AUTOWL_TS = 'jaf_autowl_ts';
+  const K_AUTOWL_LAST = 'jaf_autowl_last'; // { ts, unblocked: [Namen] }
+  const AUTOWL_GRACE = 30 * 864e5;
+  function parseContacts(doc, onlyFace) {
+    const out = [];
+    for (const li of doc.querySelectorAll('li[id^="fav_user_"]')) {
+      const a = li.querySelector('.fav_menu_user a[href*="/my/"], .fav_menu_user a[href*="/profile/"]');
+      if (!a) continue;
+      if (onlyFace && !li.querySelector('.btn_face2face.on')) continue;
+      let path = '';
+      try { path = cleanPath(new URL(a.getAttribute('href'), location.origin).pathname).replace(/^\/my\//, '/profile/'); } catch (e) { continue; }
+      const id = idOf(path);
+      if (id && !ownIds().has(id)) out.push({ id, name: a.textContent.trim(), path, url: location.origin + path });
+    }
+    return out;
+  }
+  function autoWhiteApply(friends, known) {
+    const now = Date.now();
+    const pairs = [...friends.map((m) => [m, CONFIG.FRIEND_REASON]), ...known.map((m) => [m, CONFIG.KNOWN_REASON])];
+    for (const [m, r] of pairs) addWhiteEntry(m, r);
+    const w = getDynWhite();
+    const byId = new Map();
+    for (const [k, e] of Object.entries(w)) { const id = e.id || idOf(e.url); if (id) byId.set(String(id), k); }
+    for (const [m, r] of pairs) { const k = byId.get(String(m.id)) || norm(m.name); if (w[k]) { w[k].auto = Object.assign({}, w[k].auto || {}, { [r]: now }); } }
+    // Wegfall: nach 30 Tagen Schonfrist austragen (könnte auch nur unsichtbar geworden sein)
+    for (const [k, e] of Object.entries(w)) {
+      if (!e.auto) continue;
+      for (const [r, ts] of Object.entries(e.auto)) {
+        if (now - ts <= AUTOWL_GRACE) continue;
+        delete e.auto[r];
+        e.reasons = (e.reasons || []).filter((x) => x !== r);
+      }
+      if (!Object.keys(e.auto).length) delete e.auto;
+      if (!(e.reasons || []).length && !(e.modGroups || []).length && !(e.parties || []).length && !(e.vipParties || []).length) delete w[k];
+    }
+    gmSet(K_WHITE, w);
+    _wIdCache.t = 0;
+    return pairs;
+  }
+  async function autoWhiteRefresh(force = false, docs = null) {
+    if (IN_FRAME || window.__jafAwlBusy) return false;
+    if (!force && Date.now() - (GM_getValue(K_AUTOWL_TS, 0) || 0) < 864e5) return false;
+    window.__jafAwlBusy = true;
+    try {
+      let fd = docs && docs.friends, kd = docs && docs.contacts;
+      if (!fd) fd = (await jfetch(location.origin + '/kontakte/friendship.html')).doc;
+      if (!kd) kd = (await jfetch(location.origin + '/kontakte/')).doc;
+      if (!fd || !kd || pageGate(fd) || pageGate(kd)) return false;
+      const pairs = autoWhiteApply(parseContacts(fd, false), parseContacts(kd, true));
+      GM_setValue(K_AUTOWL_TS, Date.now());
+      await autoWhiteUnblock(pairs);
+      return true;
+    } catch (e) { console.warn('[Alter-Filter] Freunde/Kontakte', e); return false; }
+    finally { window.__jafAwlBusy = false; }
+  }
+  // vom Opa-Schutz Ignorierte, die jetzt auf der automatischen Whitelist stehen: entsperren (von Hand Ignorierte nie)
+  async function autoWhiteUnblock(pairs) {
+    const blocked = blockedIdMap();
+    const log_ = getLog();
+    const todo = [];
+    for (const [m, r] of pairs) {
+      if (!blocked.get(String(m.id))) continue;
+      const lp = Object.keys(log_).find((p) => idOf(p) === String(m.id));
+      if (!lp || handMade(log_[lp]) || log_[lp].unblocked) continue;
+      if (!todo.some((x) => x.m.id === m.id)) todo.push({ m, r, lp });
+    }
+    if (!todo.length || scanActive() || lockedByOther()) return;
+    if (!(await acquireLock('Whitelist: Freunde'))) return;
+    const done = [];
+    try {
+      for (const x of todo) {
+        const res = await bgUnignore(x.m.id);
+        if (res.ok) { markUnblocked(x.lp, x.m, `Whitelist: ${x.r}`); done.push(`${x.m.name} (${x.r})`); }
+        await sleep(rand(800, 1600));
+      }
+    } finally { releaseLock(); }
+    if (done.length) {
+      GM_setValue(K_AUTOWL_LAST, { ts: Date.now(), unblocked: done });
+      try { panel(); log(`Automatische Whitelist: entsperrt – ${done.join(', ')}`); } catch (e) { /* egal */ }
+    }
+  }
+  function autoWhiteInit() {
+    if (IN_FRAME || !sessionId()) return;
+    if (/^\/kontakte\/(friendship\.html)?$/.test(location.pathname)) {
+      // eigene Kontakte-Seite offen: gleich übernehmen (die jeweils andere Seite wird nachgeladen)
+      const isF = /friendship/.test(location.pathname);
+      setTimeout(() => autoWhiteRefresh(true, isF ? { friends: document } : { contacts: document }), 1500);
+      return;
+    }
+    setTimeout(() => autoWhiteRefresh(false), 20000);
+  }
+
+  // ---------- Profilinfos nebenbei merken (Mögen mich, Profilbesuche, ClubMail) ----------
+  // jaf_pi_<id> = { nick, nicks, type, ages, persons?, img (data:-URL ~150 px), imgKey, ts }
+  // Bilder bleiben dauerhaft bei Interaktionen/Fickliste; sonst höchstens PI_MAX (älteste zuerst weg).
+  const K_PI = 'jaf_pi_';
+  const K_PI_IDX = 'jaf_pi_idx'; // { id: [lastSeenTs, keep(0|1)] }
+  const PI_MAX = 20000;
+  const piGet = (id) => GM_getValue(K_PI + id, null);
+  function piImgUrl(el) {
+    if (!el) return '';
+    const root = el.shadowRoot ? [el, el.shadowRoot] : [el];
+    for (const r of root) {
+      for (const so of r.querySelectorAll('source[srcset]')) {
+        const list = so.getAttribute('srcset').split(',').map((x) => x.trim().split(/\s+/)).filter((x) => /feig-partner/.test(x[0]));
+        if (!list.length || /\/none\.png/.test(list[0][0])) continue;
+        const pick = list.find((x) => /240w|300w/.test(x[1] || '')) || list.find((x) => /360w|420w/.test(x[1] || '')) || list[list.length - 1];
+        return pick[0];
+      }
+      const img = r.querySelector('img[src*="feig-partner"]');
+      if (img && !/\/none\.png/.test(img.src)) return img.src;
+    }
+    return '';
+  }
+  const piImgKey = (u) => String(u || '').replace(/[?#].*$/, '').replace(/image_\d+_/, 'image_');
+  async function piShrink(dataUrl, size = 150) {
+    return new Promise((resolve) => {
+      const im = new Image();
+      im.onload = () => {
+        try {
+          const s = Math.min(1, size / Math.max(im.width, im.height));
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(im.width * s)); c.height = Math.max(1, Math.round(im.height * s));
+          c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/jpeg', 0.8));
+        } catch (e) { resolve(''); }
+      };
+      im.onerror = () => resolve('');
+      im.src = dataUrl;
+    });
+  }
+  const piQueue = [];
+  let piBusy = false;
+  async function piWork() {
+    if (piBusy) return;
+    piBusy = true;
+    try {
+      while (piQueue.length) {
+        const { id, url, key } = piQueue.shift();
+        const rec = piGet(id);
+        if (!rec || rec.imgKey === key) continue;
+        const big = await flFetchImage(url);
+        const small = big ? await piShrink(big) : '';
+        if (small) { const r2 = piGet(id) || rec; r2.img = small; r2.imgKey = key; GM_setValue(K_PI + id, r2); }
+        await sleep(rand(300, 700));
+      }
+    } finally { piBusy = false; }
+  }
+  // items: [{ id, name, type, ages, el (Element mit Bild) }], keep = Interaktion (Bild dauerhaft behalten)
+  function piNote(items, keep, withImg = true) {
+    if (IN_FRAME) return;
+    const idx = GM_getValue(K_PI_IDX, {}) || {};
+    const nickIdx = GM_getValue('jaf_pi_nick', {}) || {};
+    const fl = getFl();
+    const now = Date.now();
+    let n = 0;
+    for (const it of items) {
+      const id = String(it.id || '');
+      if (!id) continue;
+      const rec = piGet(id) || { nicks: [], ts: now };
+      let ch = !piGet(id);
+      if (it.name && rec.nick !== it.name) { if (rec.nick) rec.nicks = [...new Set([...(rec.nicks || []), rec.nick])]; rec.nick = it.name; ch = true; }
+      if (it.type && !/^Typ /.test(it.type) && rec.type !== it.type) { rec.type = it.type; ch = true; }
+      if (it.ages && it.ages.length && JSON.stringify(rec.ages) !== JSON.stringify(it.ages)) { rec.ages = it.ages; rec.agesTs = now; ch = true; }
+      rec.ts = now;
+      if (ch || !idx[id] || now - idx[id][0] > 864e5) GM_setValue(K_PI + id, rec);
+      if (rec.nick) nickIdx[norm(rec.nick)] = id;
+      const k = keep || fl[id] || (idx[id] && idx[id][1]) ? 1 : 0;
+      idx[id] = [now, k];
+      if (withImg && it.el && n < 200) {
+        const url = piImgUrl(it.el);
+        const key = piImgKey(url);
+        if (url && rec.imgKey !== key && !piQueue.some((q) => q.id === id)) { piQueue.push({ id, url, key }); n++; }
+      }
+    }
+    // Obergrenze: nur Einträge ohne Interaktion/Fickliste fallen weg (älteste zuerst)
+    const loose = Object.entries(idx).filter(([id, v]) => !v[1] && !fl[id]);
+    if (loose.length > PI_MAX) {
+      loose.sort((a, b) => a[1][0] - b[1][0]);
+      for (const [id] of loose.slice(0, loose.length - PI_MAX)) { GM_deleteValue(K_PI + id); delete idx[id]; }
+    }
+    GM_setValue(K_PI_IDX, idx);
+    GM_setValue('jaf_pi_nick', nickIdx);
+    piWork();
+  }
 
   // =====================================================================
   // ---------- Sichtbarkeit (Unsichtbar-Modus) ----------
@@ -5478,6 +5919,10 @@
   }
   // Treffer sperren (mit Limit-Prüfung): Ergebnis wie actJob, zusätzlich result 'limit'
   async function blockItem(it, source, cnt) {
+    if (!it.action) {
+      try { await autoWhiteRefresh(false); } catch (e) { /* egal */ }
+      if (isWhiteMember(it)) return { result: 'skipped', msg: 'Whitelist' };
+    }
     if (!it.action && !(await ensureSlot(Object.assign({ source }, it), cnt))) return { result: 'limit', msg: 'Limit erreicht, nicht gesperrt' };
     const r = await actJob(it, source);
     if (CONFIG.DRY_RUN && !it.action && r && r.result !== 'failed') memNote(it.path, 'would', Object.assign({ source }, it));
@@ -6775,6 +7220,7 @@
     if (window.__jafMjSeen !== sigKey) {
       window.__jafMjSeen = sigKey;
       try { recordAccounts(cards.filter((c) => c.path && c.ages.length)); noteSighting(cards.filter((c) => c.path && c.day), pg.src); } catch (e) { /* egal */ }
+      try { piNote(cards.filter((c) => c.path && c.gender).map((c) => ({ id: c.id || idOf(c.path), name: c.name, type: c.type, ages: c.ages, el: c.card })), pg.src === 'Likes'); } catch (e) { /* egal */ }
     }
     for (const c of cards) {
       if (!c.gender || !c.path) continue; // Clubs, Veranstalter usw. bleiben ungefärbt
@@ -8080,6 +8526,8 @@
       tb2 = section('Notizen');
       row(tb2, 'Notiz schreiben:', onOff('WRITE_NOTE'), 'Profilnotiz vor dem Ignorieren hinterlegen.', { key: 'WRITE_NOTE' });
       row(tb2, 'Notiz Pflicht:', onOff('NOTE_REQUIRED'), 'Ohne gespeicherte Notiz wird nicht ignoriert.', { key: 'NOTE_REQUIRED' });
+      tb2 = section('API-Rekorder');
+      row(tb2, 'API-Rekorder:', apiRecControl(), 'Schneidet ab dem nächsten Seitenaufruf mit, welche Schnittstellen JOYclub selbst benutzt (je Adresse 2 Beispiele, geschwärzt: E-Mail, Zugangsdaten, Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt). Der Export dient dazu, Seiten-Lösungen des Skripts durch Schnittstellen zu ersetzen. Wirkt sofort, ohne „Speichern“.');
     }
     // ---- Buttons ----
     const bw = document.createElement('div');
@@ -10892,13 +11340,25 @@
       if (img && img.getAttribute('src') !== src) { img.setAttribute('src', src); img.style.filter = 'grayscale(1)'; }
     }
   }
+  function piDeletedDecor(av, nameEl) {
+    const nick = av && av.getAttribute('title');
+    const id = nick && (GM_getValue('jaf_pi_nick', {}) || {})[norm(nick)];
+    const rec = id && piGet(id);
+    if (!rec) return;
+    if (nameEl && !nameEl.getAttribute('data-jaf-del')) { nameEl.setAttribute('data-jaf-del', id); nameEl.style.textDecoration = 'line-through'; nameEl.style.opacity = '.75'; nameEl.title = 'Konto gelöscht'; }
+    if (rec.img) {
+      for (const so of av.querySelectorAll('picture source')) if (so.getAttribute('srcset') !== rec.img) so.setAttribute('srcset', rec.img);
+      const img = av.querySelector('img');
+      if (img && img.getAttribute('src') !== rec.img) { img.setAttribute('src', rec.img); img.style.filter = 'grayscale(1)'; }
+    }
+  }
   function flClubMail() {
     // Unterhaltungsliste: Nick vorhanden, Link leer = gelöschtes Konto
     for (const av of document.querySelectorAll('j-avatar-image.cm-conversation-list-item__avatar[title]')) {
       if (av.getAttribute('href') !== '') continue;
       const p = flByNick(av.getAttribute('title'));
-      if (!p) continue;
       const item = av.closest('.cm-conversation-list-item') || av.parentElement;
+      if (!p) { piDeletedDecor(av, item && item.querySelector('.cm-conversation-list-item__name')); continue; }
       if (p.live !== 'dead') {
         const day = (((item && item.querySelector('.cm-conversation-list-item__meta')) || {}).textContent || '').match(/\d{2}\.\d{2}\.\d{4}/);
         flSetLive(p, 'dead', `laut ClubMail, spätestens am ${day ? day[0] : fmtDay(Date.now())}`);
@@ -11286,6 +11746,7 @@
     regionInit();
     await storeMigrationInit();
     if (await topGate()) return;
+    autoWhiteInit();
     if (isSettingsPage()) { await waitFor(() => document.getElementById('c'), 10000); renderSettingsPage(); }
     await peekInit();
     if (await noteJobInit()) return;
@@ -11429,4 +11890,7 @@
   safeInit();
   let lastPath = location.pathname;
   setInterval(() => { if (location.pathname !== lastPath) { lastPath = location.pathname; safeInit(); } }, 1000);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', __jafMain, { once: true });
+  else __jafMain();
 })();

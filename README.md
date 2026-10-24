@@ -143,7 +143,8 @@ Inhalt:
   - Moderatoren der gescannten Gruppen (fallen bei Verlust des Moderatorenstatus wieder heraus),
   - Veranstalter gescannter Partys (dauerhaft, werden ggf. entsperrt),
   - VIP-Gäste, die im Veranstaltungstext verlinkt sind,
-  - Mitglieder, die über „Nicht mehr ignorieren“ entsperrt wurden.
+  - Mitglieder, die über „Nicht mehr ignorieren“ entsperrt wurden,
+  - **Freunde** (`/kontakte/friendship.html`, Grund „Freund“) und Kontakte mit **„Persönlich bekannt“** (`/kontakte/`, Grund „persönlich bekannt“): höchstens einmal täglich im Hintergrund gelesen, sofort beim Öffnen dieser Seiten und vor dem Ignorieren, wenn die Liste älter als 24 Stunden ist. Wer dort fehlt, fällt erst nach 30 Tagen Schonfrist heraus (könnte auch nur unsichtbar geworden sein). Vom Opa-Schutz Ignorierte, die auf diese Liste kommen, werden entsperrt (von Hand Ignorierte nie); das Protokoll nennt sie.
 - Whitelist-Einträge bekommen eine eigene Profilnotiz, z. B. `Whitelist: Party "…" am …`, `Whitelist: Veranstalter von "…"`, `Whitelist: Profilbesucher am …` oder `Whitelist: Interaktion am …`.
 - Profil-Links der Whitelist-Mitglieder werden gelernt, sobald sie irgendwo auftauchen.
 
@@ -357,9 +358,17 @@ Alle Scans (Party, Mitgliedersuche, Gruppen, Profilprüfungen im Hintergrund) er
 | abgemeldet | Gast-Seite („Erst einloggen, dann loslegen – Fehler 401“, `body.guest`, Login-Link) | Login in einem kleinen Fenster über `www.joyclub.de/webauth/login/` → `identity.joyclub.com`: sind Benutzername und Passwort (vom Browser) ausgefüllt, hakt das Skript „Angemeldet bleiben“ an und klickt „Login“ – höchstens einmal pro Abmeldung und einmal in 30 Minuten. Klappt das nicht (leere Felder, Cloudflare-Prüfung), pausiert der Scan, bis man sich im Fenster selbst angemeldet hat, und läuft dann weiter |
 | Wartungsseite | weder angemeldet noch Login-Feld | Uhrzeit aus dem Hinweis lesen („bis voraussichtlich 17 Uhr“) und bis dahin plus zufällig 5–10 Minuten **gar nicht** auf JOYclub zugreifen (ohne Uhrzeit: 30 Minuten plus 5–10); danach den unterbrochenen Schritt wiederholen |
 
-Pausen zählen nicht als Fehlschlag, gelten für alle Tabs und stehen im Protokoll-Export der Mitgliedersuche. Während einer Pause heißt das Popup „Opa-Scan pausiert“.
+Pausen zählen nicht als Fehlschlag, gelten für alle Tabs und stehen im Protokoll-Export der Mitgliedersuche. Während einer Pause heißt das Popup „Opa-Scan pausiert“. Erkannt werden Uhrzeiten wie „bis voraussichtlich 17 Uhr“, „ab 17:30 Uhr“ oder „17:00“.
 
-Auf `identity.joyclub.com` wird das Skript nur aktiv, wenn es den Login selbst angestoßen hat – ein Login von Hand bleibt unberührt.
+**Ohne laufenden Scan:**
+
+| Seite | Reaktion |
+|---|---|
+| Wartungsseite | Hinweis oben auf der Seite; neu geladen wird zur angegebenen Uhrzeit (jede neue Uhrzeit wird übernommen), ohne oder mit schon vergangener Uhrzeit nach 5, 10, 15 … höchstens 30 Minuten |
+| „Seite nicht gefunden“ | einmal neu laden; bleibt es dabei, wird die Adresse vermerkt (`jaf_notfound`) |
+| Login-Seite (`identity.joyclub.com/ui/login/…`) | „Angemeldet bleiben“ setzen und „Login“ klicken, sobald der Browser Name und Passwort eingefüllt hat und die Cloudflare-Prüfung durch ist – höchstens einmal in 30 Minuten (gemeinsam mit dem Login aus einem Scan). Das Skript speichert kein Passwort. Chrome/Edge geben eingefüllte Passwörter oft erst nach einem Klick frei; klappt es nicht, erscheint „Bitte einmal selbst auf ‚Login‘ klicken“. |
+
+Werbeseiten werden behandelt, sobald ein Beispiel vorliegt.
 
 ---
 
@@ -582,11 +591,22 @@ Die CSV-Exporte (`;`, Excel-tauglich) unterhalb der Sicherung dienen nur der Feh
 
 ---
 
+## API-Rekorder
+
+In den Experten-Einstellungen (Abschnitt „API-Rekorder“, Standard aus, wirkt sofort): Das Skript startet dafür schon beim Seitenaufbau (`@run-at document-start`, `unsafeWindow`) und schneidet mit, welche Schnittstellen JOYclub selbst über `fetch`/`XMLHttpRequest` benutzt – je Adresse und Payload-Aufbau die ersten 2 Beispiele, regelmäßig wiederholte Abfragen nur einmal, Listen auf 2 Einträge plus Gesamtzahl gekürzt. Vor dem Speichern geschwärzt: E-Mail-Adressen, Passwörter/Token/Zugangsschlüssel, Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt. Anzeige „X erfasst, davon Y neu“, „Exportieren“ (JSON, markiert Kandidaten für bisherige Seiten-Lösungen und führt die Liste „noch nicht über die API“), „Leeren“.
+
+<img src="docs/einstellungen-experten.png" width="520" alt="Experten-Einstellungen mit API-Rekorder">
+
+## Profilinfos nebenbei
+
+Beim Ansehen von „Mögen mich“, „Profilbesuche“ und der ClubMail merkt sich das Skript zu jedem Mitglied ID, Nick und frühere Nicks, Typ, Alter und eine kleine Kopie des Profilbilds (~150 px, Bild-Adressen können ablaufen; bei Bekannten nur bei Änderung neu). Bilder von Interaktionen (Mögen mich, ClubMail) und Fickliste-Einträgen bleiben dauerhaft, alle übrigen höchstens 20 000 (die am längsten nicht gesehenen fallen zuerst weg). Gruppen-Scans und die systematische Mitgliedersuche speichern keine Bilder. Gelöschte Konten in der ClubMail, die nur so bekannt sind, erscheinen durchgestrichen mit dem gemerkten Bild.
+
 ## Technisches
 
 - **Speicher:** große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen als ein Tampermonkey-Wert je Mitglied (`jaf_log|/profile/…`); geändert wird nur, was sich ändert, andere Tabs werden über `GM_addValueChangeListener` informiert. Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`; ab 1.76 `GM_xmlhttpRequest` mit `@connect image-user.feig-partner.de` (Profilbilder für das Profil-Archiv – Tampermonkey fragt einmal nach).
 - **Fickliste:** `jaf_fl` (Personen, mit `profiles` für andere Plattformen und `statusAt`), `jaf_fl_groups` (verknüpfte Profile), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
 - **Orts-URLs:** ä→ae, ö→oe, ü→ue, ß→ss; Leerzeichen und Klammern → „_“ (z. B. „Mülheim (Ruhr)“ → `muelheim_ruhr`).
+- **Profilinfos:** `jaf_pi_<id>` (Nick, frühere Nicks, Typ, Alter, Bild), `jaf_pi_idx`, `jaf_pi_nick`; **API-Rekorder:** `jaf_api_rec`, `jaf_api_log`; ab 1.83 `@run-at document-start` und `@grant unsafeWindow`.
 - **Eigene Konten:** `jaf_own_accs` (Zweitkonto aus „Partys synchronisieren“) – zählen nie als Interaktion.
 - **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
 - **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
