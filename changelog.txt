@@ -1,6 +1,10 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.85 (24.10.2026)
+- Import: Einträge anderer Plattformen mit JOYclub-Profil werden zu JOYclub-Einträgen (fremdes Hauptprofil bleibt unter „Auch auf“, main:true); sofort bei bekannter ID/Nick, sonst beim Aufruf des Profils; ältere Importe werden umgestellt
+- Import: JOYclub-Profile nur mit Nick gehen nicht mehr verloren; JOYclub-ID auch aus Links ohne uid
+
 1.84 (24.10.2026)
 - Ficklisteneintragung: Knopf „Auch auf …“ (Profile anderer Plattformen) neben „Verknüpfte Profile …“, mit Anzeige der eingetragenen Profile
 

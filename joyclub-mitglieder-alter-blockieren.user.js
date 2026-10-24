@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.84
+// @version      1.85
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -9728,6 +9728,56 @@
     e.preventDefault(); e.stopPropagation();
     copyText(b.getAttribute('data-t') || '').then((ok) => { b.textContent = ok ? '✓' : '✗'; setTimeout(() => { b.textContent = '⧉'; }, 1500); });
   }, true);
+  // JOYclub-ID eines im Austausch/„Auch auf“ eingetragenen JOYclub-Profils (Link, uid oder bekannter Nick)
+  function flJoyIdOf(pr) {
+    if (!pr || pr.pf !== 'joyclub') return '';
+    if (/^\d+$/.test(String(pr.uid || ''))) return String(pr.uid);
+    const fromUrl = pr.url ? idOf(String(pr.url).replace(/^https?:\/\/[^/]+/i, '')) : '';
+    if (fromUrl) return fromUrl;
+    const nm = norm(pr.name || pr.nick || '');
+    if (!nm) return '';
+    const fl = Object.values(getFl()).find((q) => !flIsExt(q.id) && [q.nick, ...(q.nicks || [])].some((n) => norm(n) === nm));
+    if (fl) return fl.id;
+    const k = [...flKnownProfiles().values()].find((q) => norm(q.nick) === nm);
+    return k ? k.id : '';
+  }
+  // Eintrag ohne eigenes Hauptprofil, aber mit JOYclub-Profil → JOYclub wird Hauptprofil, das fremde bleibt in profiles (main:true)
+  function flRebaseX(X) {
+    if (!X || !X.main || X.main.pf === 'joyclub') return X;
+    const jp = (X.profiles || []).find((pr) => pr && pr.pf === 'joyclub' && flJoyIdOf(pr));
+    if (!jp) return X;
+    const id = flJoyIdOf(jp);
+    const known = flGet(id) || flKnownProfiles().get(id);
+    const url = jp.url || (known && known.path ? 'https://www.joyclub.de' + known.path : `https://www.joyclub.de/profile/${id}.html`);
+    const fm = Object.assign({}, X.main, { name: X.main.nick || X.main.name, main: true }); delete fm.nick;
+    const rest = (X.profiles || []).filter((pr) => pr !== jp);
+    const nm = Object.assign({}, jp, { pf: 'joyclub', uid: id, nick: jp.name || jp.nick || (known && known.nick) || X.main.nick, url });
+    delete nm.name; delete nm.main; delete nm.status; delete nm.statusAt; delete nm.sync;
+    return Object.assign({}, X, { main: nm, profiles: [fm, ...rest] });
+  }
+  // bereits angelegte Fremd-Einträge mit JOYclub-Profil in JOYclub-Einträge umwandeln (bzw. mit vorhandenem zusammenführen)
+  function flAdoptJoy(extId, joyId, nick, path) {
+    const a = flGet(extId);
+    if (!a || !joyId) return false;
+    if (!flGet(joyId)) flPut({ id: joyId, nick: nick || a.nick, path: path || `/profile/${joyId}.html`, type: a.type || '', status: '', meets: [], hist: [], created: Date.now() });
+    flMergePersons(extId, joyId);
+    const b = flGet(joyId);
+    b.profiles = (b.profiles || []).filter((pr) => !(pr.pf === 'joyclub' && flJoyIdOf(pr) === joyId));
+    b.__keepStatusAt = true;
+    flPut(b);
+    return true;
+  }
+  function flAdoptScan(pagePid = '', pageNick = '', pagePath = '') {
+    for (const q of Object.values(getFl())) {
+      if (!flIsExt(q.id) || !q.main || q.main.pf === 'joyclub') continue;
+      for (const pr of q.profiles || []) {
+        if (pr.pf !== 'joyclub') continue;
+        let id = flJoyIdOf(pr);
+        if (!id && pagePid && pageNick && norm(pr.name || pr.nick) === norm(pageNick)) id = pagePid;
+        if (id) { flAdoptJoy(q.id, id, pr.name || pr.nick, id === pagePid ? pagePath : ''); break; }
+      }
+    }
+  }
   // Person „from“ in Person „into“ einfügen (z. B. importierter poppen-Eintrag ist dieselbe Person)
   function flMergePersons(fromId, intoId) {
     const a = flGet(fromId), b = flGet(intoId);
@@ -9737,7 +9787,7 @@
     const prof = b.profiles = b.profiles || [];
     const have = new Set(prof.flatMap(flProfKeys));
     const add = (pr) => { const ks = flProfKeys(pr); if (ks.some((k) => have.has(k))) return; ks.forEach((k) => have.add(k)); prof.push(pr); };
-    if (a.main && a.main.pf !== 'joyclub') add(Object.assign({}, a.main, { name: a.main.nick || a.nick }));
+    if (a.main && a.main.pf !== 'joyclub') { const mp = Object.assign({}, a.main, { name: a.main.nick || a.nick, main: true }); delete mp.nick; add(mp); }
     for (const pr of a.profiles || []) add(Object.assign({}, pr));
     const ids = new Set((b.meets || []).map((m) => m.id));
     b.meets = (b.meets || []).concat((a.meets || []).filter((m) => !ids.has(m.id)));
@@ -9979,10 +10029,10 @@
     const prim = flPrimaryId(rootId);
     const KNOWN = ['id', 'status', 'statusAt', 'main', 'profiles', 'meets', 'history', 'ext', 'joy'];
     // JOYclub-Profile der Person (Hauptprofil und weitere) lokal sicherstellen und verknüpfen
-    const joyProfs = [X.main, ...(X.profiles || [])].filter((pr) => pr && pr.pf === 'joyclub' && /^\d+$/.test(String(pr.uid || '')));
+    const joyProfs = [X.main, ...(X.profiles || [])].filter((pr) => pr && pr.pf === 'joyclub' && flJoyIdOf(pr));
     for (const pr of joyProfs) {
-      const id = String(pr.uid);
-      if (!flGet(id)) flCreateFromX({ main: Object.assign({}, pr, { nick: pr.nick || pr.name }) });
+      const id = flJoyIdOf(pr);
+      if (!flGet(id)) flCreateFromX({ main: Object.assign({}, pr, { uid: id, nick: pr.nick || pr.name }) });
       if (!flMembers(prim).includes(id) && id !== prim) {
         const G = flGroups();
         if (!flGroupOf(id, G) || flPrimaryId(id, G) === id) flGroupJoin(prim, id);
@@ -10017,12 +10067,11 @@
     if (P.main) flProfKeys(P.main).forEach((k) => haveKeys.set(k, null));
     for (const q of members) for (const pr of (q.id === P.id ? P : q).profiles || []) flProfKeys(pr).forEach((k) => haveKeys.set(k, pr));
     for (const pr of [X.main, ...(X.profiles || [])]) {
-      if (!pr || pr.pf === 'joyclub') continue;
+      if (!pr || (pr.pf === 'joyclub' && flJoyIdOf(pr))) continue; // JOYclub-Profile mit ID sind eigene Einträge
       const ks = flProfKeys(pr);
       const hit = ks.map((k) => haveKeys.get(k)).find((v) => v !== undefined);
       if (hit === undefined) {
-        const n = Object.assign({}, pr); if (pr === X.main) { n.name = pr.nick || pr.name; delete n.nick; }
-        delete n.main;
+        const n = Object.assign({}, pr); if (pr === X.main) { n.name = pr.nick || pr.name; delete n.nick; n.main = true; }
         P.profiles.push(n); ks.forEach((k) => haveKeys.set(k, n));
       } else if (hit) { for (const [k, v] of Object.entries(pr)) if (hit[k] == null && v != null && k !== 'main' && k !== 'nick') hit[k] = v; if (pr.dead && !hit.dead) hit.dead = true; }
     }
@@ -10070,8 +10119,9 @@
   async function flImportRun(d, ask) {
     const st = { neu: 0, auto: 0, conflict: 0, merged: 0, separate: 0, same: 0, names: [] };
     const conflicts = [];
-    for (const X of d.persons) {
-      if (!X || !X.main) continue;
+    for (const X0 of d.persons) {
+      if (!X0 || !X0.main) continue;
+      const X = flRebaseX(X0);
       const idx = flLocalIndex();
       const keys = flXKeys(X).concat(X.id ? ['xid:' + X.id] : []);
       const roots = [...new Set(keys.map((k) => idx.get(k)).filter(Boolean).map((id) => flPrimaryId(id)))];
@@ -11702,6 +11752,10 @@
     flOwnBox();
     if (isProfilePage() && !isOwnProfile()) {
       const pid = idOf(location.pathname);
+      if (pid && !flGet(pid) && window.__jafAdopt !== pid && profileAges().length) {
+        window.__jafAdopt = pid;
+        try { const nk = ((document.querySelector('.profile-base-info__user-name') || {}).textContent || '').trim() || ((parseProfileDoc(document) || {}).name || ''); flAdoptScan(pid, nk, cleanPath(location.pathname)); } catch (e) { /* egal */ }
+      }
       if (flArchivParam()) {
         // Archivstände werden auf dem eigenen Profil im JOYclub-Design gezeigt
         if (flGet(pid) && flOwnPath()) { location.replace(flCarrierUrl(pid, flArchivParam(), /[?&]flnav=1/.test(location.search) || flNavOn(pid))); return; }
@@ -11739,6 +11793,7 @@
     flDecorateCards();
     flEventTab();
     flFixNicks().catch(() => {});
+    if (!window.__jafAdoptAll) { window.__jafAdoptAll = true; try { flAdoptScan(); } catch (e) { /* egal */ } }
     if (/^\/clubmail\//.test(location.pathname)) flClubMail();
   }
   if (!IN_FRAME) setInterval(() => { try { flTick(); } catch (e) { console.warn('[Alter-Filter] Fickliste', e); } }, 1500);
