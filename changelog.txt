@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.84 (24.10.2026)
+- Ficklisteneintragung: Knopf „Auch auf …“ (Profile anderer Plattformen) neben „Verknüpfte Profile …“, mit Anzeige der eingetragenen Profile
+
 1.83 (24.10.2026)
 - Login-Seite: auch ohne laufenden Scan automatisch anmelden, wenn der Browser die Felder ausgefüllt hat („Angemeldet bleiben“, höchstens 1× in 30 min, Hinweis bei Fehlschlag)
 - Wartungsseiten auch ohne Scan: Neuladen zur angegebenen Uhrzeit bzw. nach 5–30 min; mehr Uhrzeit-Schreibweisen; „Seite nicht gefunden“ 1× neu laden, dann vermerken

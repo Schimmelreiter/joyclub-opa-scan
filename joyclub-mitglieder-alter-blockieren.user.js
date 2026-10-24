@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.83
+// @version      1.84
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -10297,12 +10297,19 @@
       box.appendChild(lab('Anmerkungen'));
       const notes = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical'); notes.rows = 2; notes.value = p.notes || '';
       box.appendChild(notes);
-      // verknüpfte Profile
-      const lk = flEl('div', 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px');
-      lk.innerHTML = flLinkedHtml(p.id) || '<span style="font-size:12.5px;opacity:.7">keine verknüpften Profile</span>';
-      if (!flIsExt(p.id) || p.wasJoy) lk.appendChild(flBtn('Verknüpfte Profile …', async () => {
-        if (!flGet(p.id)) { const q0 = Object.assign({}, p, { meets: [] }); flPut(q0); }
-        const btn = lk.querySelector('button');
+      // verknüpfte Profile und Profile anderswo
+      const lk = flEl('div', 'margin-top:12px');
+      const lkInfo = flEl('div', '');
+      const lkBtns = flEl('div', 'display:flex;gap:10px;flex-wrap:wrap;margin-top:6px');
+      const lkShow = () => {
+        const q = flGet(p.id) || p;
+        lkInfo.innerHTML = (flLinkedHtml(p.id) || '<div style="font-size:12.5px;opacity:.7">keine verknüpften Profile</div>') + flProfilesHtml(q);
+      };
+      lkShow();
+      lk.appendChild(lkInfo); lk.appendChild(lkBtns);
+      const ensure = () => { if (!flGet(p.id)) { const q0 = Object.assign({}, p, { meets: [] }); flPut(q0); } };
+      if (!flIsExt(p.id) || p.wasJoy) lkBtns.appendChild(flBtn('Verknüpfte Profile …', async () => {
+        ensure();
         await flLinkPopup(p.id);
         // neu verknüpfte Profile: deren Treffen mit anzeigen
         const now = flMembers(p.id);
@@ -10310,8 +10317,16 @@
         members.splice(0, members.length, ...now);
         meets = meets.filter((m) => !m.as || members.includes(m.as));
         meets.sort((a, b) => meetTs(b) - meetTs(a));
-        lk.innerHTML = flLinkedHtml(p.id) || '<span style="font-size:12.5px;opacity:.7">keine verknüpften Profile</span>';
-        if (btn) lk.appendChild(btn);
+        lkShow();
+        renderMeets();
+      }));
+      lkBtns.appendChild(flBtn('Auch auf …', async () => {
+        ensure();
+        await flProfilesPopup(p.id);
+        // zusammengeführte Einträge (z. B. importierter poppen-Eintrag): deren Treffen übernehmen
+        for (const m of (flGet(p.id) || {}).meets || []) if (!meets.some((x) => x.id === m.id)) meets.push(Object.assign({}, m, { as: p.id }));
+        meets.sort((a, b) => meetTs(b) - meetTs(a));
+        lkShow();
         renderMeets();
       }));
       box.appendChild(lk);

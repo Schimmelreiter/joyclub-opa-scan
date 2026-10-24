@@ -459,7 +459,7 @@ Jede Zustandsänderung öffnet das Popup „Ficklisteneintragung“:
 - **Profilnotiz** (JOYclub) – vorbelegt, Änderungen werden auf dem Profil gespeichert.
 - **Treffen** (beliebig viele, neueste oben): *was* (Party oder Anlass), *wo* (Club oder Ort, mit Vorschlägen aus allen bekannten Clubs), *am*, *um* und eine *Ficknotiz*. Vorbelegt mit der Party, aus deren Gästeliste du das Profil geöffnet hast. „Party wählen …“ bietet die Partys von heute und die letzten 10 vergangenen (eigene Anmeldungen mit ★) und eine Suche. Ein eingefügter Party-Link wird gelesen: Name (*was*), Club (*wo*), Datum und Beginn werden übernommen und bleiben änderbar, der Link bleibt dahinter gespeichert.
 - **Anmerkungen** (allgemein).
-- **als** – bei verknüpften Profilen gehört jedes Treffen einem der Profile (Auswahl je Treffen). Neue Treffen gehören dem betrachteten Profil, wenn es „Will ich“, „Gefickt“ oder „Nie wieder!“ hat, sonst (kein Status, „Nein, danke!“) dem primären. „Verknüpfte Profile …“ öffnet die Verwaltung.
+- **als** – bei verknüpften Profilen gehört jedes Treffen einem der Profile (Auswahl je Treffen). Neue Treffen gehören dem betrachteten Profil, wenn es „Will ich“, „Gefickt“ oder „Nie wieder!“ hat, sonst (kein Status, „Nein, danke!“) dem primären. „Verknüpfte Profile …“ öffnet die Verwaltung, „Auch auf …“ die Profile auf anderen Plattformen.
 - **Profil zukünftig ignorieren** – bei „Nein, danke!“ und „Nie wieder!“ vorausgewählt. Ist das Profil schon ignoriert, steht „Dieses Profil wird derzeit ignoriert!“ darunter; Abwählen entsperrt es (und setzt es auf die eigene Whitelist). Ignorieren hebt einen Whitelist-Eintrag auf. Bei vollem Limit weicht eine automatische Sperre – eigene Listen haben Vorrang.
 - Enthält die Profilnotiz ein Datum ohne Treffen, schlägt das Skript passende Partys vor (Datum + Club oder Partyname; „am selben Tag“ als schwächere Vorschläge).
 
@@ -507,7 +507,7 @@ Gehört eine Person zu mehreren Profilen (z. B. Paarprofil, ihr eigenes und sein
 
 ### Profile anderswo („Auch auf …“)
 
-Jede Person kann Profile auf anderen Plattformen und Messenger-Kontakte haben: poppen.de, xHamster, Eronity, SpicyMatch, Kaufmich, Fetish.com, Gays.com, Telegram, WhatsApp, Threema, Signal oder „Andere …“ (freier Name). „+ Profil anderswo“ im Fickliste-Block öffnet die Verwaltung; je Profil lässt sich „Profil gelöscht“ setzen. Im Block, in „Meine Fickliste“ und bei Treffen-Links zeigt ein kleines Plattform-Symbol die Herkunft; „Meine Fickliste“ hat dafür den Filter **Plattform**.
+Jede Person kann Profile auf anderen Plattformen und Messenger-Kontakte haben: poppen.de, xHamster, Eronity, SpicyMatch, Kaufmich, Fetish.com, Gays.com, Telegram, WhatsApp, Threema, Signal oder „Andere …“ (freier Name). „Auch auf …“ in der Ficklisteneintragung (erreichbar von überall, auch per Klick auf eine Zeile in „Meine Fickliste“) oder „+ Profil anderswo“ im Fickliste-Block öffnen die Verwaltung; je Profil lässt sich „Profil gelöscht“ setzen. Im Block, in „Meine Fickliste“ und bei Treffen-Links zeigt ein kleines Plattform-Symbol die Herkunft; „Meine Fickliste“ hat dafür den Filter **Plattform**.
 
 | Plattform | Eingabe | gespeichert als |
 |---|---|---|
