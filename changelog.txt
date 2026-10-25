@@ -1,6 +1,15 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.88 (25.10.2026)
+- Typwechsel: neuer Typ gilt, Vermerk „Typ geändert: A → B“ in Konto, Gedächtnis, Profilinfos und Fickliste (Archiv-Stand); vom Skript Ignorierte werden neu beurteilt (entsperren und Notiz-Zeile entfernen bzw. Bezeichnung anpassen)
+- Gästelisten: Profilbilder in den neu aufgebauten Reitern (Opas, Geronto-Paare …) erscheinen jetzt auch, wenn sie unter „Alle“ noch nicht geladen waren
+- ClubMail: „Opa-Scan starten“ mittig zwischen Überschrift und Filter, bei wenig Platz nur als Icon
+- Profil verwalten: „Fickliste“ als erster Eintrag (und Kachel) unter „Community & Dating“ vor „Dates“
+- Einstellungen: „Notiz schreiben“ und „Notiz Pflicht“ entfallen (immer an); Experten-Einstellungen in der Reihenfolge Ignorierliste (Rangfolge, dann Limit), API-Rekorder, Betrieb
+- Fickliste-Austausch: Anmerkungen als persons[].notes mit notesAt/notesBy (höchstens 8000 Zeichen), Ficknotizen mit noteAt/noteBy
+- API-Rekorder: Textvorlagen werden wieder mitgeschnitten; abgeschickte Formulare (Ziel, Methode, Felder) und Link-Ziele werden erfasst; Anmeldenummer und Check-in-Link geschwärzt; Klick-Beschriftungen kurz
+
 1.87 (24.10.2026)
 - Schnittstellen statt Seitenaufrufen (mit automatischem Rückfall): Ignorieren/Entsperren, Profilnotiz lesen/schreiben, Gästeliste der geöffneten Party, ClubMail-Scan
 - Sichtbarkeits-Warnung erst, wenn wirklich ein Profil geöffnet werden muss

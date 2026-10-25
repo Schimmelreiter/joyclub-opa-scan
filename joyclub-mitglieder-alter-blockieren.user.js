@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.87
+// @version      1.88
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -49,7 +49,7 @@
     /^cfnimg\.joyclub\./, /^image-user\./, /\/smiley\//, /\/adsl\//, /\/newsbox\//, /\/frontend_vector_event\//, /\/support\/zendesk/, /\/notification\/auto_update/,
     /\/clubmailv3\/(clubmail_auto_update|get_latest_message_list_of_conversation|read_conversation|get_conversation_info|send_personal_message|switch_archive_conversation|reload_conversation|get_hint_list_for_message)$/,
     /\/my_joy\/(visits_likes_banner|features|messenger_contacts)$/, /\/geo\/suggestion\//, /\/profile\/beautify_text$/, /\/webauth\/access_token$/,
-    /apiv2\.joyclub\.com\/users\/:id\/notes/, /\/ajax\/contact_layer/, /^identity\.joyclub\.com\/authorize/,
+    /\/ajax\/contact_layer/, /^identity\.joyclub\.com\/authorize/,
   ];
   const API_SKIP_OPS = new Set(['ownClubmailUserSettings', 'getOwnClubMailUserSettings', 'isAuthorisationAllowed', 'getAchievementListByUserId', 'getAvatarByUserId', 'getGroupCount',
     'getMainAlbum', 'getProfileAlbumList', 'profileAlbumGetRegularAlbumByProfileAlbumId', 'profileAlbumGetUserImage', 'getProfileAlbumUserById', 'getProfileMainAlbumByUserId',
@@ -57,11 +57,11 @@
     'getProfileVisitors', 'markGroupFeedAsRead', 'getGroupFeedByGroupId', 'getGroupFeedSubscriptionByGroupId', 'readMyJoyVisitors', 'readMyJoyReceivedLikes', 'getEventPaymentConfig']);
   const apiRedactKey = (k) => {
     const s = String(k).toLowerCase();
-    if (/pass|token|secret|auth|session|csrf|xsrf|cookie|signature|apikey|api_key|bearer|credential|nonce|otp|cache_killer|jwt/.test(s)) return 'Zugang';
+    if (/pass|token|secret|auth|session|csrf|xsrf|cookie|signature|apikey|api_key|bearer|credential|nonce|otp|cache_killer|jwt|registrationnumber|checkin/.test(s)) return 'Zugang';
     if (/mail/.test(s)) return 'E-Mail';
     if (/phone|telefon|mobile|handy|whatsapp|msisdn/.test(s)) return 'Telefon';
     if (/^(lat|lng|lon|long|latitude|longitude|geo|geolocation|coords?|coordinates|zip|zipcode|postal|postcode|plz|street|strasse|address|adresse|housenumber)$/.test(s)) return 'Geo';
-    if (/^(text|message|messages|msg|body|content|preview|snippet|subject|description|about|aboutme|about_me|motto|teaser|profiletext|profile_text|bio|comment|note|notes|caption|html|user_note|alt_text|received_text)$/.test(s) || /message_content|profiletext|freetext/.test(s)) return 'Text';
+    if (/^(text|message|messages|msg|body|content|preview|snippet|subject|description|about|aboutme|about_me|motto|teaser|profiletext|profile_text|bio|comment|note|notes|caption|html|user_note|alt_text|received_text)$/.test(s) || /message_content|profiletext|freetext|_msg$|nachricht|template_text|^name_of_template$/.test(s)) return 'Text';
     return '';
   };
   const apiJsonish = (s) => typeof s === 'string' && /^\s*[[{]/.test(s) && (() => { try { JSON.parse(s); return true; } catch (e) { return false; } })();
@@ -229,13 +229,50 @@
           const el = path.find((x) => x && x.nodeType === 1 && (/^(A|BUTTON|J-BUTTON|J-CONTROL-BUTTON|J-CONTEXT-MENU-ITEM|J-PILL|LABEL|SUMMARY)$/.test(x.tagName) || (x.getAttribute && x.getAttribute('role') === 'button'))) || path[0];
           if (!el || !el.getAttribute) return;
           if (/^(INPUT|TEXTAREA)$/.test(el.tagName) && !/^(checkbox|radio|submit|button)$/i.test(el.type || '')) return;
-          const lab = (el.getAttribute('aria-label') || el.getAttribute('title') || (el.textContent || '').replace(/\s+/g, ' ').trim() || el.tagName.toLowerCase()).slice(0, 60);
+          // Beschriftung: kurz und nur echter Text (keine JSON-Blöcke oder ganze Seitenbereiche)
+          let tx = (el.textContent || '').replace(/\s+/g, ' ').trim();
+          if (tx.length > 80 || /^[[{]/.test(tx)) tx = '';
+          const lab = (el.getAttribute('aria-label') || el.getAttribute('title') || tx || el.tagName.toLowerCase()).slice(0, 60);
           apiCtx.click = { ts: Date.now(), label: lab };
-          if (API_STATE.on) { apiTlAdd(Object.assign({ t: 'klick', label: lab }, apiPageInfo())); apiSched(); }
+          if (API_STATE.on) {
+            // Ziel eines Links: Pfad und Namen der Parameter (Werte geschwärzt), Sprungmarken als „#…“
+            const a = path.find((x) => x && x.nodeType === 1 && x.getAttribute && x.getAttribute('href'));
+            const href = a ? a.getAttribute('href') : '';
+            let ziel = '';
+            if (href && /^#/.test(href)) ziel = href.slice(0, 60);
+            else if (href && !/^javascript:/i.test(href)) { const q = apiPath(href); ziel = q.host ? `${q.host}${q.path}${q.qk ? '?' + q.qk : ''}` : ''; }
+            apiTlAdd(Object.assign({ t: 'klick', label: lab }, ziel ? { ziel } : {}, apiPageInfo())); apiSched();
+          }
         } catch (e) { /* egal */ }
       }, true);
       window.addEventListener('scroll', () => { apiCtx.scroll = Date.now(); }, true);
     } catch (e) { /* egal */ }
+    // Formulare (Merken, Anmelden, Stornieren … laden die Seite neu): Ziel, Methode und Felder mitschreiben, Werte geschwärzt
+    if (API_STATE.on) {
+      const seenForm = new WeakSet();
+      const noteForm = (f) => {
+        try {
+          if (!f || seenForm.has(f)) return;
+          seenForm.add(f);
+          setTimeout(() => seenForm.delete(f), 1500);
+          const fields = new URLSearchParams();
+          for (const [k, v] of new FormData(f).entries()) fields.append(k, typeof v === 'string' ? v : '(Datei)');
+          const method = (f.getAttribute('method') || 'GET').toUpperCase();
+          apiNote(`FORM-${method}`, f.getAttribute('action') || location.href, fields, 0, '(Seite wird neu geladen)', 'application/x-formular', []);
+          apiFlush();
+        } catch (e) { /* egal */ }
+      };
+      try {
+        document.addEventListener('submit', (ev) => noteForm(ev.target), true);
+        const FP = W.HTMLFormElement && W.HTMLFormElement.prototype;
+        if (FP && !FP.__jafRec) {
+          const os2 = FP.submit, ors = FP.requestSubmit;
+          FP.submit = ex(function () { noteForm(this); return os2.apply(this, arguments); });
+          if (typeof ors === 'function') FP.requestSubmit = ex(function () { noteForm(this); return ors.apply(this, arguments); });
+          FP.__jafRec = true;
+        }
+      } catch (e) { /* egal */ }
+    }
     try {
       const of = W.fetch;
       if (typeof of === 'function' && !of.__jafRec) {
@@ -747,7 +784,8 @@
   // Je Einstellung: gültiger Wert + zuletzt gesehener Quelltext-Wert. Ändert man den Wert im Quelltext, gilt ab dann
   // dieser (auch wenn vorher auf der Seite „Opa-Schutz“ etwas anderes gespeichert war). Solange der Quelltext-Wert
   // unverändert bleibt, gilt der gespeicherte Wert. Listen werden als Ganzes verglichen.
-  const SETTING_KEYS = ['DRY_RUN', 'DEBUG', 'IGNORE_LIMIT', 'MYJOY_FIRST_MAX', 'GROUPS', 'AWO', 'WHITELIST', 'WRITE_NOTE', 'NOTE_REQUIRED', 'SOURCE_RANK'];
+  // WRITE_NOTE / NOTE_REQUIRED sind seit 1.88 fest an (nicht mehr einstellbar; alte gespeicherte Werte gelten nicht mehr)
+  const SETTING_KEYS = ['DRY_RUN', 'DEBUG', 'IGNORE_LIMIT', 'MYJOY_FIRST_MAX', 'GROUPS', 'AWO', 'WHITELIST', 'SOURCE_RANK'];
   // Einstellungen bis 1.73 (werden einmalig in GROUPS übernommen und dann entfernt)
   const OLD_RULE_KEYS = ['SEARCH_IGNORE', 'MAX_AGE', 'WARN_AGE', 'ONLY_TYPES', 'COUPLE_MODE', 'COUPLE_AGE_GAP', 'COUPLE_BOTH_MIN_AGE'];
   const K_SETTINGS = 'jaf_settings'; // { KEY: { value, src } }
@@ -2177,10 +2215,100 @@
     return ages.map((a) => { const i = pool.findIndex((p) => p.age === a); return i < 0 ? '' : pool.splice(i, 1)[0].sign || ''; });
   }
 
+  // ---------- Typwechsel ----------
+  // Ein Profil wechselt den Typ (z. B. Mann → Paar). Festgehalten in Konten, Gedächtnis, Profil-Infos und Fickliste
+  // („Typ geändert: A → B“, in der Fickliste als Archiv-Stand). Vom Skript ignorierte Mitglieder werden neu beurteilt:
+  // passt die Regel nicht mehr → entsperren (Schnittstelle, sonst Seite) und die Skript-Zeile der Notiz entfernen;
+  // passt sie weiter, aber mit anderer Bezeichnung → Notiz anpassen. Von Hand Gesperrte bleiben unberührt.
+  const K_TYPE_Q = 'jaf_type_q';
+  function typeChangeQueue(list) {
+    const q = gmGet(K_TYPE_Q, []) || [];
+    for (const c of list) if (!q.some((x) => x.path === c.path && x.to === c.to)) q.push(c);
+    gmSet(K_TYPE_Q, q.slice(-500));
+    setTimeout(() => { typeChangeRun().catch(() => {}); }, 3000);
+  }
+  const typeWhy = (c) => `Typ geändert: ${c.from} → ${c.to}`;
+  function typeChangeRecord(c) {
+    const why = typeWhy(c);
+    // Gedächtnis
+    const m = bigGet1(K_MEM, c.path);
+    if (m) {
+      m.type = c.to;
+      m.hist = (m.hist || []).concat({ ts: c.ts, st: m.status || '', src: '', why }).slice(-20);
+      bigSet1(K_MEM, c.path, m);
+    }
+    // Protokoll-Eintrag (Skript-Sperre): Typ mitziehen
+    const L = getLog();
+    if (L[c.path]) { L[c.path].type = c.to; L[c.path].typeHist = (L[c.path].typeHist || []).concat({ ts: c.ts, from: c.from, to: c.to }).slice(-10); gmSet(K_LOG, L); }
+    // Fickliste: Typ, Verlauf und Archiv-Stand
+    const id = idOf(c.path);
+    const q = id && flGet(id);
+    if (q) {
+      q.type = c.to;
+      q.hist = (q.hist || []).concat({ ts: c.ts, why });
+      q.__keepStatusAt = true;
+      flPut(q);
+      try { flAddStandData(id, why, { type: c.to }); } catch (e) { /* kein Archiv */ }
+    }
+  }
+  let typeBusy = false;
+  async function typeChangeRun() {
+    if (IN_FRAME || typeBusy) return;
+    const q = gmGet(K_TYPE_Q, []) || [];
+    if (!q.length) return;
+    // erst festhalten (geht immer), Sperren nur, wenn gerade nichts anderes läuft
+    const todo = [];
+    for (const c of q) { if (!c.rec) { typeChangeRecord(c); c.rec = true; } todo.push(c); }
+    gmSet(K_TYPE_Q, todo);
+    if (scanActive() || lockedByOther()) return;
+    typeBusy = true;
+    let locked = false;
+    try {
+      if (!(await acquireLock('Typwechsel'))) return;
+      locked = true;
+      const rest = [];
+      for (const c of todo) {
+        try { await typeChangeJudge(c); } catch (e) { if (e.fatal) { rest.push(c); break; } }
+      }
+      gmSet(K_TYPE_Q, rest);
+    } finally {
+      if (locked) releaseLock();
+      typeBusy = false;
+    }
+  }
+  async function typeChangeJudge(c) {
+    const L = getLog(), e = L[c.path];
+    const ign = getIgnored();
+    const ignored = Object.keys(ign).some((p) => idOf(p) === idOf(c.path));
+    if (!e || e.unblocked || handMade(e) || !ignored) return; // nur Skript-Sperren
+    const acc = getAccounts(), mem = getMem();
+    const a = acc[c.path], m = mem[c.path];
+    const ages = agesNow(c.path, acc, e, m);
+    const cand = { type: c.to, ages, name: e.name || c.name, path: c.path };
+    const srcs = [...new Set(Object.keys((a && a.srcs) || {}).concat([e.source, m && m.src]).filter((x) => x && x !== 'Sync'))];
+    const bs = isWhiteMember(cand) ? null : bestSource(cand, srcs.length ? srcs : [ALTBESTAND]);
+    const url = e.url || location.origin + c.path;
+    if (!bs) {
+      if (CONFIG.DRY_RUN) { console.log('[Alter-Filter] Testlauf: würde entsperren (Typ gewechselt)', e.name); return; }
+      const r = await bgUnignore(idOf(c.path));
+      if (!r || !r.ok) throw new Error('Entsperren fehlgeschlagen');
+      markUnblocked(c.path, e, `entsperrt: Typ gewechselt (${c.from} → ${c.to})`);
+      try { await actJob({ path: c.path, url, name: e.name, action: 'clean' }, 'Typwechsel'); } catch (err) { if (err.fatal) throw err; }
+      console.log('[Alter-Filter] entsperrt: Typ gewechselt', e.name, c.from, '→', c.to);
+      return;
+    }
+    if (kindLabel(bs.j.kind) !== kindLabel(entryKind(e))) {
+      if (CONFIG.DRY_RUN) return;
+      const r = await actJob({ path: c.path, url, name: e.name, action: 'sync', kind: bs.j.kind, source: e.source || bs.src, ts: e.ts || Date.now(), block: false }, 'Typwechsel');
+      if (r && r.result === 'note') { const L2 = getLog(); if (L2[c.path]) { L2[c.path].kind = bs.j.kind; gmSet(K_LOG, L2); } }
+    }
+  }
+  setInterval(() => { try { if (!IN_FRAME && (gmGet(K_TYPE_Q, []) || []).length) typeChangeRun().catch(() => {}); } catch (e) { /* weiter */ } }, 30000);
+
   // items: [{ path, url?, name?, ages: [..], type? }]
   function recordAccounts(items) {
     if (!items || !items.length) return;
-    const onlineUpdates = [];
+    const onlineUpdates = [], typeChanges = [];
     const acc = getAccounts();
     const today = isoDay(new Date());
     let changed = false;
@@ -2192,6 +2320,11 @@
       if (it.type && isUnknownType(it.type)) noteType(it.type, it.name || it.path);
       if (it.name && whiteList().includes(norm(it.name))) learnWhiteUrl(it.name, it.path);
       rec.url = it.url || location.origin + it.path;
+      // Typwechsel (z. B. Mann → Paar): festhalten und später neu beurteilen
+      if (old && old.type && it.type && !/^Typ /.test(old.type) && !/^Typ /.test(it.type) && normType(old.type) !== normType(it.type)) {
+        rec.typeHist = (old.typeHist || []).concat({ ts: Date.now(), from: old.type, to: it.type }).slice(-10);
+        typeChanges.push({ path: it.path, name: it.name || old.name || '', from: old.type, to: it.type, ts: Date.now() });
+      }
       if (it.type) rec.type = it.type;
       const prev = old && old.persons && old.persons.length === it.ages.length ? old.persons : [];
       rec.persons = it.ages.map((a, i) => {
@@ -2211,6 +2344,7 @@
       if (JSON.stringify(rec) !== JSON.stringify(old)) { acc[it.path] = rec; changed = true; }
     }
     if (changed) gmSet(K_ACCOUNTS, acc);
+    if (typeChanges.length) typeChangeQueue(typeChanges);
     // „zuletzt online“ auch in den zutreffenden Listen (ignoriert / vorgemerkt) speichern
     if (onlineUpdates.length) {
       const l = gmGet(K_LOG, {}), w = gmGet(K_WATCH, {});
@@ -4029,6 +4163,15 @@
       content.querySelectorAll(':scope > .tab-pane').forEach((x) => x.classList.remove('active', 'in'));
       pane.classList.add('active', 'in');
     };
+    // Karte kopieren: JOYclub lädt Profilbilder erst beim Hinscrollen (data-src/data-srcset) und kennt Kopien nicht –
+    // deshalb die Bildadressen selbst eintragen; der Browser lädt sie dank loading="lazy" trotzdem erst bei Bedarf
+    const cloneCard = (li) => {
+      const c = li.cloneNode(true);
+      c.querySelectorAll('img[data-src]').forEach((im) => { const u = im.getAttribute('data-src'); if (u && im.getAttribute('src') !== u) { im.setAttribute('loading', 'lazy'); im.setAttribute('src', u); } });
+      c.querySelectorAll('source[data-srcset]').forEach((so) => { const u = so.getAttribute('data-srcset'); if (u && so.getAttribute('srcset') !== u) so.setAttribute('srcset', u); });
+      c.querySelectorAll('.image-ui.lazy').forEach((d) => d.classList.add('initialized'));
+      return c;
+    };
     const mkTab = (id, label, title, n, after, content) => {
       const pane = document.createElement('div');
       pane.id = id; pane.className = 'tab-pane cards user_cards ov_h mb5'; pane.setAttribute('role', 'tabpanel');
@@ -4065,10 +4208,10 @@
         const tabs = groupTabs(tgt);
         const st = guestStage(g, tgt);
         const t = tabs.find((x) => x.stages.includes(st)) || tabs[tabs.length - 1];
-        ((buckets[tgt] = buckets[tgt] || {})[t.key] = buckets[tgt][t.key] || []).push(li.cloneNode(true));
+        ((buckets[tgt] = buckets[tgt] || {})[t.key] = buckets[tgt][t.key] || []).push(cloneCard(li));
         hasNew[tgt] = true;
       } else if (splitOn(src) && tgt !== src) {
-        (moved[tgt] = moved[tgt] || []).push(li.cloneNode(true));
+        (moved[tgt] = moved[tgt] || []).push(cloneCard(li));
       }
     });
     if (content) {
@@ -5966,7 +6109,10 @@
       const rec = piGet(id) || { nicks: [], ts: now };
       let ch = !piGet(id);
       if (it.name && rec.nick !== it.name) { if (rec.nick) rec.nicks = [...new Set([...(rec.nicks || []), rec.nick])]; rec.nick = it.name; ch = true; }
-      if (it.type && !/^Typ /.test(it.type) && rec.type !== it.type) { rec.type = it.type; ch = true; }
+      if (it.type && !/^Typ /.test(it.type) && rec.type !== it.type) {
+        if (rec.type && !/^Typ /.test(rec.type)) rec.typeHist = (rec.typeHist || []).concat({ ts: now, from: rec.type, to: it.type }).slice(-10);
+        rec.type = it.type; ch = true;
+      }
       if (it.ages && it.ages.length && JSON.stringify(rec.ages) !== JSON.stringify(it.ages)) { rec.ages = it.ages; rec.agesTs = now; ch = true; }
       rec.ts = now;
       if (ch || !idx[id] || now - idx[id][0] > 864e5) GM_setValue(K_PI + id, rec);
@@ -7612,10 +7758,35 @@
     b.innerHTML = `<svg viewBox="0 0 640 1280" width="9" height="16" style="fill:currentColor;vertical-align:-2px" aria-hidden="true">` +
       opaT(`${nickG()}</svg> <span class="btn-text">Opa-Scan starten</span>`);
     b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); mjOpen(pg.key); });
-    box.appendChild(b);
+    if (pg.key === 'ClubMail') { box.prepend(b); cmBtnLayout(); } else box.appendChild(b);
+  }
+  // ClubMail: Knopf waagerecht mittig zwischen Überschrift „ClubMail“ und Filter-Knopf; bei Platzmangel nur das Icon
+  function cmBtnLayout() {
+    const b = document.querySelector('.jaf-mj-btn[data-src="ClubMail"]');
+    if (!b) return;
+    const box = b.parentElement, hdr = box && box.closest('j-page-header');
+    const filt = box && (box.querySelector('.conversation-filter__filter-icon') || [...box.children].find((x) => x !== b));
+    const h1 = hdr && hdr.shadowRoot && hdr.shadowRoot.querySelector('h1');
+    if (!filt || !h1) { b.style.marginRight = ''; return; }
+    let titleRight;
+    try { const r = document.createRange(); r.selectNodeContents(h1); titleRight = r.getBoundingClientRect().right; } catch (e) { titleRight = h1.getBoundingClientRect().right; }
+    const txt = b.querySelector('.btn-text');
+    const fit = (iconOnly) => {
+      if (txt) txt.style.display = iconOnly ? 'none' : '';
+      b.style.marginRight = '0px';
+      const gap = filt.getBoundingClientRect().left - titleRight, w = b.getBoundingClientRect().width;
+      return { gap, w };
+    };
+    let { gap, w } = fit(false);
+    if (gap < w + 24) ({ gap, w } = fit(true));
+    b.style.marginRight = `${Math.max(4, Math.floor((gap - w) / 2))}px`;
+    if (!b.__jafRO && typeof ResizeObserver === 'function' && hdr) {
+      b.__jafRO = new ResizeObserver(() => { try { cmBtnLayout(); } catch (e) { /* egal */ } });
+      b.__jafRO.observe(hdr);
+    }
   }
   function myJoyTick() {
-    try { insertMyJoyButton(); decorateMyJoy(); } catch (e) { /* weiter */ }
+    try { insertMyJoyButton(); cmBtnLayout(); decorateMyJoy(); } catch (e) { /* weiter */ }
   }
   setInterval(myJoyTick, 1500);
 
@@ -8838,12 +9009,7 @@
     exp.addEventListener('click', () => { c.__jafExp = !c.__jafExp; renderSettingsPage(); });
     c.appendChild(exp);
     if (expOpen) {
-      tb2 = section('Betrieb');
-      row(tb2, 'Debug-Ausgaben:', onOff('DEBUG'), 'Zusätzliche Meldungen in der Browser-Konsole; jedes Element wird vor dem Klick markiert.', { key: 'DEBUG' });
-      row(tb2, 'Testlauf:', onOff('DRY_RUN'), 'Spielt alles durch, ignoriert aber niemanden.', { key: 'DRY_RUN' });
-      row(tb2, 'Erster Scan Profilbesucher/Interaktionen:', num('MYJOY_FIRST_MAX', 'Einträge', 10, 100000), 'Beim ersten Scan von „Profilbesuche“ bzw. „Mögen mich“ höchstens so viele Einträge prüfen.', { key: 'MYJOY_FIRST_MAX' });
       tb2 = section('Ignorierliste');
-      row(tb2, 'Limit:', num('IGNORE_LIMIT', 'Einträge', 10, 100000), `JOYclub behält nur die letzten ${Number(d.IGNORE_LIMIT).toLocaleString('de-DE')} Sperren.`, { key: 'IGNORE_LIMIT', red: true });
       const rk = document.createElement('ul');
       rk.style.cssText = 'list-style:none;margin:0;padding:0';
       d.SOURCE_RANK.forEach((q, i) => {
@@ -8862,11 +9028,13 @@
         rk.appendChild(li);
       });
       row(tb2, 'Rangfolge der Quellen:', rk, 'Eine niedrigere Quelle verdrängt nie eine höhere. Gilt ab dem Speichern für alle künftigen Entscheidungen; bestehende Sperren bleiben unverändert. Maus über eine Quelle zeigt die Erklärung.', { key: 'SOURCE_RANK' });
-      tb2 = section('Notizen');
-      row(tb2, 'Notiz schreiben:', onOff('WRITE_NOTE'), 'Profilnotiz vor dem Ignorieren hinterlegen.', { key: 'WRITE_NOTE' });
-      row(tb2, 'Notiz Pflicht:', onOff('NOTE_REQUIRED'), 'Ohne gespeicherte Notiz wird nicht ignoriert.', { key: 'NOTE_REQUIRED' });
+      row(tb2, 'Limit:', num('IGNORE_LIMIT', 'Einträge', 10, 100000), `JOYclub behält nur die letzten ${Number(d.IGNORE_LIMIT).toLocaleString('de-DE')} Sperren.`, { key: 'IGNORE_LIMIT', red: true });
       tb2 = section('API-Rekorder');
       row(tb2, 'API-Rekorder:', apiRecControl(), 'Schneidet ab dem nächsten Seitenaufruf mit, welche Schnittstellen JOYclub selbst benutzt (je Adresse 2 Beispiele, geschwärzt: E-Mail, Zugangsdaten, Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt). Der Export dient dazu, Seiten-Lösungen des Skripts durch Schnittstellen zu ersetzen. Wirkt sofort, ohne „Speichern“.');
+      tb2 = section('Betrieb');
+      row(tb2, 'Debug-Ausgaben:', onOff('DEBUG'), 'Zusätzliche Meldungen in der Browser-Konsole; jedes Element wird vor dem Klick markiert.', { key: 'DEBUG' });
+      row(tb2, 'Testlauf:', onOff('DRY_RUN'), 'Spielt alles durch, ignoriert aber niemanden.', { key: 'DRY_RUN' });
+      row(tb2, 'Erster Scan Profilbesucher/Interaktionen:', num('MYJOY_FIRST_MAX', 'Einträge', 10, 100000), 'Beim ersten Scan von „Profilbesuche“ bzw. „Mögen mich“ höchstens so viele Einträge prüfen.', { key: 'MYJOY_FIRST_MAX' });
     }
     // ---- Buttons ----
     const bw = document.createElement('div');
@@ -10300,6 +10468,10 @@
       x.meets = [];
       for (const id of ids) for (const m of fl[id].meets || []) x.meets.push(flMeetOut(m, fl[id]));
       x.history = (prim.hist || []).map((h) => ({ at: h.ts, what: h.why }));
+      // Anmerkungen: allgemeines Feld (seit 1.88), joy.notes bleibt vorerst für ältere Stände
+      x.notes = prim.notes || '';
+      if (prim.notesAt) x.notesAt = prim.notesAt; else delete x.notesAt;
+      if (prim.notesBy) x.notesBy = prim.notesBy; else delete x.notesBy;
       x.joy = Object.assign({}, x.joy || {}, { type: prim.type || '', notes: prim.notes || '', pnote: prim.pnote || '' });
       out.push(x);
     }
@@ -10400,7 +10572,7 @@
   function flMergeIn(X, rootId, isNew = false) {
     const before = flSnap(flMembers(rootId));
     const prim = flPrimaryId(rootId);
-    const KNOWN = ['id', 'status', 'statusAt', 'main', 'profiles', 'meets', 'history', 'ext', 'joy'];
+    const KNOWN = ['id', 'status', 'statusAt', 'main', 'profiles', 'meets', 'history', 'ext', 'joy', 'notes', 'notesAt', 'notesBy'];
     // JOYclub-Profile der Person (Hauptprofil und weitere) lokal sicherstellen und verknüpfen
     const joyProfs = [X.main, ...(X.profiles || [])].filter((pr) => pr && pr.pf === 'joyclub' && flJoyIdOf(pr));
     for (const pr of joyProfs) {
@@ -10484,6 +10656,13 @@
     for (const [k, v] of Object.entries(X)) if (!KNOWN.includes(k)) extra[k] = v;
     if (Object.keys(extra).length) P2.xfer = Object.assign({}, P2.xfer || {}, extra);
     if (X.id && !P2.xid && flIsExt(P2.id)) P2.xid = X.id;
+    // Anmerkungen: persons[].notes (neu) vor joy.notes (alt); die neuere Fassung gewinnt, gleicher Text bleibt
+    const xNotes = typeof X.notes === 'string' ? X.notes.slice(0, 8000) : (X.joy && X.joy.notes) || '';
+    if (xNotes && norm(xNotes) !== norm(P2.notes || '') && (!P2.notes || (X.notesAt && X.notesAt > (P2.notesAt || 0)))) {
+      P2.notes = xNotes;
+      if (X.notesAt) P2.notesAt = X.notesAt;
+      if (X.notesBy) P2.notesBy = X.notesBy;
+    }
     if (X.joy) { if (!P2.notes && X.joy.notes) P2.notes = X.joy.notes; if (!P2.type && X.joy.type) P2.type = X.joy.type; if (!P2.pnote && X.joy.pnote) P2.pnote = X.joy.pnote; }
     flPut(P2);
     flSyncStatus(prim);
@@ -10706,7 +10885,7 @@
           c.appendChild(r2);
           c.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin:6px 0 3px', 'Ficknotiz'));
           const fn = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical'); fn.rows = 2; fn.value = m.note || '';
-          fn.addEventListener('input', () => { m.note = fn.value; });
+          fn.addEventListener('input', () => { m.note = fn.value.slice(0, 8000); m.noteAt = Date.now(); m.noteBy = { platform: 'joyclub', account: ownNick() || '' }; });
           c.appendChild(fn);
           mbox.appendChild(c);
         }
@@ -10787,7 +10966,9 @@
             const mine = keep.filter((m) => (m.as || defAs()) === id).map(strip);
             if (JSON.stringify(o.meets || []) !== JSON.stringify(mine)) { o.meets = mine; flPut(o); }
           }
-          q.notes = notes.value.trim();
+          const nn = notes.value.trim().slice(0, 8000);
+          if (nn !== (q.notes || '')) { q.notesAt = Date.now(); q.notesBy = { platform: 'joyclub', account: ownNick() || '' }; }
+          q.notes = nn;
           q.dismissed = [...dismissed];
           if (newState && newState !== old) { q.status = newState; flHist(q, `Fickstatus: ${old ? flLabel(old) : '–'} → ${flLabel(newState)}`); }
           const nv = note.value.trim();
@@ -11151,32 +11332,40 @@
     return true;
   }
 
-  // ---- Navigation „Profil verwalten“: Eintrag „Fickliste“ zwischen „Videos“ und „Homepages“, Kachel auf /edit/ ----
+  // ---- Navigation „Profil verwalten“: Eintrag „Fickliste“ als erster unter „Community & Dating“ (vor „Dates“), Kachel auf /edit/ ebenso ----
   const FL_TILE_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 90"><rect width="120" height="90" fill="#c71b1b"/><g transform="translate(28 16) scale(.25)" fill="#fff"><path d="${FL_D}"/></g></svg>`);
   function flEditNav() {
     if (!/^\/edit\//.test(location.pathname)) return;
-    for (const ul of document.querySelectorAll('ul.catlinks')) {
+    // erster Eintrag unter „Community & Dating“ (vor „Dates“); gibt es nirgends „Dates“: wie früher hinter „Videos“
+    const hrefIn = (ul, re) => [...ul.querySelectorAll('a')].find((a) => re.test(a.getAttribute('href') || ''));
+    const uls = [...document.querySelectorAll('ul.catlinks')];
+    const withDates = uls.filter((ul) => hrefIn(ul, /\/edit\/dating\/?$/));
+    const targets = withDates.length ? withDates : uls.filter((ul) => hrefIn(ul, /\/edit\/video\/?$/));
+    for (const ul of targets) {
       if (ul.querySelector('.jaf-fl-sn')) continue;
-      const vid = [...ul.querySelectorAll('a')].find((a) => /\/edit\/video\/?$/.test(a.getAttribute('href') || ''));
-      if (!vid) continue;
+      const dates = hrefIn(ul, /\/edit\/dating\/?$/), vid = hrefIn(ul, /\/edit\/video\/?$/);
       const li = document.createElement('li');
       li.className = 'jaf-fl-sn';
       li.innerHTML = `<a href="${flOverviewUrl()}" class="${flOverviewPage() ? 'sn_on' : 'sn'}">Fickliste</a>`;
-      vid.closest('li').insertAdjacentElement('afterend', li);
+      if (dates) dates.closest('li').insertAdjacentElement('beforebegin', li); else vid.closest('li').insertAdjacentElement('afterend', li);
       if (flOverviewPage() || flExternPage()) ul.querySelectorAll('a.sn_on').forEach((a) => { if (!a.closest('.jaf-fl-sn')) a.className = 'sn'; });
     }
+    // Eintrag am alten Platz entfernen, sobald „Dates“ da ist
+    if (withDates.length) document.querySelectorAll('ul.catlinks .jaf-fl-sn').forEach((li) => { if (!withDates.includes(li.parentElement)) li.remove(); });
     if (/^\/edit\/?$/.test(location.pathname)) {
       for (const ul of document.querySelectorAll('ul.profile_edit_list')) {
         if (ul.querySelector('.jaf-fl-tile')) continue;
-        const vid = [...ul.querySelectorAll('li.profile_edit_card')].find((li) => li.querySelector('a[href$="/edit/video/"]'));
-        if (!vid) continue;
-        const li = vid.cloneNode(true);
+        const card = (suf) => [...ul.querySelectorAll('li.profile_edit_card')].find((li) => li.querySelector(`a[href$="${suf}"]`));
+        const dates = card('/edit/dating/'), vid = card('/edit/video/');
+        const tpl = dates || vid;
+        if (!tpl) continue;
+        const li = tpl.cloneNode(true);
         li.className = 'profile_edit_card jaf-fl-tile';
         const a = li.querySelector('a'); a.href = flOverviewUrl();
         const img = li.querySelector('img'); if (img) img.style.backgroundImage = `url("${FL_TILE_IMG}")`;
         const s = li.querySelector('strong'); if (s) s.textContent = 'Fickliste';
         const n = li.querySelector('.normal'); if (n) n.textContent = 'Deine Ficks und Erinnerungen – nur für dich sichtbar.';
-        vid.insertAdjacentElement('afterend', li);
+        if (dates) dates.insertAdjacentElement('beforebegin', li); else vid.insertAdjacentElement('afterend', li);
       }
     }
   }
