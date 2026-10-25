@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.91
+// @version      1.92
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -270,7 +270,8 @@
       const p = apiPath(url);
       if (!/joyclub\.(de|com)$/.test(p.host)) return;
       if (/\.(js|css|png|jpe?g|gif|webp|svg|woff2?|ico|mp4)$/i.test(p.path)) return;
-      if (/html|image\/|font\/|css|javascript/i.test(ctype || '')) return; // ganze Seiten und Dateien sind keine Schnittstellen
+      // Dateien sind keine Schnittstellen; ganze Seiten nur bei GET – POST mit HTML-Antwort (z. B. Stornieren im Hintergrund) wird erfasst
+      if (/image\/|font\/|css|javascript/i.test(ctype || '') || (/html/i.test(ctype || '') && !/^(POST|PUT|PATCH|DELETE)$/i.test(method))) return;
       const full = p.host + p.path;
       const feat = Object.keys(API_FEAT_RE).find((f) => API_FEAT_RE[f].test(full)) || '';
       const forced = feat && API_STATE.forced.includes(feat);

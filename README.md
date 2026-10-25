@@ -666,6 +666,8 @@ Antwortet eine Schnittstelle nicht wie erwartet, nimmt das Skript automatisch de
 - **Änderungen erkennen:** Fällt ein Vorgang **5× in Folge** auf den Seitenweg zurück, schneidet der Rekorder dessen Aufrufe wieder mit – auch wenn er ausgeschaltet ist – und zeigt einen Hinweis; das endet, sobald die Schnittstelle wieder klappt, nach dem Export, spätestens nach 7 Tagen.
 - „Exportieren“ (JSON mit Aufrufen, Rückfällen und Zeitleiste), „Leeren“, Anzeige „X erfasst, davon Y neu“.
 
+Anfragen mit ganzen Seiten als Antwort zeichnet er nur auf, wenn sie etwas abschicken (POST, PUT, DELETE) – so werden auch Vorgänge wie das Stornieren einer Party-Anmeldung sichtbar, die im Hintergrund laufen und danach die Seite neu laden.
+
 <img src="docs/einstellungen-experten.png" width="520" alt="Experten-Einstellungen mit API-Rekorder">
 
 ## Profilinfos nebenbei

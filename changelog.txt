@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.92 (25.10.2026)
+- API-Rekorder: Hintergrund-Anfragen mit HTML-Antwort werden bei POST/PUT/DELETE mitgeschnitten (z. B. Stornieren einer Party-Anmeldung)
+
 1.91 (25.10.2026)
 - Mitgliedersuche „Mit aktuellen Sucheinstellungen filtern“: Ergebnisse über die Schnittstelle (apiv2 /members) statt Scrollen, Alter und Typ direkt aus den Treffern; Rückfall auf die Seite
 
