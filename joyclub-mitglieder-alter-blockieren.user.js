@@ -1,10 +1,13 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.89
+// @version      1.90
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
+// @match        https://www.poppen.de/*
+// @match        https://poppen.de/*
+// @match        https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=joyclub.de
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -28,6 +31,88 @@
 
 (function () {
   'use strict';
+  // ---------- Briefkasten: Abgleich mit dem Skript auf poppen.de (ab 1.90) ----------
+  // Eine leere Seite ohne Code auf GitHub Pages wird unsichtbar eingebettet. Beide Skripte laufen darin und tauschen über
+  // deren localStorage aus – die Seiten-Codes von JOYclub und poppen.de kommen an diesen Speicher nicht heran.
+  // Seite ↔ eigenes iframe nur über den eigenen GM-Speicher (kein postMessage). Auf poppen.de ist das Skript passiv.
+  const BK_URL = 'https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html';
+  const BK_HOST = 'schimmelreiter.github.io';
+  const BK_ME = 'joyclub', BK_OTHER = 'poppen';
+  const K_BK_OUT = 'jaf_bk_outbox';   // eigener Postausgang { v, platform, account, ts, items: [{ seq, ts, kind, data }] }
+  const K_BK_SEQ = 'jaf_bk_seq';      // letzte vergebene seq
+  const K_BK_ACK = 'jaf_bk_acked';    // höchste seq, die das poppen-Skript quittiert hat
+  const K_BK_IN = 'jaf_bk_in';        // empfangene, noch nicht verarbeitete Einträge [{ seq, ts, kind, data, account }]
+  const K_BK_INSEQ = 'jaf_bk_inseq';  // höchste übernommene seq des poppen-Skripts
+  const K_BK_ALIVE = 'jaf_bk_alive';  // Lebenszeichen des iframes { ts, ls: Speicher nutzbar }
+  const K_BK_PEER = 'jaf_bk_peer';    // Lebenszeichen des poppen-Skripts { ts, version, seen }
+  const bkLs = (fn) => { try { return fn(window.localStorage); } catch (e) { return undefined; } };
+  function bkFrameMain() {
+    const gv = (k, d) => { try { const v = GM_getValue(k, d); return v === undefined ? d : v; } catch (e) { return d; } };
+    const ok = bkLs((ls) => { ls.setItem('opa-bk:test', '1'); const r = ls.getItem('opa-bk:test') === '1'; ls.removeItem('opa-bk:test'); return r; }) === true;
+    GM_setValue(K_BK_ALIVE, { ts: Date.now(), ls: ok });
+    if (!ok) return;
+    const ver = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '';
+    bkLs((ls) => ls.setItem(`opa-bk:hello:${BK_ME}`, JSON.stringify({ v: 1, ts: Date.now(), script: 'opa-scan', version: ver })));
+    const ping = () => { try { window.dispatchEvent(new CustomEvent('opa-bk')); } catch (e) { /* egal */ } };
+    const publish = () => {
+      const ob = gv(K_BK_OUT, null);
+      if (!ob) return;
+      bkLs((ls) => ls.setItem(`opa-bk:out:${BK_ME}`, JSON.stringify(ob)));
+      ping();
+    };
+    let busy = false;
+    const read = () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const peer = bkLs((ls) => ls.getItem(`opa-bk:hello:${BK_OTHER}`));
+        if (peer) { try { const p = JSON.parse(peer); const o = gv(K_BK_PEER, {}) || {}; if (o.ts !== p.ts) GM_setValue(K_BK_PEER, Object.assign({}, p, { seen: Date.now() })); } catch (e) { /* egal */ } }
+        const ack = +bkLs((ls) => ls.getItem(`opa-bk:ack:${BK_ME}`)) || 0;
+        if (ack && ack !== gv(K_BK_ACK, 0)) GM_setValue(K_BK_ACK, ack);
+        const raw = bkLs((ls) => ls.getItem(`opa-bk:out:${BK_OTHER}`));
+        if (!raw) return;
+        let ob; try { ob = JSON.parse(raw); } catch (e) { return; }
+        const items = (ob && Array.isArray(ob.items) ? ob.items : []).filter((x) => x && Number.isFinite(+x.seq));
+        if (!items.length) return;
+        let last = +gv(K_BK_INSEQ, 0) || 0;
+        const max = Math.max(...items.map((x) => +x.seq));
+        if (max < last) last = 0; // Speicher drüben zurückgesetzt
+        const fresh = items.filter((x) => +x.seq > last).sort((a, b) => a.seq - b.seq);
+        if (fresh.length) {
+          const inbox = gv(K_BK_IN, []) || [];
+          for (const x of fresh) inbox.push(Object.assign({}, x, { account: ob.account || '', platform: ob.platform || BK_OTHER }));
+          GM_setValue(K_BK_IN, inbox.slice(-500));
+          GM_setValue(K_BK_INSEQ, max);
+        }
+        bkLs((ls) => ls.setItem(`opa-bk:ack:${BK_OTHER}`, String(max)));
+      } finally { busy = false; }
+    };
+    try { GM_addValueChangeListener(K_BK_OUT, () => publish()); } catch (e) { /* egal */ }
+    window.addEventListener('opa-bk', () => setTimeout(read, 50));
+    window.addEventListener('storage', () => read());
+    publish(); read();
+    setInterval(() => { read(); GM_setValue(K_BK_ALIVE, { ts: Date.now(), ls: true }); }, 5000);
+  }
+  // Briefkasten in die besuchte Seite einbetten (nur im obersten Fenster, nur einmal je Tab)
+  function bkEnsureFrame() {
+    if (window.top !== window) return;
+    setTimeout(() => {
+      if (document.getElementById('opa-briefkasten') || !document.documentElement) return;
+      const f = document.createElement('iframe');
+      f.id = 'opa-briefkasten';
+      f.src = `${BK_URL}#host=${location.hostname}`;
+      f.setAttribute('aria-hidden', 'true'); f.tabIndex = -1;
+      f.style.cssText = 'position:fixed;width:0;height:0;border:0;left:-9999px;top:-9999px;visibility:hidden';
+      document.documentElement.appendChild(f);
+    }, Math.floor(Math.random() * 1500));
+  }
+  if (location.hostname === BK_HOST) { if (window.top !== window && /\/briefkasten\.html$/.test(location.pathname)) bkFrameMain(); return; }
+  if (/(^|\.)poppen\.de$/.test(location.hostname)) {
+    // passiv: nur den Briefkasten einbetten – keine Oberfläche, keine Eingriffe, keine Aufrufe
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bkEnsureFrame, { once: true }); else bkEnsureFrame();
+    return;
+  }
+
   // ---------- API-Rekorder 2 (läuft ab Seitenstart: wenn eingeschaltet oder wenn eine Schnittstelle des Skripts 5× in Folge versagte) ----------
   // Je Adresse/Payload-Aufbau die ersten 2 Beispiele (Dauerläufer 1), Listen auf 2 Einträge + Gesamtzahl gekürzt.
   // Geschwärzt: E-Mail, Passwörter/Token/Schlüssel/Sitzungskennungen, Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt.
@@ -9058,6 +9143,9 @@
       row(tb2, 'Limit:', num('IGNORE_LIMIT', 'Einträge', 10, 100000), `JOYclub behält nur die letzten ${Number(d.IGNORE_LIMIT).toLocaleString('de-DE')} Sperren.`, { key: 'IGNORE_LIMIT', red: true });
       tb2 = section('API-Rekorder');
       row(tb2, 'API-Rekorder:', apiRecControl(), 'Schneidet ab dem nächsten Seitenaufruf mit, welche Schnittstellen JOYclub selbst benutzt (je Adresse 2 Beispiele, geschwärzt: E-Mail, Zugangsdaten, Nachrichten- und Profiltexte, Telefonnummern, Geodaten bis auf die Stadt). Der Export dient dazu, Seiten-Lösungen des Skripts durch Schnittstellen zu ersetzen. Wirkt sofort, ohne „Speichern“.');
+      tb2 = section('Abgleich mit poppen.de');
+      { const bs = document.createElement('div'); bs.className = 'jaf-bk-status'; bs.textContent = bkStatusText(); const rf = setInterval(() => { if (!bs.isConnected) { clearInterval(rf); return; } bs.textContent = bkStatusText(); }, 2000);
+        row(tb2, 'Briefkasten:', bs, 'Gleicht Fickliste und Textvorlagen automatisch mit dem Skript auf poppen.de ab (über eine leere Seite auf GitHub Pages, die nur die beiden Skripte lesen können). Rückfragen erscheinen beim nächsten Öffnen der Fickliste bzw. der Textvorlagen.'); }
       tb2 = section('Betrieb');
       row(tb2, 'Debug-Ausgaben:', onOff('DEBUG'), 'Zusätzliche Meldungen in der Browser-Konsole; jedes Element wird vor dem Klick markiert.', { key: 'DEBUG' });
       row(tb2, 'Testlauf:', onOff('DRY_RUN'), 'Spielt alles durch, ignoriert aber niemanden.', { key: 'DRY_RUN' });
@@ -10722,13 +10810,14 @@
       const roots = [...new Set(keys.map((k) => idx.get(k)).filter(Boolean).map((id) => flPrimaryId(id)))];
       if (!roots.length) { const id = flCreateFromX(X); flMergeIn(X, id, true); st.neu++; continue; }
       if (roots.length === 1) { if (flMergeIn(X, roots[0])) st.auto++; else st.same++; continue; }
-      conflicts.push({ X, roots });
+      conflicts.push({ X, roots, X0 });
     }
     for (const c of conflicts) {
       st.conflict++;
       const roots = c.roots.filter((r) => flGet(r));
       const names = roots.map((r) => flGet(r).nick);
       const yes = await ask(c.X, names);
+      if (yes === 'defer') { (st.deferred = st.deferred || []).push(c.X0); st.conflict--; continue; }
       if (yes) {
         const joy = roots.filter((r) => !flIsExt(r));
         const into = joy[0] || roots[0];
@@ -12737,6 +12826,7 @@
       delete s.meta[id];
     }
     tplSave(s);
+    try { bkCheckTemplates(list, s); } catch (e) { /* Briefkasten ist Nebensache */ }
     return { list, s };
   }
 
@@ -12779,6 +12869,7 @@
     const base = s.base[pk] = s.base[pk] || {};
     const rep = [];
     const unknown = new Set();
+    const deferred = [];
     const byUid = new Map(), byName = new Map();
     for (const n of list) { const m = s.meta[String(n.id)]; byUid.set(m.uid, n); byName.set(norm(n.name), n); }
     let count = list.length;
@@ -12827,7 +12918,11 @@
         const m = s.meta[String(L.id)];
         const changed = base[m.uid] && base[m.uid] !== m.hash;
         let del = !changed;
-        if (changed || !base[m.uid]) del = (await ask('delete', { name: L.name, text: L.text, by: T.updatedBy, at: T.deletedAt })) === 'delete';
+        if (changed || !base[m.uid]) {
+          const a = await ask('delete', { name: L.name, text: L.text, by: T.updatedBy, at: T.deletedAt });
+          if (a === 'defer') { deferred.push(T); rep.push([L.name, 'Rückfrage wartet']); continue; }
+          del = a === 'delete';
+        }
         if (del) {
           await tplApiDelete(L.id);
           s.trash.push({ uid: m.uid, name: L.name, text: L.text, deletedAt: Date.now(), by: T.updatedBy || null });
@@ -12861,6 +12956,7 @@
       if (res && res.text.length > TPL_TEXT_MAX) res = null;
       if (!res) {
         const a = await ask('conflict', { name: L.name, mine: L.text, other: smToJoy(Rtext, from, unknown), otherBy: T.updatedBy, otherAt: T.updatedAt, myAt: m.at, myBy: m.by });
+        if (a === 'defer') { deferred.push(T); rep.push([L.name, 'Rückfrage wartet']); continue; }
         if (a === 'other') res = { text: smToJoy(Rtext, from, unknown).slice(0, TPL_TEXT_MAX), how: 'ersetzt' };
         else if (a === 'both') {
           const nn = freeName(name);
@@ -12876,7 +12972,7 @@
       rep.push([newName, res.how]);
     }
     tplSave(s);
-    return { rep, unknown: [...unknown] };
+    return { rep, unknown: [...unknown], deferred };
   }
 
   // ---- Popups (eigener <dialog>, damit sie über JOYclubs Overlay liegen und bedienbar sind) ----
@@ -13196,6 +13292,179 @@
     }
   }
   setInterval(() => { try { tplUiTick(); } catch (e) { /* weiter */ } }, 1000);
+
+  // =====================================================================
+  // ---------- Briefkasten: Postausgang füllen, Eingang verarbeiten (JOYclub-Seite, oberstes Fenster) ----------
+  // Fickliste: geänderte Personen werden einzeln gesendet (Vergleich mit dem zuletzt gesendeten Stand je Person).
+  // Textvorlagen: nach jedem Abgleich mit JOYclub (tplSync) geänderte Vorlagen. Erster Kontakt / Zurücksetzen: „full“.
+  // Eingang: wie ein Import, aber Rückfragen werden nicht gestellt, sondern vorgemerkt und beim nächsten Öffnen der
+  // Fickliste bzw. der Textvorlagen angezeigt.
+  // =====================================================================
+  const K_BK_SENT = 'jaf_bk_sent';       // { p: { id: hash }, t: { uid: hash } } – zuletzt gesendeter Stand
+  const K_BK_PEND_FL = 'jaf_bk_pend_fl'; // vorgemerkte Fickliste-Rückfragen [Person]
+  const K_BK_PEND_TPL = 'jaf_bk_pend_tpl'; // vorgemerkte Vorlagen-Rückfragen { account, templates: [] }
+  const K_BK_STAT = 'jaf_bk_stat';
+  const K_BK_RETRY = 'jaf_bk_retry';     // Vorlagen, die wegen eines Schnittstellenfehlers später erneut versucht werden       // { start, ok, ls, sent, recv, err }
+  const BK_MAX_BYTES = 1024 * 1024;
+  const bkHash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + ':' + s.length; };
+  const bkStat = (patch) => { const s = Object.assign({}, GM_getValue(K_BK_STAT, {}) || {}, patch); GM_setValue(K_BK_STAT, s); return s; };
+  function bkEnqueue(kind, data, opt = {}) {
+    const acked = +GM_getValue(K_BK_ACK, 0) || 0;
+    let seq = +GM_getValue(K_BK_SEQ, 0) || 0;
+    if (acked > seq) seq = acked; // eigener Speicher zurückgesetzt → weiterzählen
+    const ob = GM_getValue(K_BK_OUT, null) || { v: 1, platform: BK_ME, items: [] };
+    ob.items = (ob.items || []).filter((x) => x.seq > acked);
+    const add = (k, d) => { seq++; ob.items.push({ seq, ts: Date.now(), kind: k, data: d }); };
+    if (Array.isArray(data)) data.forEach((d) => add(kind, d)); else add(kind, data);
+    ob.account = ownNick() || ob.account || ''; ob.ts = Date.now(); ob.v = 1; ob.platform = BK_ME;
+    if (!opt.noOverflow && JSON.stringify(ob).length > BK_MAX_BYTES) { GM_setValue(K_BK_SEQ, seq); bkSendFull(); return; }
+    GM_setValue(K_BK_SEQ, seq);
+    GM_setValue(K_BK_OUT, ob);
+    bkStat({ sent: Date.now() });
+  }
+  // Vorlagen in Austauschform (wie beim Export)
+  function bkTplList(list, s) {
+    const out = list.map((n) => { const m = s.meta[String(n.id)]; return m.first ? { id: m.uid, name: n.name, text: n.text } : { id: m.uid, name: n.name, text: n.text, updatedAt: m.at, updatedBy: m.by }; });
+    for (const t of s.trash) out.push({ id: t.uid, name: t.name, text: '', deletedAt: t.deletedAt, updatedBy: t.by });
+    return out;
+  }
+  let bkTplLast = null; // letzte bekannte Vorlagenliste (aus tplSync)
+  function bkSendFull() {
+    const persons = flExportPersons();
+    const data = { persons };
+    const sent = { p: {}, t: {} };
+    for (const p of persons) sent.p[p.id] = bkHash(JSON.stringify(p));
+    if (bkTplLast) { data.templates = bkTplLast; for (const t of bkTplLast) sent.t[t.id] = bkHash(JSON.stringify(t)); }
+    const acked = +GM_getValue(K_BK_ACK, 0) || 0;
+    let seq = Math.max(+GM_getValue(K_BK_SEQ, 0) || 0, acked) + 1;
+    GM_setValue(K_BK_SEQ, seq);
+    GM_setValue(K_BK_OUT, { v: 1, platform: BK_ME, account: ownNick() || '', ts: Date.now(), items: [{ seq, ts: Date.now(), kind: 'full', data }] });
+    GM_setValue(K_BK_SENT, sent);
+    bkStat({ sent: Date.now(), full: Date.now() });
+  }
+  function bkCheckPersons() {
+    const sent = GM_getValue(K_BK_SENT, null);
+    if (!sent || !sent.p) return false; // noch nie gesendet → Vollabgleich
+    const changed = [];
+    for (const p of flExportPersons()) {
+      const h = bkHash(JSON.stringify(p));
+      if (sent.p[p.id] !== h) { changed.push(p); sent.p[p.id] = h; }
+    }
+    if (changed.length) { bkEnqueue('person', changed); GM_setValue(K_BK_SENT, sent); }
+    return true;
+  }
+  function bkCheckTemplates(list, s) {
+    bkTplLast = bkTplList(list, s);
+    const sent = GM_getValue(K_BK_SENT, null);
+    if (!sent) return;
+    sent.t = sent.t || {};
+    const changed = [];
+    for (const t of bkTplLast) { const h = bkHash(JSON.stringify(t)); if (sent.t[t.id] !== h) { changed.push(t); sent.t[t.id] = h; } }
+    if (changed.length) { bkEnqueue('template', changed); GM_setValue(K_BK_SENT, sent); }
+  }
+  // Eingang verarbeiten
+  let bkWorking = false;
+  async function bkProcessInbox() {
+    if (bkWorking) return;
+    let inbox = GM_getValue(K_BK_IN, []) || [];
+    const retry = GM_getValue(K_BK_RETRY, null);
+    if (retry && retry.at <= Date.now()) { GM_setValue(K_BK_RETRY, null); inbox = retry.items.concat(inbox); }
+    if (!inbox.length) return;
+    bkWorking = true;
+    try {
+      GM_setValue(K_BK_IN, []);
+      const persons = [], templates = [];
+      let account = '';
+      for (const x of inbox) {
+        account = x.account || account;
+        const d = x.data || {};
+        if (x.kind === 'person' && d) persons.push(d);
+        else if (x.kind === 'template' && d) templates.push(d);
+        else if (x.kind === 'full') { (d.persons || []).forEach((p) => persons.push(p)); (d.templates || []).forEach((t) => templates.push(t)); }
+      }
+      // gleiche Person/Vorlage mehrfach → nur der letzte Stand
+      const lastBy = (arr, key) => { const m = new Map(); arr.forEach((v, i) => m.set(key(v) || 'i' + i, v)); return [...m.values()]; };
+      const P = lastBy(persons, (p) => p && p.id), T = lastBy(templates, (t) => t && (t.id || t.name));
+      if (P.length) {
+        const st = await flImportRun({ platform: BK_OTHER, persons: P }, () => 'defer');
+        if (st.deferred && st.deferred.length) GM_setValue(K_BK_PEND_FL, (GM_getValue(K_BK_PEND_FL, []) || []).concat(st.deferred).slice(-200));
+        try { flRefreshAll(); } catch (e) { /* egal */ }
+      }
+      if (T.length) {
+        try {
+          const r = await tplImportRun({ platform: BK_OTHER, account, templates: T }, 'add', async () => 'defer');
+          if (r.deferred && r.deferred.length) {
+            const pend = GM_getValue(K_BK_PEND_TPL, null) || { account, templates: [] };
+            pend.account = account || pend.account;
+            pend.templates = lastBy(pend.templates.concat(r.deferred), (t) => t.id || t.name);
+            GM_setValue(K_BK_PEND_TPL, pend);
+          }
+        } catch (e) {
+          // Schnittstelle gerade nicht erreichbar → später erneut
+          GM_setValue(K_BK_RETRY, { at: Date.now() + 5 * 60000, items: T.map((t) => ({ seq: 0, ts: Date.now(), kind: 'template', data: t, account })) });
+          bkStat({ err: e.message || String(e) });
+        }
+      }
+      bkStat({ recv: Date.now() });
+    } finally { bkWorking = false; }
+  }
+  // vorgemerkte Rückfragen beim Öffnen der Fickliste bzw. der Textvorlagen
+  let bkPendBusy = false;
+  async function bkPendingFl() {
+    const pend = GM_getValue(K_BK_PEND_FL, []) || [];
+    if (!pend.length || bkPendBusy) return;
+    bkPendBusy = true;
+    try {
+      GM_setValue(K_BK_PEND_FL, []);
+      const st = await flImportRun({ platform: BK_OTHER, persons: pend }, (X, names) => flAskMerge(X, names));
+      if (st.neu || st.merged || st.auto) flRefreshAll();
+    } finally { bkPendBusy = false; }
+  }
+  async function bkPendingTpl() {
+    const pend = GM_getValue(K_BK_PEND_TPL, null);
+    if (!pend || !pend.templates || !pend.templates.length || bkPendBusy) return;
+    bkPendBusy = true;
+    try {
+      GM_setValue(K_BK_PEND_TPL, null);
+      await tplImportRun({ platform: BK_OTHER, account: pend.account || '', templates: pend.templates }, 'add', tplAsk);
+      tplUiDirty = true;
+    } finally { bkPendBusy = false; }
+  }
+  function bkStatusText() {
+    const st = GM_getValue(K_BK_STAT, {}) || {}, alive = GM_getValue(K_BK_ALIVE, null), peer = GM_getValue(K_BK_PEER, null);
+    if (!st.start) return 'Noch nicht geprüft.';
+    if (!alive || alive.ts < st.start - 60000) return Date.now() - st.start < 15000 ? 'Wird geprüft …' : 'Briefkasten blockiert – vermutlich durch die Sicherheitsrichtlinie der Seite oder einen Werbeblocker. Export/Import per Hand geht weiter.';
+    if (!alive.ls) return 'Speicher gesperrt – vermutlich ist „Drittanbieter-Cookies blockieren“ eingeschaltet. Export/Import per Hand geht weiter.';
+    if (!peer) return 'Briefkasten bereit. poppen-Skript noch nicht gefunden (es muss einmal auf poppen.de oder hier laufen).';
+    const last = Math.max(st.recv || 0, st.sent || 0);
+    return `Abgleich aktiv mit dem poppen-Skript${peer.version ? ' ' + peer.version : ''}` + (last ? ` · letzter Austausch ${fmtTs(last)}` : '') +
+      (st.err ? ` · zuletzt Fehler: ${st.err}` : '');
+  }
+  function bkStart() {
+    if (IN_FRAME || window.top !== window) return;
+    bkStat({ start: Date.now() });
+    bkEnsureFrame();
+    // erster Kontakt bzw. Zurücksetzen drüben → Vollabgleich
+    const firstCheck = () => {
+      const peer = GM_getValue(K_BK_PEER, null), acked = +GM_getValue(K_BK_ACK, 0) || 0, seq = +GM_getValue(K_BK_SEQ, 0) || 0;
+      if (peer && (!GM_getValue(K_BK_SENT, null) || acked > seq)) bkSendFull();
+    };
+    setTimeout(firstCheck, 4000);
+    try { GM_addValueChangeListener(K_BK_PEER, () => firstCheck()); } catch (e) { /* egal */ }
+    try { GM_addValueChangeListener(K_BK_IN, (k, o, n, remote) => { if (n && n.length) setTimeout(() => bkProcessInbox().catch(() => {}), 300); }); } catch (e) { /* egal */ }
+    setTimeout(() => bkProcessInbox().catch(() => {}), 2500);
+    setInterval(() => { const r = GM_getValue(K_BK_RETRY, null); if (r && r.at <= Date.now()) bkProcessInbox().catch(() => {}); }, 60000);
+    setInterval(() => { try { if (GM_getValue(K_BK_PEER, null)) bkCheckPersons(); } catch (e) { /* egal */ } }, 5000);
+    // Textvorlagen gelegentlich mit JOYclub abgleichen (nur wenn das poppen-Skript bekannt ist)
+    setInterval(() => { if (GM_getValue(K_BK_PEER, null) && !tplSyncing) tplSync().catch(() => {}); }, 15 * 60000);
+    setTimeout(() => { if (GM_getValue(K_BK_PEER, null) && !tplSyncing) tplSync().catch(() => {}); }, 8000);
+  }
+  bkStart();
+  setInterval(() => {
+    if (IN_FRAME) return;
+    try { if (flOverviewPage()) bkPendingFl().catch(() => {}); } catch (e) { /* weiter */ }
+    try { if (document.querySelector('j-overlay[data-e2e="overlay-templates"] [data-e2e="button-add-template"]')) bkPendingTpl().catch(() => {}); } catch (e) { /* weiter */ }
+  }, 2000);
 
   safeInit();
   let lastPath = location.pathname;

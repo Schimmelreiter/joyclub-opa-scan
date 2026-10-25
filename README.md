@@ -537,6 +537,16 @@ Unter poppen.de schlägt die Verwaltung importierte poppen-Einträge vor; ein Kl
 
 <img src="docs/fickliste-import.png" width="420" alt="Popup Import">
 
+### Automatischer Abgleich (Briefkasten)
+
+Ist auch das Skript für poppen.de installiert, gleichen sich Fickliste und Textvorlagen **ohne Export/Import** ab – sofort nach jeder Änderung, auf JOYclub wie auf poppen.de. Dafür bettet das Skript unsichtbar eine leere Seite ohne eigenen Code ein (`https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html`, GitHub Pages dieses Repositorys). Beide Skripte laufen darin und tauschen über deren Browser-Speicher aus; die Seiten von JOYclub und poppen.de kommen an diesen Speicher nicht heran, die Daten verlassen den Browser nie.
+
+- **Fickliste:** geänderte Personen werden einzeln übertragen, beim ersten Kontakt die ganze Liste; eingehende Personen werden wie beim Import abgeglichen.
+- **Textvorlagen:** nach jedem Abgleich mit JOYclub (Öffnen der Vorlagen, Speichern, alle 15 Minuten) gehen geänderte Vorlagen hinüber; eingehende werden nach den Import-Regeln eingemischt (Dreiwege-Abgleich, Smileys übersetzt).
+- **Rückfragen** (eine Person passt zu zwei Einträgen; beide Seiten haben eine Vorlage verschieden geändert, z. B. in der JOYclub-App) werden nicht mitten im Surfen gestellt, sondern beim nächsten Öffnen von „Meine Fickliste“ bzw. der Textvorlagen.
+- Auf poppen.de ist dieses Skript **passiv**: keine Oberfläche, keine Eingriffe, keine Aufrufe – nur der Briefkasten. Umgekehrt genauso.
+- **Status** unter Experten-Einstellungen › „Abgleich mit poppen.de“: aktiv, „Briefkasten blockiert“ (Sicherheitsrichtlinie oder Werbeblocker), „Speicher gesperrt“ („Drittanbieter-Cookies blockieren“) oder „poppen-Skript noch nicht gefunden“. In allen Fällen bleibt Export/Import per Hand.
+
 ### Gelöschte Kontakte (ClubMail)
 
 Unterhaltungen mit gelöschten Mitgliedern (Nick ohne Profil-Link) und die JOY-Team-Nachricht „Dein Kontakt … hat sich gelöscht“ markieren Einträge der Fickliste sofort als gelöscht. Ist das Mitglied in der Fickliste, erscheint sein Nick durchgestrichen, ein Klick öffnet das Profil-Archiv und statt des Platzhalters steht das letzte Profilbild aus dem Archiv (unbekannte Konten bleiben, wie JOYclub sie zeigt); die Anmerkungen aus der Nachricht werden als Profilnotiz archiviert. Ist der Kontakt noch nicht in der Fickliste, steht in der Nachricht „+ Zur Fickliste hinzufügen“ – mit Nick, Anmerkungen und, wenn möglich, der passenden Party.
@@ -592,6 +602,8 @@ Am Ende steht ein Bericht je Vorlage und die Liste der Smileys, die sich nicht �
 **Termine:** Enthält der Name einer Vorlage „Termin“, erscheint unter dem Textfeld der Bereich **Termine**. Er liest eine Textdatei auf deinem Computer (einmal wählen, Chrome; Zeilen `wann - wo - was - Link`, Link freiwillig), nimmt die ersten fünf kommenden Termine (heute zählt) und zeigt sie nach Datum sortiert als Knöpfe. Ein Klick fügt den Termin an der Schreibmarke ein (sonst am Ende), getrennt durch eine Leerzeile: mit Link als `wann - wo - Link` (JOYclub zeigt statt des Links den Partynamen), sonst `wann - wo - was`. **„Alle übernehmen“** ersetzt den Text durch alle fünf. Weitere Knöpfe: „Datei mit Terminen wählen …“, „Datei ändern …“, „Zugriff auf die Datei erlauben“; ohne passende Zeilen steht „Keine kommenden Termine“.
 
 <img src="docs/textvorlagen-termine.png" width="400" alt="Termine im Bearbeiten-Fenster">
+
+Mit dem Skript für poppen.de gleichen sich die Vorlagen auch automatisch ab (siehe Fickliste › „Automatischer Abgleich (Briefkasten)“).
 
 Die Vorlagen liest und schreibt das Skript über JOYclubs Schnittstelle (`apiv2 /users/<id>/notes`). Anlegen und Löschen sind noch nicht durch einen Mitschnitt bestätigt; schlägt etwas fehl, meldet der Import das und bittet um einen Mitschnitt mit dem API-Rekorder.
 
@@ -664,6 +676,7 @@ Beim Ansehen von „Mögen mich“, „Profilbesuche“ und der ClubMail merkt s
 - **Fickliste:** `jaf_fl` (Personen, mit `profiles` für andere Plattformen und `statusAt`), `jaf_fl_groups` (verknüpfte Profile), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
 - **Orts-URLs:** ä→ae, ö→oe, ü→ue, ß→ss; Leerzeichen und Klammern → „_“ (z. B. „Mülheim (Ruhr)“ → `muelheim_ruhr`).
 - **Profilinfos:** `jaf_pi_<id>` (Nick, frühere Nicks, Typ, Alter, Bild), `jaf_pi_idx`, `jaf_pi_nick`; **API-Rekorder:** `jaf_api_rec`, `jaf_api_log`, `jaf_api_tl` (Zeitleiste), `jaf_api_fb` (Rückfälle); ab 1.83 `@run-at document-start` und `@grant unsafeWindow`.
+- **Briefkasten (ab 1.90):** zusätzliche `@match` für `www.poppen.de`, `poppen.de` (passiv) und die Briefkasten-Seite; `jaf_bk_outbox`/`jaf_bk_seq`/`jaf_bk_acked` (Postausgang), `jaf_bk_in`/`jaf_bk_inseq` (Eingang), `jaf_bk_sent` (zuletzt gesendeter Stand), `jaf_bk_pend_fl`/`jaf_bk_pend_tpl` (vorgemerkte Rückfragen), `jaf_bk_alive`/`jaf_bk_peer`/`jaf_bk_stat` (Status). Im Briefkasten: `opa-bk:out:<plattform>`, `opa-bk:ack:<plattform>`, `opa-bk:hello:<plattform>`.
 - **Eigene Konten:** `jaf_own_accs` (Zweitkonto aus „Partys synchronisieren“) – zählen nie als Interaktion.
 - **Tab-Sperre:** Immer nur ein Tab arbeitet; andere Tabs zeigen nur an.
 - **Hintergrund-Frames:** Gästelisten, Event-Seiten und Profile werden in unsichtbaren Frames geladen, damit die aktuelle Seite stehen bleibt.
