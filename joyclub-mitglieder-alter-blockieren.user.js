@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.88
+// @version      1.89
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -19,6 +19,7 @@
 // @connect      cfnimg.feig-partner.de
 // @connect      www.google.com
 // @connect      gstatic.com
+// @connect      apiv2.joyclub.com
 // @run-at       document-start
 // @homepageURL  https://github.com/Schimmelreiter/joyclub-opa-scan
 // @updateURL    https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
@@ -215,6 +216,32 @@
       apiSched();
     } catch (err) { /* Rekorder darf nie stören */ }
   }
+  // Kopfzeile x-requested-from, die JOYclub an seine Schnittstelle apiv2 schickt, für eigene Aufrufe merken (kein Geheimnis)
+  (function api2Sniff() {
+    try {
+      const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+      const ex = (f) => { try { return typeof exportFunction === 'function' ? exportFunction(f, W) : f; } catch (e) { return f; } };
+      const keep = (v) => { try { v = String(v || '').slice(0, 60); if (v && GM_getValue('jaf_api2_from', '') !== v) GM_setValue('jaf_api2_from', v); } catch (e) { /* egal */ } };
+      const XP = W.XMLHttpRequest && W.XMLHttpRequest.prototype;
+      if (XP && !XP.__jafSniff) {
+        const oh = XP.setRequestHeader;
+        XP.setRequestHeader = ex(function (n, v) { if (/^x-requested-from$/i.test(String(n))) keep(v); return oh.apply(this, arguments); });
+        XP.__jafSniff = true;
+      }
+      const of = W.fetch;
+      if (typeof of === 'function' && !of.__jafSniff) {
+        const nf = function (input, init) {
+          try {
+            const h = init && init.headers;
+            if (h) { const v = typeof h.get === 'function' ? h.get('x-requested-from') : (h['x-requested-from'] || h['X-Requested-From']); if (v) keep(v); }
+          } catch (e) { /* egal */ }
+          return of.apply(this, arguments);
+        };
+        nf.__jafSniff = true;
+        W.fetch = ex(nf);
+      }
+    } catch (e) { /* egal */ }
+  })();
   (function apiHook() {
     if (!API_STATE.on && !API_STATE.forced.length) return;
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -12511,6 +12538,648 @@
     const wl = whiteList();
     for (const [path, r] of Object.entries(getAccounts())) if (r.name && wl.includes(norm(r.name))) learnWhiteUrl(r.name, path);
   } catch (e) { /* egal */ }
+
+  // =====================================================================
+  // ---------- Textvorlagen (ClubMail › Optionen › Textvorlagen) ----------
+  // Daten über JOYclubs Schnittstelle apiv2 /users/<id>/notes (Liste, Ändern; Anlegen/Löschen nach REST-Muster).
+  // Zusatzangaben je Vorlage (feste Kennung, zuletzt bearbeitet am/auf, Stand beim letzten Abgleich) und ein
+  // Papierkorb (30 Tage) liegen nur im Skript-Speicher. Export/Import (Datei oder Zwischenablage, mit dem Nick
+  // verschlüsselt) für die Sicherung, das Zweitkonto und den Abgleich mit poppen.de; Smileys werden dabei übersetzt
+  // und beim Vergleichen nicht mitgezählt. Termine-Bereich im Bearbeiten-Fenster (Name enthält „Termin“).
+  // =====================================================================
+  // Smiley-Zuordnung JOYclub ↔ poppen.de (Stand 25.10.2026, mit dem Nutzer abgestimmt)
+  const SM_P2J = {":jumping:":"*freu2*",":hearts_around:":"*liebhab*",":heart_eyes:":"*love5*",":coffee_morning:":"*kaffee*",":coffee_happy:":"*kaffee*",":dr_love:":"*schwester*",":confused:":":/",":D":":D",":smiley:":"*gg*",":)":":)",":relaxed:":"*smile*","9_9":"☺",";)":";)",":x":"*love5*",":kissing_heart:":"*kuss3*",":kissing_closed_eyes:":"*knutsch*",":kissing:":"*floet*",":kissing_smiling_eyes:":"*bussi*",":P":":P",":stuck_out_tongue_closed_eyes:":"😝",":stuck_out_tongue:":"*aetsch*",":flushed:":":oops:",":grin:":"*grins*",":pensive:":"*traurig*",":relieved:":"*stolzbin*","¬¬":"*pueh*",":(":":(",":persevere:":"😣",":cry:":":cry:",":joy:":"*traenenlach*",":sob:":"*heul*",":sleepy:":"😪",":disappointed_relieved:":"😥",":cold_sweat:":"*angsthab*",":sweat_smile:":"*puh*",":sweat:":"*schwitz*",":weary:":"*3tagewach*",":tired_face:":"😫",":fearful:":"*panik*",":scream:":":shock:",">:(":":x",":rage:":"*gr3*",":triumph:":"*motz*",":confounded:":"*uah*","xD":"*xd*",":yum:":"😋",":mask:":"*mundschutz*","B|":"8)",":sleeping:":"*heia*",":dizzy_face:":"*umfall*",":astonished:":"*wow*",":worried:":"😟","o.O":"😦","-_-":"😧",":smiling_imp:":":twisted:",":imp:":":evil:",":o":":o",":grimacing:":"*grimasse*",":-/":":/","O.o":":?",":hushed:":"*oh2*",":no_mouth:":"😶","(A)":"*engel*",":smirk:":"*selbstgefall*",":|":":|",":man_with_gua_pi_mao:":"👲",":man_with_turban:":"👳",":cop:":"*polizei*",":construction_worker:":"*bauarbeiter*",":guardsman:":"💂",":baby:":"*baby*",":boy:":"👦",":girl:":"👧",":man:":"👨",":woman:":"👩",":older_man:":"*opa*",":older_woman:":"*oma*",":person_with_blond_hair:":"👱",":angel:":"*engel2*",":princess:":"*koenigin*",":smiley_cat:":"😺",":smile_cat:":"😸",":heart_eyes_cat:":"😻",":kissing_cat:":"😽",":smirk_cat:":"😼",":scream_cat:":"🙀",":crying_cat_face:":"😿",":joy_cat:":"😹",":pouting_cat:":"😾",":japanese_ogre:":"👹",":japanese_goblin:":"👺",":see_no_evil:":"*augenzu*",":hear_no_evil:":"🙉",":speak_no_evil:":"🙊",":skull:":"💀",":alien:":"👽",":poop:":"💩",":fire:":"🔥",":sparkles:":"✨",":star2:":"🌟",":dizzy:":"*sternchen*",":boom:":"💥",":anger:":"💢",":sweat_drops:":"💦",":droplet:":"💧",":zzz:":"*zzz*",":dash:":"💨",":ear:":"👂",":eyes:":"*spanner*",":nose:":"👃",":tongue:":"*schleck*",":lips:":"👄",":thumbsup:":"*top*",":thumbsdown:":"*flop*",":ok_hand:":"*spitze*",":punch:":"👊",":fist:":"✊",":v:":"*victory*",":wave:":"*wink*",":raised_hand:":"✋",":open_hands:":"👐",":point_up_2:":"👆",":point_down:":"👇",":point_right:":"👉",":point_left:":"👈",":raised_hands:":"*hi5*",":pray:":"*danke*",":point_up:":"☝",":clap:":"*bravo*",":muscle:":"*pumpi*",":walking:":"🚶",":runner:":"🏃",":dancer:":"*dance*",":couple:":"*friends*",":family:":"👪",":two_men_holding_hands:":"👬",":two_women_holding_hands:":"👭",":couplekiss:":"💏",":couple_with_heart:":"💑",":dancers:":"👯",":ok_woman:":"🙆",":no_good:":"🙅",":information_desk_person:":"💁",":raising_hand:":"*meld*",":massage:":"💆",":haircut:":"💇",":nail_care:":"💅",":bride_with_veil:":"👰",":person_with_pouting_face:":"🙎",":person_frowning:":"🙍",":bow:":"*anbet*",":tophat:":"*hutab*",":crown:":"*koenig*",":womans_hat:":"👒",":athletic_shoe:":"👟",":mans_shoe:":"👞",":sandal:":"👡",":high_heel:":"👠",":boot:":"👢",":shirt:":"👕",":necktie:":"👔",":womans_clothes:":"👚",":dress:":"👗",":running_shirt_with_sash:":"🎽",":jeans:":"👖",":kimono:":"👘",":bikini:":"👙",":briefcase:":"💼",":handbag:":"👜",":pouch:":"👝",":purse:":"👛",":eyeglasses:":"👓",":ribbon:":"🎀",":closed_umbrella:":"🌂",":lipstick:":"💄",":yellow_heart:":"💛",":blue_heart:":"💙",":purple_heart:":"💜",":green_heart:":"💚",":heart:":"*herz*",":broken_heart:":"*liebeskummer*",":heartpulse:":"*herz3*",":heartbeat:":"💓",":two_hearts:":"*herz2*",":sparkling_heart:":"*herz4*",":revolving_hearts:":"💞",":cupid:":"💘",":love_letter:":"💌",":kiss:":"*kuss2*",":ring:":"💍",":gem:":"💎",":bust_in_silhouette:":"👤",":busts_in_silhouette:":"👥",":speech_balloon:":"*blabla*",":footprints:":"👣",":thought_balloon:":"💭",":poppen:":"*pimper*",":poppen-1:":"*popp*",":suckmy:":"*blowjob*",":lick:":"*schleck*",":handcuffs:":"*fessel*",":vibrator:":"*sextoy*",":whipping:":"*peitsche*",":crazy:":"*crazy*",":cum:":"💦",":bed:":"*popp*",":ass:":"*arsch*",":pussy:":"🍯",":stocking:":"*hothips*",":safesex:":"*kondom*",":cock:":"🍆",":tits:":"*titten*",":banana:":"🍌",":bananarama:":"*bananen*",":spermatozoon:":"💦",":threesome:":"*ffm*",":fucku:":"🖕",":urock:":"*headbang*",":wdrop:":"💧",":ydrop:":"💧",":wdrops:":"💦",":ydrops:":"💦",":bdrops:":"💦",":dog:":"*hund*",":wolf:":"*wolf*",":cat:":"*katze*",":mouse:":"🐭",":hamster:":"*hamster*",":rabbit:":"🐰",":frog:":"🐸",":tiger:":"🐯",":koala:":"🐨",":bear:":"🐻",":pig:":"*schwein*",":pig_nose:":"🐽",":cow:":"*kuh*",":boar:":"🐗",":monkey_face:":"🐵",":monkey:":"🐒",":horse:":"🐴",":sheep:":"🐑",":elephant:":"🐘",":panda_face:":"🐼",":penguin:":"🐧",":bird:":"🐦",":baby_chick:":"🐤",":hatched_chick:":"🐥",":hatching_chick:":"🐣",":chicken:":"*huhn*",":snake:":"🐍",":turtle:":"🐢",":bug:":"*bug*",":bee:":"🐝",":ant:":"🐜",":beetle:":"🐞",":snail:":"*schnecke*",":octopus:":"🐙",":shell:":"🐚",":tropical_fish:":"🐠",":fish:":"🐟",":dolphin:":"🐬",":whale:":"🐳",":whale2:":"🐋",":cow2:":"🐄",":ram:":"🐏",":rat:":"🐀",":water_buffalo:":"🐃",":tiger2:":"🐅",":rabbit2:":"🐇",":dragon:":"🐉",":racehorse:":"🐎",":goat:":"🐐",":rooster:":"🐓",":dog2:":"🐕",":pig2:":"🐖",":mouse2:":"🐁",":ox:":"🐂",":dragon_face:":"🐲",":blowfish:":"🐡",":crocodile:":"🐊",":camel:":"🐫",":dromedary_camel:":"🐪",":leopard:":"🐆",":cat2:":"🐈",":poodle:":"🐩",":feet:":"🐾",":bouquet:":"*blumenschenk*",":cherry_blossom:":"🌸",":tulip:":"*blume2*",":four_leaf_clover:":"*vielglueck*",":rose:":"*blume*",":sunflower:":"🌻",":hibiscus:":"🌺",":maple_leaf:":"🍁",":leaves:":"🍃",":fallen_leaf:":"🍂",":herb:":"🌿",":ear_of_rice:":"🌾",":mushroom:":"🍄",":cactus:":"🌵",":palm_tree:":"🌴",":evergreen_tree:":"🌲",":deciduous_tree:":"🌳",":chestnut:":"🌰",":seedling:":"🌱",":blossom:":"*blumezupf*",":globe_with_meridians:":"🌐",":sun_with_face:":"🌞",":full_moon_with_face:":"🌝",":new_moon_with_face:":"🌚",":new_moon:":"🌑",":waxing_crescent_moon:":"🌒",":first_quarter_moon:":"🌓",":waxing_gibbous_moon:":"🌔",":full_moon:":"🌕",":waning_gibbous_moon:":"🌖",":last_quarter_moon:":"🌗",":waning_crescent_moon:":"🌘",":last_quarter_moon_with_face:":"🌜",":first_quarter_moon_with_face:":"🌛",":crescent_moon:":"🌙",":earth_africa:":"🌍",":earth_americas:":"🌎",":earth_asia:":"🌏",":volcano:":"🌋",":milky_way:":"🌌",":stars:":"🌠",":star:":"⭐",":sunny:":"*sonne*",":partly_sunny:":"⛅",":cloud:":"☁",":zap:":"⚡",":umbrella:":"*regen*",":snowflake:":"❄",":snowman:":"⛄",":cyclone:":"🌀",":foggy:":"🌁",":rainbow:":"*regenbogen*",":ocean:":"🌊",":bamboo:":"🎍",":gift_heart:":"💝",":dolls:":"🎎",":school_satchel:":"🎒",":mortar_board:":"🎓",":flags:":"🎏",":fireworks:":"*feuerwerk*",":sparkler:":"🎇",":wind_chime:":"🎐",":rice_scene:":"🎑",":jack_o_lantern:":"🎃",":ghost:":"👻",":santa:":"*nikolaus*",":christmas_tree:":"🎄",":gift:":"*geschenk*",":tanabata_tree:":"🎋",":tada:":"*troet*",":confetti_ball:":"🎊",":balloon:":"🎈",":crossed_flags:":"🎌",":crystal_ball:":"*wahrsager*",":movie_camera:":"*film*",":camera:":"*knips*",":video_camera:":"📹",":vhs:":"📼",":cd:":"💿",":dvd:":"📀",":minidisc:":"💽",":floppy_disk:":"💾",":computer:":"*tipp*",":iphone:":"📱",":telephone:":"☎",":telephone_receiver:":"*tel*",":pager:":"📟",":fax:":"📠",":satellite:":"📡",":tv:":"📺",":radio:":"📻",":loud_sound:":"🔊",":sound:":"🔉",":speaker:":"🔈",":mute:":"🔇",":bell:":"🔔",":no_bell:":"🔕",":loudspeaker:":"*megaphon*",":mega:":"📣",":hourglass_flowing_sand:":"⏳",":hourglass:":"⌛",":alarm_clock:":"⏰",":watch:":"⌚",":unlock:":"🔓",":lock:":"🔒",":lock_with_ink_pen:":"🔏",":closed_lock_with_key:":"🔐",":key:":"🔑",":mag_right:":"🔎",":bulb:":":idea:",":flashlight:":"🔦",":high_brightness:":"🔆",":low_brightness:":"🔅",":electric_plug:":"🔌",":battery:":"🔋",":mag:":"🔍",":bathtub:":"🛁",":bath:":"🛀",":shower:":"*duschen*",":toilet:":"*wc*",":wrench:":"🔧",":nut_and_bolt:":"🔩",":hammer:":"🔨",":door:":"🚪",":smoking:":"*zig*",":bomb:":"💣",":gun:":"🔫",":knife:":"🔪",":pill:":"*aspirin*",":syringe:":"💉",":moneybag:":"💰",":yen:":"💴",":dollar:":"💵",":pound:":"💷",":euro:":"💶",":credit_card:":"💳",":money_with_wings:":"💸",":calling:":"📲",":e-mail:":"📧",":inbox_tray:":"📥",":outbox_tray:":"📤",":envelope:":"*mail*",":envelope_with_arrow:":"📩",":incoming_envelope:":"📨",":postal_horn:":"📯",":mailbox:":"📫",":mailbox_closed:":"📪",":mailbox_with_mail:":"📬",":mailbox_with_no_mail:":"📭",":postbox:":"📮",":package:":"📦",":pencil:":"📝",":page_facing_up:":"📄",":page_with_curl:":"📃",":bookmark_tabs:":"📑",":bar_chart:":"📊",":chart_with_upwards_trend:":"📈",":chart_with_downwards_trend:":"📉",":scroll:":"📜",":clipboard:":"📋",":date:":"📅",":calendar:":"📆",":card_index:":"📇",":file_folder:":"📁",":open_file_folder:":"📂",":scissors:":"✂",":pushpin:":"📌",":paperclip:":"📎",":black_nib:":"✒",":pencil2:":"✏",":straight_ruler:":"📏",":triangular_ruler:":"📐",":closed_book:":"📕",":green_book:":"📗",":blue_book:":"📘",":orange_book:":"📙",":notebook:":"📓",":notebook_with_decorative_cover:":"📔",":ledger:":"📒",":books:":"📚",":book:":"📖",":bookmark:":"🔖",":name_badge:":"📛",":microscope:":"🔬",":telescope:":"*fernglas*",":newspaper:":"*les*",":art:":"*maler*",":clapper:":"🎬",":microphone:":"*osolemio*",":headphones:":"*dj*",":musical_score:":"🎼",":musical_note:":"🎵",":notes:":"*lalala*",":musical_keyboard:":"*piano*",":violin:":"🎻",":trumpet:":"🎺",":saxophone:":"🎷",":guitar:":"*rock*",":space_invader:":"👾",":video_game:":"*zocker*",":black_joker:":"🃏",":flower_playing_cards:":"🎴",":mahjong:":"🀄",":game_die:":"🎲",":dart:":"🎯",":football:":"🏈",":basketball:":"🏀",":soccer:":"*fussball*",":baseball:":"⚾",":tennis:":"🎾",":8ball:":"🎱",":rugby_football:":"🏉",":bowling:":"🎳",":golf:":"⛳",":mountain_bicyclist:":"🚵",":bicyclist:":"🚴",":checkered_flag:":"🏁",":horse_racing:":"🏇",":trophy:":"🏆",":ski:":"🎿",":snowboarder:":"🏂",":swimmer:":"*tauch*",":surfer:":"🏄",":fishing_pole_and_fish:":"🎣",":coffee:":"*kaffee*",":tea:":"*tee*",":sake:":"🍶",":baby_bottle:":"🍼",":beer:":"*bier*",":beers:":"*prost*",":cocktail:":"*cocktail*",":tropical_drink:":"🍹",":wine_glass:":"*wein*",":fork_and_knife:":"*essen*",":pizza:":"🍕",":hamburger:":"🍔",":fries:":"🍟",":poultry_leg:":"🍗",":meat_on_bone:":"*grill*",":spaghetti:":"🍝",":curry:":"🍛",":fried_shrimp:":"🍤",":bento:":"🍱",":sushi:":"🍣",":fish_cake:":"🍥",":rice_ball:":"🍙",":rice_cracker:":"🍘",":rice:":"🍚",":ramen:":"🍜",":stew:":"🍲",":oden:":"🍢",":dango:":"🍡",":egg:":"🍳",":bread:":"🍞",":doughnut:":"🍩",":custard:":"🍮",":icecream:":"*eis*",":ice_cream:":"🍨",":shaved_ice:":"🍧",":birthday:":"*torte*",":cake:":"🍰",":cookie:":"🍪",":chocolate_bar:":"🍫",":candy:":"🍬",":lollipop:":"*lolli*",":honey_pot:":"🍯",":apple:":"🍎",":green_apple:":"🍏",":tangerine:":"🍊",":lemon:":"🍋",":cherries:":"🍒",":grapes:":"🍇",":watermelon:":"🍉",":strawberry:":"🍓",":peach:":"*arsch*",":melon:":"🍈",":pear:":"🍐",":pineapple:":"🍍",":sweet_potato:":"🍠",":eggplant:":"🍆",":tomato:":"*tomaten*",":corn:":"🌽",":house:":"🏠",":house_with_garden:":"🏡",":school:":"🏫",":office:":"🏢",":post_office:":"🏣",":hospital:":"🏥",":bank:":"🏦",":convenience_store:":"🏪",":love_hotel:":"🏩",":hotel:":"🏨",":wedding:":"*hochzeit*",":church:":"⛪",":department_store:":"🏬",":european_post_office:":"🏤",":city_sunset:":"🌇",":city_dusk:":"🌆",":japanese_castle:":"🏯",":european_castle:":"🏰",":tent:":"⛺",":factory:":"🏭",":tokyo_tower:":"🗼",":japan:":"🗾",":mount_fuji:":"🗻",":sunrise_over_mountains:":"🌄",":sunrise:":"🌅",":night_with_stars:":"🌃",":statue_of_liberty:":"🗽",":bridge_at_night:":"🌉",":carousel_horse:":"🎠",":ferris_wheel:":"🎡",":fountain:":"⛲",":roller_coaster:":"🎢",":ship:":"🚢",":sailboat:":"⛵",":speedboat:":"🚤",":rowboat:":"🚣",":anchor:":"⚓",":rocket:":"🚀",":airplane:":"✈",":seat:":"💺",":helicopter:":"🚁",":steam_locomotive:":"🚂",":tram:":"🚊",":station:":"🚉",":mountain_railway:":"🚞",":train2:":"🚆",":bullettrain_side:":"🚄",":bullettrain_front:":"🚅",":light_rail:":"🚈",":metro:":"🚇",":monorail:":"🚝",":train:":"🚋",":railway_car:":"🚃",":trolleybus:":"🚎",":bus:":"🚌",":oncoming_bus:":"🚍",":blue_car:":"🚙",":oncoming_automobile:":"🚘",":red_car:":"*fahr*",":taxi:":"🚕",":oncoming_taxi:":"🚖",":articulated_lorry:":"🚛",":truck:":"🚚",":rotating_light:":"*alarm*",":police_car:":"🚓",":oncoming_police_car:":"🚔",":fire_engine:":"🚒",":ambulance:":"🚑",":minibus:":"🚐",":bike:":"🚲",":aerial_tramway:":"🚡",":suspension_railway:":"🚟",":mountain_cableway:":"🚠",":tractor:":"🚜",":barber:":"💈",":busstop:":"🚏",":ticket:":"🎫",":vertical_traffic_light:":"🚦",":traffic_light:":"🚥",":warning:":"⚠",":construction:":"🚧",":beginner:":"🔰",":fuelpump:":"⛽",":izakaya_lantern:":"🏮",":slot_machine:":"🎰",":hotsprings:":"♨",":moyai:":"🗿",":circus_tent:":"🎪",":performing_arts:":"🎭",":round_pushpin:":"📍",":triangular_flag_on_post:":"🚩",":cn:":"🇨🇳",":us:":"🇺🇸",":jp:":"🇯🇵",":ru:":"🇷🇺",":de:":"*deutschland*",":gb:":"🇬🇧",":fr:":"🇫🇷",":kr:":"🇰🇷",":it:":"🇮🇹",":es:":"🇪🇸",":no_smoking:":"🚭",":over18:":"🔞",":copyright:":"©",":parking:":"🅿",":wc:":"🚾",":hash:":"#⃣",":one:":"1⃣",":two:":"2⃣",":three:":"3⃣",":four:":"4⃣",":five:":"5⃣",":six:":"6⃣",":seven:":"7⃣",":eight:":"8⃣",":nine:":"9⃣",":zero:":"0⃣",":keycap_ten:":"🔟",":1234:":"🔢",":symbols:":"🔣",":arrow_up:":"⬆",":arrow_down:":"⬇",":arrow_left:":"⬅",":arrow_right:":":arrow:",":capital_abcd:":"🔠",":abcd:":"🔡",":abc:":"🔤",":arrow_upper_right:":"↗",":arrow_upper_left:":"↖",":arrow_lower_right:":"↘",":arrow_lower_left:":"↙",":left_right_arrow:":"↔",":arrow_up_down:":"↕",":arrows_counterclockwise:":"🔄",":arrow_backward:":"◀",":arrow_forward:":"▶",":arrow_up_small:":"🔼",":arrow_down_small:":"🔽",":leftwards_arrow_with_hook:":"↩",":arrow_right_hook:":"↪",":information_source:":"ℹ",":rewind:":"⏪",":fast_forward:":"⏩",":arrow_double_up:":"⏫",":arrow_double_down:":"⏬",":arrow_heading_down:":"⤵",":arrow_heading_up:":"⤴",":ok:":"🆗",":twisted_rightwards_arrows:":"🔀",":repeat:":"🔁",":repeat_one:":"🔂",":new:":"🆕",":up:":"🆙",":cool:":"🆒",":free:":"🆓",":ng:":"🆖",":signal_strength:":"📶",":cinema:":"🎦",":koko:":"🈁",":u6307:":"🈯",":u7a7a:":"🈳",":u6e80:":"🈵",":u5408:":"🈴",":u7981:":"🈲",":ideograph_advantage:":"🉐",":u5272:":"🈹",":u55b6:":"🈺",":u6709:":"🈶",":u7121:":"🈚",":restroom:":"🚻",":mens:":"🚹",":womens:":"🚺",":baby_symbol:":"🚼",":potable_water:":"🚰",":put_litter_in_its_place:":"🚮",":wheelchair:":"♿",":u6708:":"🈷",":u7533:":"🈸",":sa:":"🈂",":m:":"Ⓜ",":passport_control:":"🛂",":baggage_claim:":"🛄",":left_luggage:":"🛅",":customs:":"🛃",":accept:":"🉑",":secret:":"㊙",":congratulations:":"㊗",":cl:":"🆑",":sos:":"*hilfe*",":id:":"🆔",":no_entry_sign:":"🚫",":no_mobile_phones:":"📵",":do_not_litter:":"🚯",":non-potable_water:":"🚱",":no_bicycles:":"🚳",":no_pedestrians:":"🚷",":children_crossing:":"🚸",":no_entry:":"⛔",":eight_spoked_asterisk:":"✳",":sparkle:":"❇",":negative_squared_cross_mark:":"❎",":white_check_mark:":"✅",":eight_pointed_black_star:":"✴",":heart_decoration:":"💟",":vs:":"🆚",":vibration_mode:":"📳",":mobile_phone_off:":"📴",":a:":"🅰",":b:":"🅱",":ab:":"🆎",":o2:":"🅾",":diamond_shape_with_a_dot_inside:":"💠",":loop:":"➿",":recycle:":"♻",":aries:":"♈",":taurus:":"♉",":gemini:":"♊",":cancer:":"♋",":leo:":"♌",":virgo:":"♍",":libra:":"♎",":scorpius:":"♏",":sagittarius:":"♐",":capricorn:":"♑",":aquarius:":"♒",":pisces:":"♓",":ophiuchus:":"⛎",":six_pointed_star:":"🔯",":atm:":"🏧",":chart:":"💹",":heavy_dollar_sign:":"💲",":currency_exchange:":"💱",":registered:":"®",":tm:":"™",":part_alternation_mark:":"〽",":wavy_dash:":"〰",":top:":"🔝",":end:":"🔚",":back:":"🔙",":on:":"🔛",":soon:":"🔜",":x:":"❌",":o:":"⭕",":exclamation:":":!:",":question:":":?:",":grey_exclamation:":"❕",":grey_question:":"❔",":bangbang:":"‼",":interrobang:":"⁉",":arrows_clockwise:":"🔃",":clock12:":"🕛",":clock1230:":"🕧",":clock1:":"🕐",":clock130:":"🕜",":clock2:":"🕑",":clock230:":"🕝",":clock3:":"🕒",":clock330:":"🕞",":clock4:":"🕓",":clock430:":"🕟",":clock5:":"🕔",":clock530:":"🕠",":clock6:":"🕕",":clock7:":"🕖",":clock8:":"🕗",":clock9:":"🕘",":clock10:":"🕙",":clock11:":"🕚",":clock630:":"🕡",":clock730:":"🕢",":clock830:":"🕣",":clock930:":"🕤",":clock1030:":"🕥",":clock1130:":"🕦",":heavy_multiplication_x:":"✖",":heavy_plus_sign:":"➕",":heavy_minus_sign:":"➖",":heavy_division_sign:":"➗",":spades:":"♠",":hearts:":"♥",":clubs:":"♣",":diamonds:":"♦",":white_flower:":"💮",":100:":"*100*",":heavy_check_mark:":"✔",":ballot_box_with_check:":"☑",":radio_button:":"🔘",":link:":"🔗",":curly_loop:":"➰",":trident:":"🔱",":black_square_button:":"🔲",":white_square_button:":"🔳",":black_medium_square:":"◼",":white_medium_square:":"◻",":black_medium_small_square:":"◾",":white_medium_small_square:":"◽",":black_small_square:":"▪",":white_small_square:":"▫",":small_red_triangle:":"🔺",":white_large_square:":"⬜",":black_large_square:":"⬛",":black_circle:":"⚫",":white_circle:":"⚪",":red_circle:":"🔴",":large_blue_circle:":"🔵",":small_red_triangle_down:":"🔻",":large_orange_diamond:":"🔶",":large_blue_diamond:":"🔷",":small_orange_diamond:":"🔸",":small_blue_diamond:":"🔹"};
+  const SM_U2J = {"🙏":"*danke*","😀":":)","👍":"*top*","😃":":D","😊":"*smile*","😄":"*gg*","😉":";)","😆":"*xd*","❗":":!:","🚨":"*alarm*","🤗":"*knuddel*","👋":"*wink*","😁":"*grins*","😈":":twisted:","🤣":"*rotfl*","🥳":"*juhu*","😂":"*traenenlach*","😛":"*aetsch*","😜":":P","😏":"*selbstgefall*","🤪":"*goofy*","😮":":o","😯":"*oh2*","😱":":shock:","😨":"*panik*","😵":"*umfall*","😠":":x","👿":":evil:","😡":"*gr3*","🤬":"*gleichplatz*","😖":"*uah*","😤":"*motz*","🤕":"*blauesauge*","😬":"*grimasse*","😞":":(","😢":":cry:","😭":"*heul*","😔":"*traurig*","💔":"*liebeskummer*","😑":":|","🥱":"*gaehn*","💤":"*zzz*","😴":"*heia*","📞":"*tel*","💬":"*blabla*","🎶":"*lalala*","🤐":"*schweig*","🤫":"*fluester*","👎":"*flop*","👏":"*bravo*","👌":"*spitze*","🍅":"*tomaten*","😲":"*wow*","🤤":"*sabber*","🤢":"*umpf*","✌":"*victory*","🙌":"*hi5*","🎩":"*hutab*","💯":"*100*","🤮":"*wuerg*","💊":"*aspirin*","💫":"*sternchen*","😩":"*3tagewach*","🤧":"*schnupfen*","😷":"*mundschutz*","🍴":"*essen*","🍖":"*grill*","🍺":"*bier*","🍦":"*eis*","🍭":"*lolli*","🎂":"*torte*","🧁":"*muffin*","☕":"*kaffee*","🍵":"*tee*","🍷":"*wein*","🍸":"*cocktail*","🦟":"*fliege2*","🥃":"*whiskey*","🍻":"*prost*","🥂":"*cheers*","🍾":"*sekt*","🚬":"*zig*","🎉":"*troet*","💃":"*dance*","🥴":"*hicks*","🤘":"*headbang*","🎆":"*feuerwerk*","😚":"*knutsch*","🥰":"*liebhab*","👫":"*friends*","😙":"*bussi*","💋":"*kuss2*","❤":"*herz*","💕":"*herz2*","💗":"*herz3*","💖":"*herz4*","😍":"*love5*","🌹":"*blume*","🌼":"*blumezupf*","💐":"*blumenschenk*","🌷":"*blume2*","🎁":"*geschenk*","🎤":"*osolemio*","💒":"*hochzeit*","🙇":"*anbet*","😗":"*floet*","🤨":"*skeptisch*","😒":"*pueh*","😌":"*stolzbin*","😎":"8)","😕":":?","🤷":"*nixweiss*","😐":":/","🙄":":roll:","🤔":"*gruebel*","🤦":"*kopfklatsch*","😳":":oops:","😰":"*angsthab*","🙈":"*augenzu*","🍀":"*vielglueck*","💻":"*tipp*","📰":"*les*","✉":"*mail*","🚿":"*duschen*","🚽":"*wc*","😇":"*engel*","👼":"*engel2*","🚗":"*fahr*","📷":"*knips*","🎥":"*film*","🙋":"*meld*","🍿":"*popcorn*","😅":"*puh*","🤡":"*clown*","🎸":"*rock*","🧶":"*strick*","🧹":"*putz*","🏊":"*tauch*","⚽":"*fussball*","👀":"*spanner*","🎮":"*zocker*","📢":"*megaphon*","💪":"*pumpi*","🔭":"*fernglas*","👅":"*schleck*","🍑":"*arsch*","👵":"*oma*","👴":"*opa*","👶":"*baby*","👷":"*bauarbeiter*","👮":"*polizei*","🎨":"*maler*","👑":"*koenig*","👸":"*koenigin*","🎧":"*dj*","🥁":"*drummer*","🎹":"*piano*","🎅":"*nikolaus*","🔮":"*wahrsager*","🐱":"*katze*","🐮":"*kuh*","🐔":"*huhn*","🐷":"*schwein*","🐶":"*hund*","🦋":"*schmetterling*","🐛":"*bug*","🦄":"*einhorn*","🦊":"*fuchs*","🐌":"*schnecke*","🐺":"*wolf*","🐹":"*hamster*","☀":"*sonne*","☔":"*regen*","🥶":"*frier*","😓":"*schwitz*","🌈":"*regenbogen*","➡":":arrow:","❓":":?:","💡":":idea:","🆘":"*hilfe*","🇩🇪":"*deutschland*","🇦🇹":"*oesterreich*","🇨🇭":"*schweiz*","🇳🇱":"*niederlande*","🧑‍⚕":"*schwester*","😘":"*kuss3*"};
+  const SM_JOYTOK = ["*kommmalherfreundchen*","*ihrseiddiegroessten*","*featuremonster*","*gehirnschnecke*","*kissenschlacht*","*baerenaufbind*","*computercrash*","*experimentier*","*gutebesserung*","*happybirthday*","*klugscheisser*","*kopfschuettel*","*niedersachsen*","*partnertausch*","*schmetterling*","*werderwachsen*","*blumenschenk*","*cheerleading*","*diegroessten*","*guckstduhier*","*guterbeitrag*","*kammerjaeger*","*kindergarten*","*liebeskummer*","*selbstgefall*","*winterdienst*","*bauarbeiter*","*bitteschoen*","*blumenwiese*","*brandenburg*","*deutschland*","*feinschleif*","*geschlossen*","*gleichplatz*","*haumichwech*","*huebschmach*","*keinproblem*","*kopfklatsch*","*letzteswort*","*niederlande*","*oesterreich*","*spassbremse*","*traenenlach*","*verdaechtig*","*willkommen2*","*zaubertrank*","*arschkneif*","*ballaballa*","*blauesauge*","*freundchen*","*gehbuegeln*","*geheimtipp*","*gelbekarte*","*hackfresse*","*hotsqueeze*","*hotupshirt*","*knackarsch*","*liegestuhl*","*mundschutz*","*musketiere*","*ninjaclown*","*regenbogen*","*roseschenk*","*schiefguck*","*schneeball*","*stammtisch*","*stoesschen*","*thueringen*","*ungeduldig*","*ventilator*","*verfuehren*","*vielglueck*","*waschbrett*","*willkommen*","*3tagewach*","*abgedreht*","*blumezupf*","*feuerwehr*","*feuerwerk*","*fiesgrins*","*gutenacht*","*headcrash*","*hotbanana*","*poledance*","*rheinland*","*rotekarte*","*sarkasmus*","*schleimer*","*schleswig*","*schnupfen*","*schwester*","*skeptisch*","*slipstrip*","*steinwerf*","*sternchen*","*surprised*","*sweetkiss*","*taetschel*","*wahrsager*","*zaunpfahl*","*zufaechel*",":surprised:","*angsthab*","*brueste2*","*cocktail*","*confused*","*duschen2*","*fancycat*","*fernglas*","*fluester*","*fussball*","*geschenk*","*grimasse*","*guckguck*","*guerilla*","*handkuss*","*headbang*","*hochzeit*","*hotboobs*","*hotkiss2*","*hotlady2*","*hotlady3*","*iloveyou*","*knuddel2*","*knutsch2*","*knutsch3*","*knutsch4*","*koenigin*","*kopfkino*","*liebguck*","*megaphon*","*meinheld*","*my2cents*","*nachdenk*","*nikolaus*","*nixweiss*","*offtopic*","*osolemio*","*peitsche*","*popcorn2*","*question*","*raeusper*","*saarland*","*schleck2*","*schleck3*","*schleck4*","*schlumpf*","*schnecke*","*stolzbin*","*superman*","*thankyou*","*zeigpics*","*zumthema*","*zwinker2*",":confused:","*achtung*","*aspirin*","*augenzu*","*bananen*","*blowjob*","*brueste*","*dagegen*","*drummer*","*duschen*","*einhorn*","*exclaim*","*faechel*","*fisting*","*fliege2*","*frieden*","*friends*","*gitarre*","*gruebel*","*hamburg*","*hamster*","*hatschi*","*hochleb*","*hothips*","*hotkiss*","*hotlady*","*joyclub*","*knuddel*","*knutsch*","*kuschel*","*liebhab*","*mrgreen*","*neutral*","*polizei*","*popcorn*","*redface*","*rotwerd*","*sachsen*","*schimpf*","*schleck*","*schmoll*","*schweig*","*schwein*","*schweiz*","*schwitz*","*sixpack*","*spanner*","*tomaten*","*traurig*","*twisted*","*undwech*","*victory*","*welcome*","*whiskey*","*wiegeil*","*zwinker*",":mrgreen:",":neutral:",":redface:",":twisted:","*3affen*","*aetsch*","*anhalt*","*anmach*","*arbeit*","*autsch*","*bandit*","*barbar*","*bayern*","*berlin*","*blabla*","*blume2*","*boogie*","*bremen*","*bussi2*","*cheers*","*crazy2*","*crazy3*","*crazy4*","*crazy5*","*dafuer*","*dance2*","*engel2*","*fessel*","*fliege*","*gaehn2*","*hessen*","*hexhex*","*holmes*","*hotass*","*hotbum*","*hotman*","*imogdi*","*ironie*","*janein*","*kaffee*","*knicks*","*koenig*","*kondom*","*lalala*","*matrix*","*morgen*","*muffin*","*neinja*","*paddle*","*party2*","*pimper*","*pumpi2*","*sabber*","*schaem*","*schock*","*sextoy*","*sexypo*","*snief2*","*snief3*","*spitze*","*streit*","*strick*","*stupid*","*teufel*","*titten*","*troest*","*umfall*","*voting*","*wolke7*","*wuerg2*","*zocker*","*zugabe*","*alarm*","*anbet*","*angel*","*arrow*","*arsch*","*baby2*","*basta*","*biker*","*blume*","*bravo*","*bunny*","*bussi*","*clown*","*cool2*","*crazy*","*dance*","*danke*","*doggy*","*elvis*","*engel*","*essen*","*flenn*","*floet*","*fluch*","*frage*","*freu2*","*frier*","*fuchs*","*gaehn*","*genau*","*goofy*","*grill*","*grins*","*hand2*","*hand3*","*hand4*","*hand5*","*happy*","*heia2*","*herz2*","*herz3*","*herz4*","*heul2*","*hicks*","*hilfe*","*hutab*","*hypno*","*jedi2*","*juchu*","*katze*","*knips*","*kuss2*","*kuss3*","*lolli*","*love2*","*love3*","*love4*","*love5*","*maler*","*modda*","*muede*","*naund*","*neid2*","*ninja*","*panik*","*party*","*pfeil*","*piano*","*pieks*","*pirat*","*prost*","*pumpi*","*regen*","*rotfl*","*sauna*","*shock*","*smile*","*snief*","*sonne*","*sorry*","*spank*","*strip*","*tanz2*","*tauch*","*tonne*","*torte*","*troet*","*troll*","*tuete*","*twist*","*vogel*","*wuerg*",":arrow:",":shock:","*baby*","*baeh*","*beep*","*bier*","*bla2*","*cool*","*date*","*dito*","*evil*","*fahr*","*fans*","*film*","*flop*","*foto*","*freu*","*guru*","*haha*","*hand*","*heia*","*help*","*herz*","*heul*","*hexe*","*hot2*","*hot3*","*huch*","*huhn*","*huhu*","*hund*","*idea*","*idee*","*jedi*","*juhu*","*keks*","*koch*","*kuss*","*lach*","*leck*","*love*","*mail*","*meld*","*motz*","*nase*","*neck*","*neid*","*nein*","*nene*","*next*","*nick*","*nono*","*oede*","*oops*","*pfui*","*popp*","*pueh*","*putz*","*razz*","*rock*","*rofl*","*roll*","*sekt*","*senf*","*sing*","*snob*","*spam*","*tanz*","*tipp*","*top2*","*umpf*","*walk*","*wein*","*wink*","*witz*","*wolf*","*wuah*","*yoda*",":evil:",":idea:",":oops:",":razz:",":roll:",":wink:","*100*","*arg*","*aua*","*bla*","*bug*","*bye*","*cry*","*eis*","*ffm*","*ggg*","*gr2*","*gr3*","*hae*","*hi5*","*hot*","*kuh*","*les*","*lol*","*mmf*","*nrw*","*oh2*","*oh3*","*oh4*","*oha*","*oma*","*omm*","*opa*","*puh*","*sad*","*tee*","*tel*","*top*","*uah*","*wow*","*wua*","*zig*","*zzz*",":cry:",":lol:",":sad:","*bw*","*dd*","*dj*","*gg*","*gr*","*hm*","*ja*","*ko*","*mv*","*oh*","*wc*","*xd*","*yo*","*g*","8-)",":!:",":-(",":-)",":-/",":-D",":-P",":-o",":-|",":?:",";-)","8)",":(",":)",":/",":?",":D",":P",":o",":x",":|",";)"];
+  const SM_POPTOK = [":diamond_shape_with_a_dot_inside:",":notebook_with_decorative_cover:",":first_quarter_moon_with_face:",":stuck_out_tongue_closed_eyes:",":last_quarter_moon_with_face:",":negative_squared_cross_mark:",":chart_with_downwards_trend:",":black_medium_small_square:",":leftwards_arrow_with_hook:",":twisted_rightwards_arrows:",":white_medium_small_square:",":chart_with_upwards_trend:",":eight_pointed_black_star:",":person_with_pouting_face:",":arrows_counterclockwise:",":information_desk_person:",":put_litter_in_its_place:",":running_shirt_with_sash:",":small_red_triangle_down:",":triangular_flag_on_post:",":two_women_holding_hands:",":heavy_multiplication_x:",":hourglass_flowing_sand:",":person_with_blond_hair:",":sunrise_over_mountains:",":vertical_traffic_light:",":ballot_box_with_check:",":disappointed_relieved:",":eight_spoked_asterisk:",":fishing_pole_and_fish:",":part_alternation_mark:",":two_men_holding_hands:",":closed_lock_with_key:",":european_post_office:",":flower_playing_cards:",":globe_with_meridians:",":kissing_smiling_eyes:",":large_orange_diamond:",":mailbox_with_no_mail:",":small_orange_diamond:",":waning_crescent_moon:",":waxing_crescent_moon:",":black_medium_square:",":black_square_button:",":busts_in_silhouette:",":construction_worker:",":envelope_with_arrow:",":full_moon_with_face:",":heavy_division_sign:",":ideograph_advantage:",":kissing_closed_eyes:",":man_with_gua_pi_mao:",":oncoming_automobile:",":oncoming_police_car:",":waning_gibbous_moon:",":waxing_gibbous_moon:",":white_medium_square:",":white_square_button:",":arrow_heading_down:",":black_large_square:",":black_small_square:",":bust_in_silhouette:",":first_quarter_moon:",":information_source:",":large_blue_diamond:",":mountain_bicyclist:",":new_moon_with_face:",":small_blue_diamond:",":small_red_triangle:",":suspension_railway:",":telephone_receiver:",":white_large_square:",":white_small_square:",":arrow_double_down:",":arrow_lower_right:",":arrow_upper_right:",":articulated_lorry:",":bullettrain_front:",":children_crossing:",":convenience_store:",":couple_with_heart:",":currency_exchange:",":heavy_dollar_sign:",":house_with_garden:",":incoming_envelope:",":large_blue_circle:",":last_quarter_moon:",":lock_with_ink_pen:",":mailbox_with_mail:",":mountain_cableway:",":non-potable_water:",":statue_of_liberty:",":arrow_down_small:",":arrow_heading_up:",":arrow_lower_left:",":arrow_right_hook:",":arrow_upper_left:",":arrows_clockwise:",":bullettrain_side:",":department_store:",":four_leaf_clover:",":grey_exclamation:",":heart_decoration:",":heavy_check_mark:",":heavy_minus_sign:",":left_right_arrow:",":mobile_phone_off:",":money_with_wings:",":mountain_railway:",":musical_keyboard:",":night_with_stars:",":no_mobile_phones:",":open_file_folder:",":passport_control:",":revolving_hearts:",":six_pointed_star:",":steam_locomotive:",":stuck_out_tongue:",":triangular_ruler:",":white_check_mark:",":arrow_double_up:",":bride_with_veil:",":bridge_at_night:",":closed_umbrella:",":congratulations:",":crying_cat_face:",":dromedary_camel:",":european_castle:",":heavy_plus_sign:",":high_brightness:",":izakaya_lantern:",":japanese_castle:",":japanese_goblin:",":man_with_turban:",":performing_arts:",":person_frowning:",":signal_strength:",":sparkling_heart:",":thought_balloon:",":aerial_tramway:",":arrow_backward:",":arrow_up_small:",":carousel_horse:",":checkered_flag:",":cherry_blossom:",":christmas_tree:",":coffee_morning:",":deciduous_tree:",":earth_americas:",":evergreen_tree:",":fork_and_knife:",":hatching_chick:",":heart_eyes_cat:",":jack_o_lantern:",":low_brightness:",":mailbox_closed:",":no_pedestrians:",":page_facing_up:",":page_with_curl:",":roller_coaster:",":rotating_light:",":rugby_football:",":school_satchel:",":speech_balloon:",":straight_ruler:",":tropical_drink:",":vibration_mode:",":womans_clothes:",":arrow_forward:",":arrow_up_down:",":athletic_shoe:",":baggage_claim:",":bookmark_tabs:",":chocolate_bar:",":confetti_ball:",":crescent_moon:",":crossed_flags:",":do_not_litter:",":electric_plug:",":grey_question:",":hatched_chick:",":hearts_around:",":japanese_ogre:",":kissing_heart:",":musical_score:",":no_entry_sign:",":oncoming_taxi:",":potable_water:",":round_pushpin:",":space_invader:",":speak_no_evil:",":sun_with_face:",":tanabata_tree:",":traffic_light:",":tropical_fish:",":water_buffalo:",":black_circle:",":broken_heart:",":capital_abcd:",":coffee_happy:",":construction:",":crystal_ball:",":earth_africa:",":fast_forward:",":ferris_wheel:",":fried_shrimp:",":hear_no_evil:",":horse_racing:",":left_luggage:",":meat_on_bone:",":mortar_board:",":movie_camera:",":musical_note:",":nut_and_bolt:",":oncoming_bus:",":partly_sunny:",":purple_heart:",":radio_button:",":raised_hands:",":raising_hand:",":rice_cracker:",":slot_machine:",":spermatozoon:",":sweet_potato:",":threefingers:",":video_camera:",":white_circle:",":white_flower:",":yellow_heart:",":alarm_clock:",":arrow_right:",":baby_bottle:",":baby_symbol:",":black_joker:",":circus_tent:",":city_sunset:",":closed_book:",":credit_card:",":dragon_face:",":ear_of_rice:",":exclamation:",":fallen_leaf:",":file_folder:",":fire_engine:",":floppy_disk:",":green_apple:",":green_heart:",":interrobang:",":kissing_cat:",":loudspeaker:",":love_letter:",":monkey_face:",":no_bicycles:",":older_woman:",":orange_book:",":outbox_tray:",":point_right:",":post_office:",":postal_horn:",":poultry_leg:",":pouting_cat:",":railway_car:",":raised_hand:",":sagittarius:",":see_no_evil:",":smiling_imp:",":snowboarder:",":sweat_drops:",":sweat_smile:",":tokyo_tower:",":arrow_down:",":arrow_left:",":astonished:",":baby_chick:",":bananarama:",":basketball:",":blue_heart:",":card_index:",":cold_sweat:",":confounded:",":couplekiss:",":curly_loop:",":dizzy_face:",":earth_asia:",":eyeglasses:",":flashlight:",":footprints:",":gift_heart:",":green_book:",":headphones:",":heart_eyes:",":heartpulse:",":helicopter:",":hotsprings:",":inbox_tray:",":keycap_ten:",":light_rail:",":loud_sound:",":love_hotel:",":maple_leaf:",":microphone:",":microscope:",":mount_fuji:",":name_badge:",":no_smoking:",":open_hands:",":panda_face:",":point_down:",":point_left:",":point_up_2:",":police_car:",":red_circle:",":registered:",":repeat_one:",":rice_scene:",":rubberdoll:",":safebanana:",":scream_cat:",":shaved_ice:",":smiley_cat:",":strawberry:",":thumbsdown:",":tired_face:",":trolleybus:",":two_hearts:",":twofingers:",":video_game:",":watermelon:",":wheelchair:",":wind_chime:",":wine_glass:",":womans_hat:",":ambulance:",":bar_chart:",":bicyclist:",":black_nib:",":blue_book:",":briefcase:",":capricorn:",":city_dusk:",":clipboard:",":clock1030:",":clock1130:",":clock1230:",":copyright:",":crocodile:",":fireworks:",":fish_cake:",":full_moon:",":grimacing:",":guardsman:",":hamburger:",":handcuffs:",":heartbeat:",":high_heel:",":highheels:",":honey_pot:",":hourglass:",":ice_cream:",":mag_right:",":mans_shoe:",":milky_way:",":nail_care:",":newspaper:",":older_man:",":ophiuchus:",":palm_tree:",":paperclip:",":persevere:",":pineapple:",":racehorse:",":rice_ball:",":satellite:",":saxophone:",":smile_cat:",":smirk_cat:",":snowflake:",":spaghetti:",":speedboat:",":sunflower:",":tangerine:",":telephone:",":telescope:",":threesome:",":wavy_dash:",":airplane:",":aquarius:",":arrow_up:",":bangbang:",":baseball:",":beginner:",":birthday:",":blowfish:",":blue_car:",":bookmark:",":calendar:",":cherries:",":chestnut:",":clapping:",":clock130:",":clock230:",":clock330:",":clock430:",":clock530:",":clock630:",":clock730:",":clock830:",":clock930:",":cocktail:",":computer:",":confused:",":diamonds:",":dickface:",":doughnut:",":eggplant:",":elephant:",":envelope:",":football:",":fountain:",":fuelpump:",":game_die:",":hibiscus:",":hospital:",":icecream:",":lipstick:",":lollipop:",":minidisc:",":moneybag:",":monorail:",":mushroom:",":new_moon:",":no_entry:",":no_mouth:",":notebook:",":ok_woman:",":pig_nose:",":point_up:",":poppen-1:",":princess:",":question:",":relieved:",":restroom:",":sailboat:",":scissors:",":scorpius:",":seedling:",":sleeping:",":sparkler:",":sparkles:",":stocking:",":thumbsup:",":umbrella:",":vibrator:",":whipping:",":balloon:",":bathtub:",":battery:",":blossom:",":bouquet:",":bowling:",":busstop:",":calling:",":chicken:",":clapper:",":clock10:",":clock11:",":clock12:",":custard:",":customs:",":cyclone:",":dancers:",":dolphin:",":dr_love:",":droplet:",":factory:",":fearful:",":flushed:",":haircut:",":hamster:",":handbag:",":joy_cat:",":jumping:",":kissing:",":leopard:",":mahjong:",":mailbox:",":massage:",":minibus:",":necktie:",":no_bell:",":no_good:",":octopus:",":ok_hand:",":package:",":parking:",":pencil2:",":penguin:",":pensive:",":postbox:",":pushpin:",":rabbit2:",":rainbow:",":recycle:",":red_car:",":relaxed:",":rooster:",":rowboat:",":safesex:",":smoking:",":snowman:",":sparkle:",":speaker:",":station:",":strapon:",":sunrise:",":swimmer:",":symbols:",":syringe:",":tractor:",":trident:",":triumph:",":trumpet:",":volcano:",":walking:",":warning:",":wedding:",":worried:",":accept:",":anchor:",":bamboo:",":banana:",":barber:",":bdrops:",":beetle:",":bikini:",":cactus:",":camera:",":cancer:",":church:",":cinema:",":clock1:",":clock2:",":clock3:",":clock4:",":clock5:",":clock6:",":clock7:",":clock8:",":clock9:",":coffee:",":collar:",":cookie:",":couple:",":dancer:",":dollar:",":dragon:",":e-mail:",":family:",":gemini:",":grapes:",":guitar:",":hammer:",":hearts:",":hottub:",":hushed:",":iphone:",":kimono:",":leaves:",":ledger:",":monkey:",":mouse2:",":muscle:",":office:",":over18:",":pencil:",":pisces:",":poodle:",":poppen:",":praise:",":rabbit:",":repeat:",":rewind:",":ribbon:",":rocket:",":runner:",":sandal:",":school:",":scream:",":scroll:",":secret:",":shower:",":sleepy:",":smiley:",":soccer:",":spades:",":suckmy:",":surfer:",":taurus:",":tennis:",":ticket:",":tiger2:",":toilet:",":tomato:",":tongue:",":tophat:",":train2:",":trophy:",":turtle:",":unlock:",":violin:",":wdrops:",":whale2:",":womens:",":wrench:",":ydrops:",":8ball:",":alien:",":angel:",":anger:",":apple:",":aries:",":beers:",":bento:",":books:",":bread:",":camel:",":candy:",":chart:",":cloud:",":clubs:",":crazy:",":crown:",":cupid:",":curry:",":dango:",":dizzy:",":dolls:",":dress:",":eight:",":flags:",":foggy:",":fries:",":fucku:",":ghost:",":heart:",":horse:",":hotel:",":house:",":japan:",":jeans:",":knife:",":koala:",":lemon:",":libra:",":melon:",":metro:",":mouse:",":moyai:",":notes:",":ocean:",":pager:",":peach:",":pizza:",":pouch:",":pound:",":punch:",":purse:",":pussy:",":radio:",":ramen:",":santa:",":seven:",":sheep:",":shell:",":shirt:",":skull:",":smirk:",":snail:",":snake:",":sound:",":star2:",":stars:",":sunny:",":sushi:",":sweat:",":three:",":tiger:",":train:",":truck:",":tulip:",":u5272:",":u5408:",":u55b6:",":u6307:",":u6708:",":u6709:",":u6e80:",":u7121:",":u7533:",":u7981:",":u7a7a:",":urock:",":virgo:",":watch:",":wdrop:",":weary:",":whale:",":woman:",":ydrop:",":1234:",":abcd:",":baby:",":back:",":bank:",":bath:",":bear:",":beer:",":bell:",":bike:",":bird:",":bite:",":boar:",":bomb:",":book:",":boom:",":boot:",":bulb:",":cake:",":cat2:",":clap:",":cock:",":cool:",":corn:",":cow2:",":dart:",":dash:",":date:",":dog2:",":door:",":euro:",":eyes:",":feet:",":fire:",":fish:",":fist:",":five:",":four:",":free:",":frog:",":gift:",":gimp:",":girl:",":goat:",":golf:",":grin:",":hash:",":herb:",":kiss:",":koko:",":lgbt:",":lick:",":link:",":lips:",":lock:",":loop:",":mask:",":mega:",":mens:",":mute:",":nine:",":nose:",":oden:",":pear:",":pig2:",":pill:",":poop:",":pray:",":rage:",":rice:",":ring:",":rose:",":sake:",":seat:",":ship:",":soon:",":star:",":stew:",":tada:",":taxi:",":tent:",":tits:",":tram:",":wave:",":wolf:",":zero:",":100:",":abc:",":ant:",":art:",":ass:",":atm:",":bed:",":bee:",":bow:",":boy:",":bug:",":bus:",":car:",":cat:",":cop:",":cow:",":cry:",":cum:",":dog:",":dvd:",":ear:",":egg:",":end:",":fax:",":gem:",":gun:",":imp:",":joy:",":key:",":leo:",":mag:",":man:",":new:",":one:",":pig:",":ram:",":rat:",":six:",":ski:",":sob:",":sos:",":tea:",":top:",":two:",":vhs:",":wax:",":yen:",":yum:",":zap:",":zzz:",":ab:",":cd:",":cl:",":cn:",":de:",":es:",":fr:",":gb:",":id:",":it:",":jp:",":kr:",":ng:",":o2:",":ok:",":on:",":ox:",":ru:",":sa:",":tm:",":tv:",":up:",":us:",":vs:",":wc:","(A)","-_-","9_9",":-/",":a:",":b:",":m:",":o:",":v:",":x:",">:(","O.o","o.O",":(",":)",":D",":P",":o",":x",":|",";)","B|","xD","¬¬"];
+  const TPL_MAX = 100, TPL_TEXT_MAX = 8000, TPL_TRASH_DAYS = 30;
+  const K_TPL = 'jaf_tpl';            // { [eigene ID]: { meta: { [JOY-ID]: { uid, name, text, hash, at, by } }, base: { [Partner]: { [uid]: hash } }, trash: [ { uid, name, text, deletedAt, by } ] } }
+  const K_API2_FROM = 'jaf_api2_from'; // Wert der Kopfzeile x-requested-from, wie JOYclub sie selbst sendet
+  const tplStoreAll = () => GM_getValue(K_TPL, {}) || {};
+  const tplMe = () => sessionId() || ownProfileId() || '';
+  function tplStore() {
+    const all = tplStoreAll(), me = tplMe();
+    const s = all[me] || {};
+    s.meta = s.meta || {}; s.base = s.base || {}; s.trash = (s.trash || []).filter((t) => Date.now() - (t.deletedAt || 0) < TPL_TRASH_DAYS * 864e5);
+    return s;
+  }
+  function tplSave(s) { const all = tplStoreAll(); all[tplMe()] = s; GM_setValue(K_TPL, all); }
+  const tplUid = () => (crypto.randomUUID ? crypto.randomUUID() : 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+  const tplBy = () => ({ platform: 'joyclub', account: ownNick() || '' });
+  const tplPfName = (by) => (!by ? '' : by.platform === 'poppen' ? 'poppen.de' : by.platform === 'joyclub' ? 'JOYclub' : (by.platform || ''));
+
+  // ---- Smileys: Zerlegen, Übersetzen, Vergleichstext ----
+  const smEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const SM_URL = /(https?:\/\/\S+|www\.\S+)/;
+  const SM_EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[\u{1F3FB}-\u{1F3FF}️‍⃣]/gu;
+  let smReJoy = null, smRePop = null, smReU = null;
+  const smJoyRe = () => smReJoy || (smReJoy = new RegExp(SM_JOYTOK.map(smEsc).join('|'), 'g'));
+  const smPopRe = () => smRePop || (smRePop = new RegExp(SM_POPTOK.map(smEsc).join('|'), 'g'));
+  const smURe = () => smReU || (smReU = new RegExp(Object.keys(SM_U2J).sort((a, b) => b.length - a.length).map((k) => [...k].map(smEsc).join('\\uFE0F?') + '\\uFE0F?').join('|'), 'gu'));
+  // Text in Stücke außerhalb und innerhalb von Links zerlegen (in Links wird nie übersetzt oder entfernt)
+  const smParts = (text) => String(text || '').split(SM_URL).map((t, i) => ({ t, url: i % 2 === 1 }));
+  // Schreibweise einer anderen Plattform → JOYclub (bekannte Kürzel zuerst, sonst *name*; Unbekanntes bleibt)
+  function smToJoy(text, from, unknown) {
+    if (!from || from === 'joyclub') return String(text || '');
+    return smParts(text).map(({ t, url }) => {
+      if (url) return t;
+      let x = t.replace(smPopRe(), (m) => {
+        const v = SM_P2J[m];
+        if (v) return v;
+        if (unknown) unknown.add(m);
+        return m;
+      });
+      x = x.replace(smURe(), (m) => SM_U2J[m.replace(/️/g, '')] || m);
+      return x;
+    }).join('');
+  }
+  // Vergleichstext: ohne Smileys/Emojis beider Plattformen, Leerraum zusammengefasst – mit Zuordnung zum Rohtext
+  let smReAny = null;
+  const smAnyRe = () => smReAny || (smReAny = new RegExp([...new Set(SM_JOYTOK.concat(SM_POPTOK))].sort((x, y) => y.length - x.length).map(smEsc).join('|') + '|' + SM_EMOJI.source, 'gu'));
+  function smMap(text) {
+    const raw = String(text || '');
+    const gone = new Uint8Array(raw.length); // 1 = Smiley/Emoji (zählt wie Leerraum)
+    let off = 0;
+    for (const { t, url } of smParts(raw)) {
+      if (!url) { const re = smAnyRe(); re.lastIndex = 0; let m; while ((m = re.exec(t))) { if (!m[0]) { re.lastIndex++; continue; } gone.fill(1, off + m.index, off + m.index + m[0].length); } }
+      off += t.length;
+    }
+    const out = [], idx = [];
+    let sp = true;
+    for (let i = 0; i < raw.length; i++) {
+      const ws = gone[i] || /\s/.test(raw[i]);
+      if (ws) { if (!sp) { out.push(' '); idx.push(i); sp = true; } continue; }
+      out.push(raw[i]); idx.push(i); sp = false;
+    }
+    if (out[out.length - 1] === ' ') { out.pop(); idx.pop(); }
+    idx.push(raw.length);
+    return { norm: out.join(''), idx, gone };
+  }
+  const smNorm = (text) => smMap(text).norm;
+  async function smHash(text) {
+    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(smNorm(text)));
+    return [...new Uint8Array(b)].slice(0, 8).map((x) => x.toString(16).padStart(2, '0')).join('');
+  }
+  // Beginnt/endet ein Text (ohne Leerraum) mit einem Smiley/Emoji?
+  const smEdge = (text, end) => { const m = smMap(text); const r = String(text || ''); for (let i = end ? r.length - 1 : 0; end ? i >= 0 : i < r.length; i += end ? -1 : 1) { if (/\s/.test(r[i]) && !m.gone[i]) continue; return !!m.gone[i]; } return false; };
+  // Smileys/Leerraum am Rand eines Stücks abschneiden (nur Smileys, die die eigene Vorlage an dieser Stelle selbst hat)
+  function smTrimEdge(piece, end) {
+    const m = smMap(piece); let i = end ? piece.length - 1 : 0;
+    while (end ? i >= 0 : i < piece.length) { if (m.gone[i] || /\s/.test(piece[i])) i += end ? -1 : 1; else break; }
+    const cut = end ? piece.slice(i + 1) : piece.slice(0, i);
+    const sep = /\n[^\S\n]*\n/.test(cut) ? '\n\n' : cut.includes('\n') ? '\n' : /\s/.test(cut) ? ' ' : '';
+    return end ? piece.slice(0, i + 1) + sep : sep + piece.slice(i);
+  }
+  // Import-Text R (Schreibweise from) in die eigene Vorlage L einmischen → { text, how } oder null (Rückfrage nötig)
+  function tplMerge(L, R, from, unknown) {
+    const nL = smNorm(L), nR = smNorm(R);
+    if (nL === nR) return { text: L, how: 'unverändert' };
+    if (!nL) return { text: smToJoy(R, from, unknown), how: 'übernommen' };
+    if (nR && nL.includes(nR)) return { text: L, how: 'unverändert' }; // Import ist nur ein Teil der eigenen Vorlage
+    // 1. Ergänzung vorn und/oder hinten
+    const k = nR.indexOf(nL);
+    if (k >= 0) {
+      const mR = smMap(R);
+      let pre = R.slice(0, mR.idx[k]), post = R.slice(mR.idx[k + nL.length]);
+      // grenzt die eigene Vorlage mit einem Smiley an, gehört der Smiley des Imports an dieser Stelle zur selben Stelle
+      if (smEdge(L, false)) pre = smTrimEdge(pre, true);
+      if (smEdge(L, true)) post = smTrimEdge(post, false);
+      return { text: smToJoy(pre, from, unknown) + L.trim() + smToJoy(post, from, unknown), how: 'ergänzt' };
+    }
+    // 2. neue Absätze (auch in der Mitte): alle eigenen Absätze kommen in gleicher Reihenfolge auch im Import vor
+    const pL = L.split(/\n\s*\n/), pR = R.split(/\n\s*\n/);
+    const nPL = pL.map(smNorm), nPR = pR.map(smNorm);
+    let j = 0;
+    const out = [];
+    for (let i = 0; i < pR.length; i++) {
+      if (j < pL.length && nPR[i] === nPL[j]) { out.push(pL[j].replace(/^\n+|\n+$/g, '')); j++; } else out.push(smToJoy(pR[i], from, unknown).replace(/^\n+|\n+$/g, ''));
+    }
+    if (j === pL.length) return { text: out.join('\n\n'), how: 'ergänzt' };
+    return null;
+  }
+
+  // ---- Schnittstelle apiv2 ----
+  let api2Tok = null;
+  async function api2Token(force) {
+    if (!force && api2Tok && Date.now() - api2Tok.ts < 4 * 60000) return api2Tok.v;
+    const c = await joyGet('/webauth/access_token');
+    const v = c && c.access_token;
+    if (!v) throw new Error('Kein Zugang zur Schnittstelle');
+    api2Tok = { v, ts: Date.now() };
+    return v;
+  }
+  async function api2(method, path, body) {
+    const go = async (force) => {
+      const tok = await api2Token(force);
+      const h = { Accept: 'application/json', Authorization: `Bearer ${tok}`, 'X-Requested-With': 'XMLHttpRequest' };
+      const from = GM_getValue(K_API2_FROM, '');
+      if (from) h['X-Requested-From'] = from;
+      if (body !== undefined) h['Content-Type'] = 'application/json';
+      const url = 'https://apiv2.joyclub.com' + path;
+      let status, txt;
+      try {
+        const r = await fetch(url, { method, headers: h, body: body !== undefined ? JSON.stringify(body) : undefined, credentials: 'include' });
+        status = r.status; txt = await r.text();
+      } catch (e) {
+        // Rückfall ohne CORS-Grenzen
+        ({ status, txt } = await new Promise((res, rej) => GM_xmlhttpRequest({ method, url, headers: h, data: body !== undefined ? JSON.stringify(body) : undefined,
+          onload: (x) => res({ status: x.status, txt: x.responseText }), onerror: () => rej(new Error('Netzwerkfehler')), ontimeout: () => rej(new Error('Zeitüberschreitung')) })));
+      }
+      return { status, txt };
+    };
+    let r = await go(false);
+    if (r.status === 401 || r.status === 403) r = await go(true);
+    if (r.status < 200 || r.status >= 300) throw new Error(`HTTP ${r.status}`);
+    try { return r.txt ? JSON.parse(r.txt) : null; } catch (e) { return null; }
+  }
+  const tplApiList = () => api2('GET', `/users/${tplMe()}/notes`).then((l) => (Array.isArray(l) ? l : (l && (l.items || l.notes)) || []));
+  const tplApiUpdate = (id, name, text) => api2('PUT', `/users/${tplMe()}/notes/${id}`, { name, text });
+  const tplApiCreate = (name, text) => api2('POST', `/users/${tplMe()}/notes`, { name, text });
+  const tplApiDelete = (id) => api2('DELETE', `/users/${tplMe()}/notes/${id}`);
+
+  // ---- Zusatzangaben aktuell halten (auch Änderungen, die ohne Skript gemacht wurden) ----
+  async function tplSync() {
+    const list = await tplApiList();
+    const s = tplStore();
+    const seen = new Set();
+    for (const n of list) {
+      const id = String(n.id);
+      seen.add(id);
+      const text = String(n.text || ''), name = String(n.name || '');
+      const hash = await smHash(text);
+      const m = s.meta[id];
+      if (!m) s.meta[id] = { uid: tplUid(), name, text, hash, at: Date.now(), by: tplBy(), first: true };
+      else if (m.hash !== hash || m.name !== name || m.text !== text) {
+        if (m.hash !== hash || m.name !== name) { m.at = Date.now(); m.by = tplBy(); }
+        m.name = name; m.text = text; m.hash = hash; delete m.first;
+      }
+    }
+    // auf JOYclub gelöscht → Papierkorb
+    for (const [id, m] of Object.entries(s.meta)) {
+      if (seen.has(id)) continue;
+      if (!s.trash.some((t) => t.uid === m.uid)) s.trash.push({ uid: m.uid, name: m.name, text: m.text, deletedAt: Date.now(), by: tplBy() });
+      delete s.meta[id];
+    }
+    tplSave(s);
+    return { list, s };
+  }
+
+  // ---- Export ----
+  async function tplExportFile() {
+    const nick = ownNick();
+    if (!nick) throw new Error('Eigener Nick unbekannt – bitte einmal eine JOYclub-Seite mit Titelleiste öffnen.');
+    const { list, s } = await tplSync();
+    const templates = list.map((n) => { const m = s.meta[String(n.id)]; return m.first ? { id: m.uid, name: n.name, text: n.text } : { id: m.uid, name: n.name, text: n.text, updatedAt: m.at, updatedBy: m.by }; });
+    for (const t of s.trash) templates.push({ id: t.uid, name: t.name, text: '', deletedAt: t.deletedAt, updatedBy: t.by });
+    const inner = { format: 'fickliste', version: 1, platform: 'joyclub', exported: Date.now(), templates };
+    const enc = await flEncrypt(inner, nick);
+    return { file: { format: 'fickliste-enc', platform: 'joyclub', account: nick, alg: 'AES-GCM/PBKDF2', salt: enc.salt, iv: enc.iv, data: enc.data }, n: list.length };
+  }
+  async function tplParse(text, askNick) {
+    let d;
+    try { d = JSON.parse(String(text || '').trim()); } catch (e) { throw new Error('Keine gültige Datei (JSON).'); }
+    let account = '', platform = '';
+    if (d && d.format === 'fickliste-enc') {
+      account = d.account || ''; platform = d.platform || '';
+      let inner = await flDecrypt({ salt: d.salt, iv: d.iv, data: d.data }, account);
+      if (!inner) inner = await flDecrypt({ salt: d.salt, iv: d.iv, data: d.data }, ownNick());
+      while (!inner) {
+        const n = await askNick(account);
+        if (!n) throw new Error('Entschlüsseln abgebrochen.');
+        inner = await flDecrypt({ salt: d.salt, iv: d.iv, data: d.data }, n);
+      }
+      d = inner;
+    }
+    if (!d || d.format !== 'fickliste' || !Array.isArray(d.templates)) throw new Error('Keine Textvorlagen in dieser Datei.');
+    return { platform: d.platform || platform || 'joyclub', account: d.account || account, templates: d.templates };
+  }
+
+  // ---- Import / Abgleich ----
+  // ask(kind, info) → Antwort des Nutzers; Ergebnis: Bericht
+  async function tplImportRun(imp, mode, ask) {
+    const from = imp.platform;
+    const pk = `${from}:${norm(imp.account || '')}`;
+    const { list, s } = await tplSync();
+    const base = s.base[pk] = s.base[pk] || {};
+    const rep = [];
+    const unknown = new Set();
+    const byUid = new Map(), byName = new Map();
+    for (const n of list) { const m = s.meta[String(n.id)]; byUid.set(m.uid, n); byName.set(norm(n.name), n); }
+    let count = list.length;
+    const touched = new Set();
+    const setMeta = async (id, name, text, at, by, uid) => {
+      const m = s.meta[String(id)] || (s.meta[String(id)] = { uid: uid || tplUid() });
+      if (uid) m.uid = uid;
+      m.name = name; m.text = text; m.hash = await smHash(text); m.at = at || Date.now(); m.by = by || tplBy();
+      base[m.uid] = m.hash;
+    };
+    const create = async (name, text, at, by, uid) => {
+      if (count >= TPL_MAX) return false;
+      const r = await tplApiCreate(name, text);
+      let id = r && (r.id || (r.note && r.note.id));
+      if (!id) { const l2 = await tplApiList(); const hit = l2.find((x) => x.name === name && !s.meta[String(x.id)]); id = hit && hit.id; }
+      if (!id) throw new Error('Anlegen nicht bestätigt');
+      usedNames.add(norm(name));
+      count++;
+      await setMeta(id, name, text, at, by, uid);
+      return true;
+    };
+    const usedNames = new Set(list.map((n) => norm(n.name)));
+    const freeName = (name) => { let i = 2; while (usedNames.has(norm(`${name} (${i})`))) i++; return `${name} (${i})`; };
+    // Wiederherstellen „ersetzen“: alles, was nicht in der Datei steht, in den Papierkorb
+    if (mode === 'replace') {
+      const keep = new Set(imp.templates.filter((t) => !t.deletedAt).map((t) => t.id));
+      const keepNames = new Set(imp.templates.filter((t) => !t.deletedAt).map((t) => norm(t.name)));
+      for (const n of list) {
+        const m = s.meta[String(n.id)];
+        if (keep.has(m.uid) || keepNames.has(norm(n.name))) continue;
+        await tplApiDelete(n.id);
+        s.trash.push({ uid: m.uid, name: n.name, text: n.text, deletedAt: Date.now(), by: tplBy() });
+        delete s.meta[String(n.id)]; byUid.delete(m.uid); byName.delete(norm(n.name)); count--;
+        rep.push([n.name, 'in den Papierkorb']);
+      }
+    }
+    for (const T of imp.templates) {
+      if (!T || !T.name) continue;
+      const name = String(T.name).slice(0, 200);
+      const Rtext = String(T.text || '').slice(0, TPL_TEXT_MAX);
+      let L = (T.id && byUid.get(T.id)) || byName.get(norm(name)) || null;
+      if (L && touched.has(String(L.id))) L = null;
+      // gelöscht auf der anderen Seite
+      if (T.deletedAt) {
+        if (!L) continue;
+        const m = s.meta[String(L.id)];
+        const changed = base[m.uid] && base[m.uid] !== m.hash;
+        let del = !changed;
+        if (changed || !base[m.uid]) del = (await ask('delete', { name: L.name, text: L.text, by: T.updatedBy, at: T.deletedAt })) === 'delete';
+        if (del) {
+          await tplApiDelete(L.id);
+          s.trash.push({ uid: m.uid, name: L.name, text: L.text, deletedAt: Date.now(), by: T.updatedBy || null });
+          delete s.meta[String(L.id)]; count--;
+          rep.push([L.name, 'gelöscht (Papierkorb)']);
+        } else rep.push([L.name, 'Löschung nicht übernommen']);
+        continue;
+      }
+      if (!L) {
+        // hier gelöscht, dort unverändert → nicht wieder anlegen
+        const tr = s.trash.find((t) => t.uid === T.id);
+        if (tr && (!T.updatedAt || T.updatedAt <= tr.deletedAt)) { rep.push([name, 'hier gelöscht, nicht wieder angelegt']); continue; }
+        const text = smToJoy(Rtext, from, unknown).slice(0, TPL_TEXT_MAX);
+        if (await create(name, text, T.updatedAt, T.updatedBy, T.id)) rep.push([name, 'neu']); else rep.push([name, `übersprungen (höchstens ${TPL_MAX} Vorlagen)`]);
+        continue;
+      }
+      touched.add(String(L.id));
+      const m = s.meta[String(L.id)];
+      if (T.id && m.uid !== T.id) { // gemeinsame Kennung: die alphabetisch kleinere gewinnt (beide Seiten entscheiden gleich)
+        const u = [m.uid, T.id].sort()[0];
+        if (base[m.uid] && !base[u]) base[u] = base[m.uid];
+        m.uid = u;
+      }
+      const hL = m.hash, hR = await smHash(Rtext), hB = base[m.uid];
+      const newName = name !== L.name && T.updatedAt && T.updatedAt > (m.at || 0) ? name : L.name;
+      let res = null;
+      if (hL === hR) res = { text: L.text, how: newName !== L.name ? 'umbenannt' : 'unverändert' };
+      else if (hB && hL === hB) res = { text: smToJoy(Rtext, from, unknown), how: 'übernommen' };
+      else if (hB && hR === hB) res = { text: L.text, how: 'unverändert (hier neuer)' };
+      else res = tplMerge(L.text, Rtext, from, unknown);
+      if (res && res.text.length > TPL_TEXT_MAX) res = null;
+      if (!res) {
+        const a = await ask('conflict', { name: L.name, mine: L.text, other: smToJoy(Rtext, from, unknown), otherBy: T.updatedBy, otherAt: T.updatedAt, myAt: m.at, myBy: m.by });
+        if (a === 'other') res = { text: smToJoy(Rtext, from, unknown).slice(0, TPL_TEXT_MAX), how: 'ersetzt' };
+        else if (a === 'both') {
+          const nn = freeName(name);
+          if (await create(nn, smToJoy(Rtext, from, unknown).slice(0, TPL_TEXT_MAX), T.updatedAt, T.updatedBy)) rep.push([L.name, `beide behalten („${nn}“)`]); else rep.push([L.name, `übersprungen (höchstens ${TPL_MAX} Vorlagen)`]);
+          base[m.uid] = hR; // Stand der anderen Seite ist gesehen → beim nächsten Abgleich nicht erneut fragen
+          continue;
+        } else { rep.push([L.name, 'eigene behalten']); base[m.uid] = hR; continue; }
+      }
+      if (res.text !== L.text || newName !== L.name) {
+        await tplApiUpdate(L.id, newName, res.text);
+        await setMeta(L.id, newName, res.text, res.how === 'ergänzt' ? Date.now() : (T.updatedAt || Date.now()), res.how === 'ergänzt' ? tplBy() : (T.updatedBy || tplBy()));
+      } else base[m.uid] = m.hash;
+      rep.push([newName, res.how]);
+    }
+    tplSave(s);
+    return { rep, unknown: [...unknown] };
+  }
+
+  // ---- Popups (eigener <dialog>, damit sie über JOYclubs Overlay liegen und bedienbar sind) ----
+  function tplDialog(title) {
+    document.getElementById('jaf-tpl-dlg')?.remove();
+    const d = document.createElement('dialog');
+    d.id = 'jaf-tpl-dlg';
+    d.style.cssText = 'border:0;border-radius:12px;padding:0;background:#1d1f22;color:#eee;max-width:min(560px,94vw);width:560px;box-shadow:0 10px 40px rgba(0,0,0,.6)';
+    const box = flEl('div', 'padding:20px 22px;font:14px/1.45 system-ui,sans-serif;max-height:80vh;overflow:auto');
+    box.appendChild(flEl('div', 'font:bold 19px system-ui;margin-bottom:10px', escHtml(title)));
+    d.appendChild(box);
+    (document.querySelector('j-overlay[data-e2e="overlay-templates"]') ? document.body : document.body).appendChild(d);
+    try { d.showModal(); } catch (e) { d.setAttribute('open', ''); }
+    const close = () => { try { d.close(); } catch (e) { /* egal */ } d.remove(); };
+    d.addEventListener('cancel', (e) => { e.preventDefault(); close(); if (d.__onCancel) d.__onCancel(); });
+    return { d, box, close };
+  }
+  const tplRow = () => flEl('div', 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px');
+  function tplChoice(title, text, choices) {
+    return new Promise((res) => {
+      const { d, box, close } = tplDialog(title);
+      if (text) box.appendChild(flEl('div', 'margin-bottom:6px;white-space:pre-wrap', text));
+      const row = tplRow();
+      for (const [label, val, primary] of choices) row.appendChild(flBtn(label, () => { close(); res(val); }, primary));
+      box.appendChild(row);
+      d.__onCancel = () => res(null);
+    });
+  }
+  const tplWhen = (at, by) => (at ? `zuletzt bearbeitet am ${fmtTs(at)}${by ? ' auf ' + tplPfName(by) : ''}` : '');
+  async function tplAsk(kind, x) {
+    if (kind === 'delete') {
+      return tplChoice('Textvorlage löschen?', `„${x.name}“ wurde ${x.by ? 'auf ' + tplPfName(x.by) + ' ' : ''}gelöscht, ist hier aber geändert worden.`, [['Behalten', 'keep'], ['Löschen', 'delete', true]]);
+    }
+    return new Promise((res) => {
+      const { d, box, close } = tplDialog(`Textvorlage „${x.name}“ unterscheidet sich`);
+      const col = (h, sub, t) => {
+        const c = flEl('div', 'flex:1;min-width:200px');
+        c.appendChild(flEl('div', 'font-weight:bold;margin-bottom:2px', escHtml(h)));
+        if (sub) c.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin-bottom:4px', escHtml(sub)));
+        c.appendChild(flEl('div', 'white-space:pre-wrap;background:#2a2d31;border-radius:8px;padding:8px;font-size:13px;max-height:240px;overflow:auto', escHtml(t)));
+        return c;
+      };
+      const w = flEl('div', 'display:flex;gap:12px;flex-wrap:wrap');
+      w.appendChild(col('Diese Vorlage', tplWhen(x.myAt, x.myBy), x.mine));
+      w.appendChild(col('Die andere', tplWhen(x.otherAt, x.otherBy), x.other));
+      box.appendChild(w);
+      const row = tplRow();
+      row.appendChild(flBtn('Diese behalten', () => { close(); res('mine'); }));
+      row.appendChild(flBtn('Beide (umbenannt)', () => { close(); res('both'); }));
+      row.appendChild(flBtn('Die andere übernehmen', () => { close(); res('other'); }, true));
+      box.appendChild(row);
+      d.__onCancel = () => res('mine');
+    });
+  }
+  async function tplExportImportPopup() {
+    const what = await tplChoice('Textvorlagen exportieren/importieren', 'Für die Sicherung, das Zweitkonto und den Abgleich mit dem Skript auf poppen.de. Die Datei ist mit deinem Nick verschlüsselt.', [['Abbrechen', null], ['Importieren', 'imp'], ['Exportieren', 'exp', true]]);
+    if (!what) return;
+    const how = await tplChoice(what === 'exp' ? 'Textvorlagen exportieren' : 'Textvorlagen importieren', '', [['Abbrechen', null], ['per Zwischenablage', 'clip'], ['per Datei', 'file', true]]);
+    if (!how) return;
+    if (what === 'exp') {
+      let f;
+      try { f = await tplExportFile(); } catch (e) { await tplChoice('Export nicht möglich', e.message, [['Schließen', null, true]]); return; }
+      const text = JSON.stringify(f.file);
+      if (how === 'file') { flDownload(`textvorlagen-joyclub-${isoDay(new Date())}.json`, text); flToast(`${f.n} Textvorlagen gespeichert.`); }
+      else flToast((await copyText(text)) ? `${f.n} Textvorlagen in die Zwischenablage kopiert.` : 'Kopieren nicht möglich.');
+      return;
+    }
+    let text = '';
+    if (how === 'file') {
+      text = await new Promise((res) => {
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = '.json,.txt,application/json,text/plain';
+        inp.addEventListener('change', () => { const f = inp.files && inp.files[0]; if (!f) { res(''); return; } const r = new FileReader(); r.onload = () => res(String(r.result || '')); r.onerror = () => res(''); r.readAsText(f); });
+        inp.click();
+      });
+    } else {
+      try { text = await navigator.clipboard.readText(); } catch (e) { text = ''; }
+      if (!/fickliste/.test(text)) {
+        text = await new Promise((res) => {
+          const { d, box, close } = tplDialog('Textvorlagen importieren');
+          box.appendChild(flEl('div', 'margin-bottom:6px', 'Die Zwischenablage ließ sich nicht lesen. Bitte hier mit Strg+V einfügen:'));
+          const ta = flEl('textarea', 'width:100%;min-height:120px;background:#2a2d31;color:#eee;border:1px solid #444;border-radius:8px;padding:8px;font:12px monospace');
+          box.appendChild(ta);
+          const row = tplRow();
+          row.appendChild(flBtn('Abbrechen', () => { close(); res(''); }));
+          row.appendChild(flBtn('Importieren', () => { close(); res(ta.value); }, true));
+          box.appendChild(row);
+          d.__onCancel = () => res('');
+          setTimeout(() => ta.focus(), 50);
+        });
+      }
+    }
+    if (!text) return;
+    let imp;
+    try {
+      imp = await tplParse(text, (acc) => new Promise((res) => {
+        const { d, box, close } = tplDialog('Nick zum Entschlüsseln');
+        box.appendChild(flEl('div', 'margin-bottom:6px', escHtml(`Die Datei ist mit einem Nick verschlüsselt${acc ? ` (angegeben: ${acc})` : ''}. Bitte den Nick eingeben:`)));
+        const i = flEl('input', 'width:100%;background:#2a2d31;color:#eee;border:1px solid #444;border-radius:8px;padding:8px');
+        box.appendChild(i);
+        const row = tplRow();
+        row.appendChild(flBtn('Abbrechen', () => { close(); res(''); }));
+        row.appendChild(flBtn('OK', () => { close(); res(i.value.trim()); }, true));
+        box.appendChild(row);
+        d.__onCancel = () => res('');
+      }));
+    } catch (e) { await tplChoice('Import nicht möglich', e.message, [['Schließen', null, true]]); return; }
+    let mode = 'merge';
+    if (imp.platform === 'joyclub' && norm(imp.account) === norm(ownNick())) {
+      mode = await tplChoice('Sicherung wiederherstellen', 'Die Datei stammt von diesem Konto. „Ersetzen“ stellt genau den Stand der Datei her (andere Vorlagen kommen in den Papierkorb), „Ergänzen“ gleicht nur ab.', [['Abbrechen', null], ['Ersetzen', 'replace'], ['Ergänzen', 'merge', true]]);
+      if (!mode) return;
+    }
+    flToast('Gleiche Textvorlagen ab …');
+    let r;
+    try { r = await tplImportRun(imp, mode, tplAsk); } catch (e) { await tplChoice('Import abgebrochen', `${e.message}\n\nBitte den API-Rekorder einschalten, eine Vorlage anlegen, ändern und löschen und den Mitschnitt schicken.`, [['Schließen', null, true]]); return; }
+    const lines = r.rep.map(([n, h]) => `${n}: ${h}`).join('\n') || 'Keine Textvorlagen in der Datei.';
+    await tplChoice('Import fertig', lines + (r.unknown.length ? `\n\nNicht übersetzte Smileys: ${r.unknown.join(' ')}` : ''), [['Schließen', null, true]]);
+    tplUiDirty = true;
+  }
+  function tplTrashPopup() {
+    const s = tplStore();
+    const { box, close } = tplDialog(`Papierkorb (${s.trash.length})`);
+    box.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a;margin-bottom:8px', `Gelöschte Textvorlagen bleiben ${TPL_TRASH_DAYS} Tage hier.`));
+    for (const t of s.trash.slice().reverse()) {
+      const r = flEl('div', 'display:flex;gap:10px;align-items:center;padding:6px 8px;background:#2a2d31;border-radius:8px;margin:4px 0');
+      r.appendChild(flEl('div', 'flex:1;min-width:0', `<b>${escHtml(t.name)}</b><div style="font-size:12px;color:#9a9a9a">gelöscht am ${fmtTs(t.deletedAt)}${t.by ? ' auf ' + escHtml(tplPfName(t.by)) : ''}</div>`));
+      r.appendChild(flBtn('Wiederherstellen', async () => {
+        try {
+          const list = await tplApiList();
+          if (list.length >= TPL_MAX) throw new Error(`Höchstens ${TPL_MAX} Textvorlagen`);
+          const nm = list.some((n) => norm(n.name) === norm(t.name)) ? `${t.name} (wiederhergestellt)` : t.name;
+          const res = await tplApiCreate(nm, t.text);
+          const id = res && res.id;
+          const s2 = tplStore();
+          s2.trash = s2.trash.filter((x) => x.uid !== t.uid);
+          if (id) s2.meta[String(id)] = { uid: t.uid, name: nm, text: t.text, hash: await smHash(t.text), at: Date.now(), by: tplBy() };
+          tplSave(s2);
+          close(); flToast(`„${nm}“ wiederhergestellt – bitte die Textvorlagen neu öffnen.`); tplUiDirty = true;
+        } catch (e) { flToast(`Nicht möglich: ${e.message}`); }
+      }));
+      box.appendChild(r);
+    }
+    const row = tplRow(); row.appendChild(flBtn('Schließen', close, true)); box.appendChild(row);
+  }
+
+  // ---- Termine im Bearbeiten-Fenster ----
+  const TPL_IDB = 'jaf-termine';
+  function tplIdb() {
+    return new Promise((res, rej) => { const r = indexedDB.open(TPL_IDB, 1); r.onupgradeneeded = () => r.result.createObjectStore('h'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  }
+  async function tplHandle(set) {
+    const db = await tplIdb();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('h', set === undefined ? 'readonly' : 'readwrite');
+      const st = tx.objectStore('h');
+      const r = set === undefined ? st.get('datei') : st.put(set, 'datei');
+      r.onsuccess = () => res(set === undefined ? r.result : set); r.onerror = () => rej(r.error);
+    });
+  }
+  // Zeilen „wann - wo - was - Link“ → die ersten 5 kommenden (heute zählt), nach Datum sortiert (stabil)
+  function tplParseTermine(text, now = new Date()) {
+    const today = isoDay(now);
+    const out = [];
+    let i = 0;
+    for (const raw of String(text || '').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      const parts = line.split(/\s+-\s+/);
+      if (parts.length < 2) continue;
+      const m = parts[0].match(/(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
+      if (!m) continue;
+      const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
+      const day = `${y}-${pad2(+m[2])}-${pad2(+m[1])}`;
+      if (day < today) continue;
+      let link = '';
+      if (parts.length >= 3 && /^(https?:\/\/|www\.)/i.test(parts[parts.length - 1])) link = parts.pop();
+      const wann = parts[0], wo = parts[1] || '', was = parts.slice(2).join(' - ');
+      if (link) link = link.replace(/^(?:https?:\/\/)?(?:www\.)?joyclub\.de\//i, 'https://www.joyclub.de/').replace(/^www\./i, 'https://www.');
+      out.push({ day, i: i++, wann, wo, was, link });
+      if (out.length >= 5) break;
+    }
+    return out.sort((a, b) => a.day.localeCompare(b.day) || a.i - b.i);
+  }
+  const tplTerminText = (t) => (t.link ? `${t.wann} - ${t.wo} - ${t.link}` : [t.wann, t.wo, t.was].filter(Boolean).join(' - '));
+  const tplTerminLabel = (t) => [t.wann, t.wo, t.was].filter(Boolean).join(' - ');
+  function tplTextarea(ov) {
+    const ta = ov.querySelector('[data-e2e="input-template-text"]');
+    return ta && ta.shadowRoot ? ta.shadowRoot.querySelector('textarea') : null;
+  }
+  function tplSetText(ov, v) {
+    const host = ov.querySelector('[data-e2e="input-template-text"]');
+    const ta = tplTextarea(ov);
+    if (!ta) return;
+    ta.value = v.slice(0, TPL_TEXT_MAX);
+    ta.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    ta.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    try { host.value = ta.value; } catch (e) { /* egal */ }
+  }
+  function tplInsert(ov, piece) {
+    const ta = tplTextarea(ov);
+    if (!ta) return;
+    // Schreibmarke nur, wenn im Textfeld schon geklickt wurde – sonst ans Ende
+    const v = ta.value, touched = ta.__jafTouched;
+    const a = touched && ta.selectionStart != null ? ta.selectionStart : v.length, b = touched && ta.selectionEnd != null ? ta.selectionEnd : a;
+    const before = v.slice(0, a).replace(/\s+$/, ''), after = v.slice(b).replace(/^\s+/, '');
+    const nv = (before ? before + '\n\n' : '') + piece + (after ? '\n\n' + after : '');
+    tplSetText(ov, nv);
+    const pos = (before ? before.length + 2 : 0) + piece.length;
+    try { ta.focus(); ta.setSelectionRange(pos, pos); } catch (e) { /* egal */ }
+  }
+  async function tplTermineRender(ov, box) {
+    const ta0 = tplTextarea(ov);
+    if (ta0 && !ta0.__jafTouchHook) { ta0.__jafTouchHook = true; for (const ev of ['focus', 'mousedown', 'keyup']) ta0.addEventListener(ev, () => { ta0.__jafTouched = true; }); }
+    const btn = (label, fn, title) => {
+      const b = document.createElement('j-button');
+      b.setAttribute('variant', 'secondary'); b.setAttribute('role', ''); b.setAttribute('type', 'button'); b.setAttribute('size', 'small');
+      b.textContent = label; if (title) b.title = title;
+      b.style.cssText = 'max-width:100%';
+      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
+      return b;
+    };
+    box.innerHTML = '';
+    box.appendChild(flEl('div', 'font-weight:bold;margin:12px 0 6px', 'Termine'));
+    const wrap = flEl('div', 'display:flex;flex-direction:column;gap:6px;align-items:stretch');
+    box.appendChild(wrap);
+    const pick = async () => {
+      try {
+        const pickFn = window.showOpenFilePicker || (typeof unsafeWindow !== 'undefined' && unsafeWindow.showOpenFilePicker);
+        if (!pickFn) { flToast('Dein Browser kann keine Datei dauerhaft öffnen (Chrome nötig).'); return; }
+        const [h] = await pickFn.call(window, { types: [{ description: 'Textdatei', accept: { 'text/plain': ['.txt', '.csv', '.md'] } }], multiple: false });
+        if (h) { await tplHandle(h); tplTermineRender(ov, box); }
+      } catch (e) { /* abgebrochen */ }
+    };
+    let h = null;
+    try { h = await tplHandle(); } catch (e) { h = null; }
+    if (!h) { wrap.appendChild(btn('Datei mit Terminen wählen …', pick)); return; }
+    let perm = 'granted';
+    try { perm = await h.queryPermission({ mode: 'read' }); } catch (e) { perm = 'prompt'; }
+    if (perm !== 'granted') {
+      wrap.appendChild(btn('Zugriff auf die Datei erlauben', async () => { try { if ((await h.requestPermission({ mode: 'read' })) === 'granted') tplTermineRender(ov, box); } catch (e) { /* egal */ } }));
+      wrap.appendChild(btn('Datei ändern …', pick));
+      return;
+    }
+    let list = [];
+    try { const f = await h.getFile(); list = tplParseTermine(await f.text()); } catch (e) { wrap.appendChild(flEl('div', 'color:#ffb020', 'Datei nicht lesbar.')); }
+    if (!list.length) wrap.appendChild(flEl('div', 'opacity:.75', 'Keine kommenden Termine'));
+    for (const t of list) {
+      const full = tplTerminLabel(t);
+      const b = btn(full.length > 60 ? full.slice(0, 58) + '…' : full, () => tplInsert(ov, tplTerminText(t)), full);
+      wrap.appendChild(b);
+    }
+    if (list.length) wrap.appendChild(btn('Alle übernehmen', () => tplSetText(ov, list.map(tplTerminText).join('\n\n'))));
+    wrap.appendChild(btn('Datei ändern …', pick));
+  }
+
+  // ---- Einbau in JOYclubs Overlay „Textvorlagen“ ----
+  let tplUiDirty = true, tplSyncTs = 0, tplSyncing = false;
+  function tplUiTick() {
+    if (IN_FRAME || !/^\/clubmail/.test(location.pathname)) return;
+    const ov = document.querySelector('j-overlay[data-e2e="overlay-templates"]');
+    if (!ov) { tplUiDirty = true; return; }
+    const add = ov.querySelector('[data-e2e="button-add-template"]');
+    const nameF = ov.querySelector('[data-e2e="input-template-name"]');
+    if (add) {
+      // Knopf „Textvorlagen exportieren/importieren“ unter „Textvorlage hinzufügen“
+      if (!ov.querySelector('.jaf-tpl-xbtn')) {
+        const b = document.createElement('j-button');
+        b.className = 'jaf-tpl-xbtn';
+        b.setAttribute('full-size', 'true'); b.setAttribute('role', ''); b.setAttribute('type', 'button'); b.setAttribute('variant', 'secondary');
+        b.textContent = 'Textvorlagen exportieren/importieren';
+        b.style.cssText = 'display:block;margin-top:8px';
+        b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); tplExportImportPopup(); });
+        add.insertAdjacentElement('afterend', b);
+      }
+      if ((tplUiDirty || Date.now() - tplSyncTs > 60000) && !tplSyncing) {
+        tplSyncing = true;
+        tplSync().then(() => { tplUiDirty = false; tplSyncTs = Date.now(); }).catch(() => { tplSyncTs = Date.now(); }).finally(() => { tplSyncing = false; tplDecorate(ov); });
+      } else tplDecorate(ov);
+    }
+    if (nameF) {
+      // Termine-Bereich nur bei „Termin“ im Namen
+      const inner = nameF.shadowRoot && nameF.shadowRoot.querySelector('input');
+      const nm = (inner && inner.value) || nameF.getAttribute('value') || '';
+      const form = ov.querySelector('[data-e2e="input-template-text"]');
+      let box = ov.querySelector('.jaf-tpl-termine');
+      if (/termin/i.test(nm) && form) {
+        if (!box) { box = flEl('div', ''); box.className = 'jaf-tpl-termine'; form.insertAdjacentElement('afterend', box); tplTermineRender(ov, box); }
+      } else if (box) box.remove();
+      // Speichern/Löschen → Zusatzangaben nachziehen
+      for (const sel of ['[data-e2e="button-save-template"]', '[data-e2e="button-delete-template"]']) {
+        const b = ov.querySelector(sel);
+        if (b && !b.__jafTpl) { b.__jafTpl = true; b.addEventListener('click', () => { setTimeout(() => { tplUiDirty = true; tplSync().catch(() => {}); }, 1500); }); }
+      }
+    }
+  }
+  function tplDecorate(ov) {
+    const s = tplStore();
+    // Papierkorb neben „N von 100“
+    const lim = ov.querySelector('[data-e2e="text-limit-templates"]');
+    if (lim) {
+      let a = ov.querySelector('.jaf-tpl-trash');
+      if (s.trash.length) {
+        if (!a) { a = flEl('a', 'margin-left:12px;cursor:pointer;text-decoration:underline'); a.className = 'jaf-tpl-trash'; a.href = '#'; a.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); tplTrashPopup(); }); lim.insertAdjacentElement('afterend', a); }
+        const t = `Papierkorb (${s.trash.length})`; if (a.textContent !== t) a.textContent = t;
+      } else if (a) a.remove();
+    }
+    // „zuletzt bearbeitet am … auf …“ unter dem Namen
+    const byName = new Map(Object.values(s.meta).map((m) => [norm(m.name), m]));
+    for (const it of ov.querySelectorAll('[data-e2e="item-template"]')) {
+      const name = [...it.childNodes].filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join('').trim();
+      const m = byName.get(norm(name));
+      const txt = m && !m.first ? tplWhen(m.at, m.by) : '';
+      let el = it.querySelector('.jaf-tpl-meta');
+      if (!txt) { if (el) el.remove(); continue; }
+      if (!el) { el = flEl('div', 'font-size:12px;opacity:.65;margin-bottom:2px'); el.className = 'jaf-tpl-meta'; el.setAttribute('slot', 'description'); const d = it.querySelector('[slot="description"]'); if (d) d.insertAdjacentElement('beforebegin', el); else it.appendChild(el); }
+      if (el.textContent !== txt) el.textContent = txt;
+    }
+  }
+  setInterval(() => { try { tplUiTick(); } catch (e) { /* weiter */ } }, 1000);
 
   safeInit();
   let lastPath = location.pathname;

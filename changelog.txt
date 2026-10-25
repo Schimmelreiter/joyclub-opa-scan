@@ -1,6 +1,12 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.89 (25.10.2026)
+- Textvorlagen: „zuletzt bearbeitet am … auf …“, Papierkorb (30 Tage), Knopf „Textvorlagen exportieren/importieren“ (Datei oder Zwischenablage, mit dem Nick verschlüsselt) für Sicherung, Zweitkonto und poppen.de
+- Abgleich beim Import: ohne Smileys verglichen, Ergänzungen vorn/hinten und neue Absätze werden eingemischt, Dreiwege-Abgleich mit dem letzten gemeinsamen Stand, sonst Rückfrage; Löschungen über den Papierkorb
+- Smiley-Übersetzung poppen.de → JOYclub (bekannte Kürzel bevorzugt, Sonderregeln, Unbekanntes bleibt und wird gemeldet)
+- Termine im Bearbeiten-Fenster (Name enthält „Termin“): Datei mit Terminen, die nächsten fünf als Knöpfe, „Alle übernehmen“
+
 1.88 (25.10.2026)
 - Typwechsel: neuer Typ gilt, Vermerk „Typ geändert: A → B“ in Konto, Gedächtnis, Profilinfos und Fickliste (Archiv-Stand); vom Skript Ignorierte werden neu beurteilt (entsperren und Notiz-Zeile entfernen bzw. Bezeichnung anpassen)
 - Gästelisten: Profilbilder in den neu aufgebauten Reitern (Opas, Geronto-Paare …) erscheinen jetzt auch, wenn sie unter „Alle“ noch nicht geladen waren

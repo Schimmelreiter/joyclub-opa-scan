@@ -561,6 +561,42 @@ Das Skript liest den Ort des eigenen Profils (Kreis bzw. kreisfreie Stadt) und o
 
 ---
 
+## Textvorlagen (ClubMail)
+
+In **ClubMail › Optionen › Textvorlagen** ergänzt das Skript JOYclubs eigene Verwaltung:
+
+<img src="docs/textvorlagen-liste.png" width="400" alt="Textvorlagen mit zuletzt bearbeitet und Papierkorb">
+
+- **„zuletzt bearbeitet am … auf …“** unter dem Namen jeder Vorlage (JOYclub oder poppen.de). Änderungen, die ohne Skript gemacht wurden (App, anderer Computer), bemerkt das Skript beim nächsten Öffnen.
+- **Papierkorb (N)** neben „N von 100“: gelöschte Vorlagen bleiben 30 Tage und lassen sich wiederherstellen.
+- **„Textvorlagen exportieren/importieren“** unter „Textvorlage hinzufügen“: erst „Exportieren“ / „Importieren“ / „Abbrechen“, dann „per Datei“ oder „per Zwischenablage“ (lässt der Browser das Lesen nicht zu, erscheint ein Feld zum Einfügen). Die Datei ist mit dem eigenen Nick verschlüsselt (gleiches Format wie die Fickliste, Feld `templates`). Sie dient als **Sicherung** (Import vom selben Konto fragt „Ersetzen“ oder „Ergänzen“), zum **Abgleich mit dem Zweitkonto** und mit dem **Skript auf poppen.de**.
+
+  <img src="docs/textvorlagen-export-import.png" width="400" alt="Exportieren oder Importieren">
+
+**Abgleich beim Import** (gilt auch für die Anmerkungen und Ficknotizen der Fickliste): Zuordnung über eine feste Kennung, sonst über den Namen. Verglichen wird ohne Smileys und Emojis und ohne Unterschiede im Leerraum.
+
+| Fall | Ergebnis |
+|---|---|
+| gleich bis auf Smileys | unverändert – die eigene Fassung bleibt |
+| seit dem letzten Abgleich nur auf der anderen Seite geändert | übernommen |
+| nur hier geändert | bleibt |
+| die andere Fassung hat vorn/hinten mehr oder neue Absätze | nur das Neue wird eingemischt („ergänzt“), der Rest bleibt |
+| sonst | Rückfrage mit beiden Fassungen: „Diese behalten“, „Die andere übernehmen“, „Beide (umbenannt)“ |
+| auf der anderen Seite gelöscht | hier ebenfalls in den Papierkorb (Rückfrage, wenn hier geändert) |
+| neu | wird angelegt (höchstens 100 Vorlagen, je 8000 Zeichen) |
+
+Am Ende steht ein Bericht je Vorlage und die Liste der Smileys, die sich nicht übersetzen ließen.
+
+**Smileys:** Beim Import von poppen.de werden `:name:`-Codes und Emojis in JOYclub-Smileys übersetzt; allgemeine Kürzel (`:)`, `:D`, `;)` …) haben Vorrang vor `*name*`. Unbekannte Codes bleiben stehen. In Links wird nichts übersetzt.
+
+**Termine:** Enthält der Name einer Vorlage „Termin“, erscheint unter dem Textfeld der Bereich **Termine**. Er liest eine Textdatei auf deinem Computer (einmal wählen, Chrome; Zeilen `wann - wo - was - Link`, Link freiwillig), nimmt die ersten fünf kommenden Termine (heute zählt) und zeigt sie nach Datum sortiert als Knöpfe. Ein Klick fügt den Termin an der Schreibmarke ein (sonst am Ende), getrennt durch eine Leerzeile: mit Link als `wann - wo - Link` (JOYclub zeigt statt des Links den Partynamen), sonst `wann - wo - was`. **„Alle übernehmen“** ersetzt den Text durch alle fünf. Weitere Knöpfe: „Datei mit Terminen wählen …“, „Datei ändern …“, „Zugriff auf die Datei erlauben“; ohne passende Zeilen steht „Keine kommenden Termine“.
+
+<img src="docs/textvorlagen-termine.png" width="400" alt="Termine im Bearbeiten-Fenster">
+
+Die Vorlagen liest und schreibt das Skript über JOYclubs Schnittstelle (`apiv2 /users/<id>/notes`). Anlegen und Löschen sind noch nicht durch einen Mitschnitt bestätigt; schlägt etwas fehl, meldet der Import das und bittet um einen Mitschnitt mit dem API-Rekorder.
+
+---
+
 ## Profilseiten
 
 - Im Slider „Dates & Events“ stehen Scan-Datum und AWO-Faktor der Partys (siehe [AWO-Faktor](#awo-faktor)).
