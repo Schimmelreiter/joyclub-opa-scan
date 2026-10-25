@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.91 (25.10.2026)
+- Mitgliedersuche „Mit aktuellen Sucheinstellungen filtern“: Ergebnisse über die Schnittstelle (apiv2 /members) statt Scrollen, Alter und Typ direkt aus den Treffern; Rückfall auf die Seite
+
 1.90 (25.10.2026)
 - Automatischer Abgleich mit dem Skript auf poppen.de über einen „Briefkasten“ (leere Seite auf GitHub Pages, unsichtbar eingebettet): Fickliste und Textvorlagen sofort nach Änderungen, Rückfragen beim nächsten Öffnen von Fickliste bzw. Textvorlagen
 - Auf poppen.de läuft das Skript nur passiv für den Briefkasten

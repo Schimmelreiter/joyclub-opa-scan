@@ -321,6 +321,8 @@ Im Seitenkopf der Suche `/member/` steht rechts neben der Lupe (Namenssuche) ein
 
 Lädt die gerade eingestellte Suche in einem unsichtbaren Frame komplett nach, bestimmt die Treffer nach den Regeln (Schwellen der Mitgliedersuche, Typen, Paar-Regeln, Whitelist) und ignoriert sie im Hintergrund (Notiz-Quelle „Suche“).
 
+
+Ab 1.91 holt das Skript die Ergebnisse über JOYclubs Schnittstelle (`apiv2 /members`, dieselbe Anfrage, die die Suchseite gerade gestellt hat) Seite für Seite, ohne zu scrollen – Alter und Typ stehen direkt in den Treffern, die Profil-Links kommen gesammelt über `/profile/get_urls`. Klappt das nicht, lädt es wie bisher die Seite. Die systematische Suche nutzt vorerst weiter die Seite.
 ### Systematische Suche
 
 Ein zweites Popup spiegelt die JOYclub-Filter **Ich suche** (Frauen, Männer, Paare, Non-binary) und **Alter** (18 bis 70+) und listet alle Bundesländer aus `CONFIG.AREAS` mit Checkbox und Zahl der Umkreise (Hamburg und Bremen laufen unter „Niedersachsen / Hamburg / Bremen“). Die Auswahl wird gemerkt.

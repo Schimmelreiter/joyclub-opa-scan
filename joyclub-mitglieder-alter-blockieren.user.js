@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.90
+// @version      1.91
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -129,6 +129,7 @@
     Notiz: /\/user_fav\/user_note$|\/profilev3\/save_note$/,
     Gästeliste: /\/event\/guests_scroll_data$/,
     ClubMail: /\/clubmailv3\/get_conversation_list$/,
+    Mitgliedersuche: /^apiv2\.joyclub\.com\/members$/,
   };
   // bereits untersucht bzw. uninteressant → nicht mehr erfassen
   const API_SKIP_RE = [
@@ -5967,6 +5968,49 @@
     return out;
   }
 
+  // Mitgliedersuche über apiv2 /members: dieselbe Anfrage, die die Suchseite selbst stellt (aus den Ladezeiten des
+  // Browsers), seitenweise bis next_page leer ist; Profil-Links über /profile/get_urls. null = Seitenweg.
+  function msLastApiUrl() {
+    try {
+      const perf = (typeof unsafeWindow !== 'undefined' && unsafeWindow.performance) || window.performance;
+      const l = perf.getEntriesByType('resource').map((e) => e.name).filter((n) => /^https:\/\/apiv2\.joyclub\.com\/members\?/.test(n));
+      return l.length ? l[l.length - 1] : '';
+    } catch (e) { return ''; }
+  }
+  async function apiMembers(srcUrl, onN) {
+    let u;
+    try { u = new URL(srcUrl); } catch (e) { return null; }
+    const byId = new Map();
+    let page = -1;
+    for (let i = 0; i < 300; i++) {
+      u.searchParams.set('page', String(page));
+      const r = await apiTry('Mitgliedersuche', () => api2('GET', u.pathname + u.search));
+      if (!r.ok) return i === 0 ? null : [...byId.values()];
+      const v = r.v || {};
+      if (!Array.isArray(v.items)) { apiResult('Mitgliedersuche', false, 'Antwort ohne items'); return i === 0 ? null : [...byId.values()]; }
+      for (const it of v.items) {
+        if (!it || !it.user_id || byId.has(String(it.user_id))) continue;
+        const ug = it.universal_gender != null ? String(it.universal_gender) : '';
+        byId.set(String(it.user_id), { id: String(it.user_id), name: it.user_name || '', ages: [it.age, it.age2].map(Number).filter((n) => n >= 18 && n <= 120),
+          gender: ug && ug !== '0' ? ug : '', type: ug && ug !== '0' ? typeFromGender(ug) : '' });
+      }
+      if (onN) onN(byId.size);
+      if (!v.next_page || !v.items.length) break;
+      page = v.next_page;
+      await sleep(rand(300, 700));
+    }
+    // Profil-Links (mit Nick-Teil) in Blöcken
+    const ids = [...byId.keys()];
+    for (let i = 0; i < ids.length; i += 50) {
+      const part = ids.slice(i, i + 50);
+      try {
+        const c = await joyGet(`/profile/get_urls?user_ids=${part.join(',')}`);
+        for (const x of (c && c.profile_urls) || []) { const m = byId.get(String(x.user_id)); if (m && x.profile_url) m.path = cleanPath(new URL(x.profile_url).pathname); }
+      } catch (e) { /* Rückfall unten */ }
+    }
+    return [...byId.values()].map((m) => { const path = m.path || `/profile/${m.id}.${(m.name || 'x').toLowerCase()}.html`; return { path, url: location.origin + path, name: m.name, ages: m.ages, gender: m.gender, type: m.type }; });
+  }
+
   // ---------- API-Rekorder: Bedienung (Experten-Einstellungen) ----------
   const API_FEATURES = [
     ['Profilbesucher', /visit/i], ['Mögen mich / Interaktionen', /vot|like|kiss|interaction/i], ['ClubMail', /clubmail|conversation|message|messenger/i],
@@ -7351,8 +7395,9 @@
         const desc = 'Aktuelle Suche';
         headline = desc;
         bgUi(desc, 'Lade Ergebnisse …', 0, stats());
-        const data = await load(location.href, (n) => bgUi(null, `lade Ergebnisse … ${n}`, 0.25, null));
-        const cards = data.cards || [];
+        const src = msLastApiUrl();
+        let cards = src ? await apiMembers(src, (n) => bgUi(null, `lade Ergebnisse (Schnittstelle) … ${n}`, 0.25, null)) : null;
+        if (!cards) { const data = await load(location.href, (n) => bgUi(null, `lade Ergebnisse … ${n}`, 0.25, null)); cards = data.cards || []; }
         bgUi(null, `${cards.length} Profile geladen`, 0.5, stats());
         await process(cards, { label: desc, step: `${cards.length} Profile` }, (f) => f);
         st.searches = 1;
