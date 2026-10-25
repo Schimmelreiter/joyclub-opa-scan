@@ -6,6 +6,7 @@ Neueste Version oben. Einträge ab Version 1.70.
 - Abgleich beim Import: ohne Smileys verglichen, Ergänzungen vorn/hinten und neue Absätze werden eingemischt, Dreiwege-Abgleich mit dem letzten gemeinsamen Stand, sonst Rückfrage; Löschungen über den Papierkorb
 - Smiley-Übersetzung poppen.de → JOYclub (bekannte Kürzel bevorzugt, Sonderregeln, Unbekanntes bleibt und wird gemeldet)
 - Termine im Bearbeiten-Fenster (Name enthält „Termin“): Datei mit Terminen, die nächsten fünf als Knöpfe, „Alle übernehmen“
+- Fickliste-Import: Anmerkungen und Ficknotizen nach denselben Regeln (ohne Smileys verglichen, Ergänzungen eingemischt, Smileys von poppen.de übersetzt, sonst gewinnt die neuere Fassung)
 
 1.88 (25.10.2026)
 - Typwechsel: neuer Typ gilt, Vermerk „Typ geändert: A → B“ in Konto, Gedächtnis, Profilinfos und Fickliste (Archiv-Stand); vom Skript Ignorierte werden neu beurteilt (entsperren und Notiz-Zeile entfernen bzw. Bezeichnung anpassen)

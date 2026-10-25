@@ -10659,6 +10659,14 @@
       const hit = (xm.id && byId.get(xm.id)) || byKey.get(flMeetKey(xm));
       if (hit) {
         const inn = flMeetIn(xm);
+        if (typeof inn.note === 'string') inn.note = smToJoy(inn.note, flImpFrom).slice(0, 8000);
+        // Ficknotiz: gleich bis auf Smileys → bleibt; Ergänzungen einmischen; sonst gewinnt die neuere
+        if (inn.note && hit.m.note && smNorm(inn.note) !== smNorm(hit.m.note)) {
+          const mg = tplMerge(hit.m.note, xm.note || '', flImpFrom);
+          if (mg) hit.m.note = mg.text.slice(0, 8000);
+          else if ((xm.noteAt || 0) > (hit.m.noteAt || 0)) { hit.m.note = inn.note; hit.m.noteAt = xm.noteAt; if (xm.noteBy) hit.m.noteBy = xm.noteBy; }
+          touched.add(hit.q);
+        }
         for (const [k, v] of Object.entries(inn)) if ((hit.m[k] == null || hit.m[k] === '') && v != null && v !== '') { hit.m[k] = v; touched.add(hit.q); }
         continue;
       }
@@ -10667,6 +10675,7 @@
       else if (xm.uid != null) { const o = [...objs.values()].find((q) => flIsExt(q.id) && q.main && String(q.main.uid) === String(xm.uid)); if (o) ownerId = o.id; }
       const owner = objs.get(ownerId);
       const nm = flMeetIn(xm);
+      if (typeof nm.note === 'string') nm.note = smToJoy(nm.note, flImpFrom).slice(0, 8000);
       (owner.meets = owner.meets || []).push(nm);
       touched.add(owner);
       const rec = { m: nm, q: owner };
@@ -10685,17 +10694,24 @@
     if (X.id && !P2.xid && flIsExt(P2.id)) P2.xid = X.id;
     // Anmerkungen: persons[].notes (neu) vor joy.notes (alt); die neuere Fassung gewinnt, gleicher Text bleibt
     const xNotes = typeof X.notes === 'string' ? X.notes.slice(0, 8000) : (X.joy && X.joy.notes) || '';
-    if (xNotes && norm(xNotes) !== norm(P2.notes || '') && (!P2.notes || (X.notesAt && X.notesAt > (P2.notesAt || 0)))) {
-      P2.notes = xNotes;
-      if (X.notesAt) P2.notesAt = X.notesAt;
-      if (X.notesBy) P2.notesBy = X.notesBy;
+    if (xNotes && smNorm(xNotes) !== smNorm(P2.notes || '')) {
+      // gleich bis auf Smileys → bleibt; Ergänzungen einmischen; sonst gewinnt die neuere Fassung
+      const mg = P2.notes ? tplMerge(P2.notes, xNotes, flImpFrom) : null;
+      if (mg) { if (mg.text !== P2.notes) { P2.notes = mg.text.slice(0, 8000); P2.notesAt = Date.now(); P2.notesBy = { platform: 'joyclub', account: ownNick() || '' }; } }
+      else if (!P2.notes || (X.notesAt && X.notesAt > (P2.notesAt || 0))) {
+        P2.notes = smToJoy(xNotes, flImpFrom).slice(0, 8000);
+        if (X.notesAt) P2.notesAt = X.notesAt;
+        if (X.notesBy) P2.notesBy = X.notesBy;
+      }
     }
     if (X.joy) { if (!P2.notes && X.joy.notes) P2.notes = X.joy.notes; if (!P2.type && X.joy.type) P2.type = X.joy.type; if (!P2.pnote && X.joy.pnote) P2.pnote = X.joy.pnote; }
     flPut(P2);
     flSyncStatus(prim);
     return flSnap(flMembers(prim)) !== before;
   }
+  var flImpFrom = 'joyclub'; // eslint-disable-line no-var // Plattform der gerade importierten Fickliste (für die Smiley-Übersetzung)
   async function flImportRun(d, ask) {
+    flImpFrom = d && d.platform ? String(d.platform) : 'joyclub';
     const st = { neu: 0, auto: 0, conflict: 0, merged: 0, separate: 0, same: 0, names: [] };
     const conflicts = [];
     for (const X0 of d.persons) {
