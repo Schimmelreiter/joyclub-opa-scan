@@ -73,31 +73,40 @@ Ignoriert wird über das Profil (Notiz speichern → *Profiloptionen → Profil 
 
 Adresse: `https://www.joyclub.de/edit/account/#opa-schutz` – aufgebaut wie JOYclubs Seite „Account“.
 
-<img src="docs/einstellungen.png" width="560" alt="Seite Opa-Schutz">
+<img src="docs/einstellungen.png" width="450" alt="Seite Opa-Schutz (Übersicht)">
 
-**Kopfzeile:** „Derzeit ignoriert: X / Limit“ und „Nach Anwenden der neuen Einstellungen zu ignorieren: N / Limit“ – live berechnet aus dem Gedächtnis aller bekannten Konten, während man Regler verschiebt. Orange bei weniger als 50 freien Plätzen, rot über dem Limit; ein „+“ heißt, dass es zusätzlich unklare Mitglieder gibt (z. B. Paare mit nur einer Altersangabe).
+**Titel:** Neben „Opa-Schutz“ stehen die Versionsnummer (Link zum Changelog) sowie **Anleitung** (diese Seite) und **Fehler melden** (GitHub-Issues); alle drei öffnen in einem neuen Tab.
 
-<img src="docs/einstellungen-info.png" width="420" alt="Kopfzeile der Einstellungen">
+**Kopfzeile:** „Derzeit ignoriert: X / Limit“ und „Nach Anwenden der neuen Einstellungen: N / Limit“ – live berechnet aus dem Gedächtnis aller bekannten Konten, während man Regler verschiebt. Orange bei weniger als 50 freien Plätzen, rot über dem Limit; ein „+“ heißt, dass es zusätzlich unklare Mitglieder gibt (z. B. Paare mit nur einer Altersangabe).
 
-**Je Gruppe (Männer, Frauen, Paare)**, in dieser Reihenfolge:
-1. **Schalter** als Kippschalter: *Visuelle Einstufung* über der Spalte der visuellen Regler, *Ignorieren aktiv* über der Spalte „Ignorieren ab“.
-2. **Altersgrenzen je Quelle:** ein Regler mit zwei Griffen (Stufe 1 bis · Stufe 2 bis) und ein Regler mit einem Griff (Ignorieren ab), Bereich 18–100; Button **„Werte der ersten Zeile für alle Quellen übernehmen“**. Bei Paaren je Quelle eine Zeile für die Frau und eine für den Mann; ohne Haken bei **Getrenntes Alter** verschieben sich beide Balken gemeinsam. Dazu **Sugar Daddy** und **Sugar Mom** mit Schalter und Altersabstand.
-3. **Bezeichnungen** der drei Stufen (Einzahl/Mehrzahl). Gleiche Mehrzahl-Bezeichnungen ergeben einen gemeinsamen Reiter.
-4. **Profiltypen** (Haken; ein Haken entfernt den Typ aus den anderen Gruppen).
+<img src="docs/einstellungen-info.png" width="560" alt="Titel und Kopfzeile der Einstellungen">
+
+**Je Gruppe (Männer, Frauen, Paare)** eine Tabelle über die volle Breite – in allen drei Gruppen gleich breit, die Regler stehen pixelgenau untereinander:
+1. **Schalter:** *Visuelle Einstufung* und *Grenzen altern mit mir* über den visuellen Reglern, *Ignorieren aktiv* und *Grenze altert mit mir* über „Ignorieren ab“.
+2. **Altersgrenzen je Quelle:** „Stufe 1 bis · Stufe 2 bis“ (zwei Griffe) und „Ignorieren ab“ (ein Griff), Bereich 18–100; darunter mittig **„Werte der ersten Zeile für alle Quellen übernehmen“**. Erklärungen stehen als Tooltip an den Spaltenköpfen.
+3. Nur Paare: **Paar-Regel** (*beide über der Grenze* – Standard – oder *einer über der Grenze*), **Getrenntes Alter** (ohne Haken verschieben sich die Balken von Frau und Mann gemeinsam), **Sugar Daddy** und **Sugar Mom** mit Schalter und Altersabstand.
+4. **Bezeichnungen** der drei Stufen, oben Einzahl, unten Mehrzahl. Gleiche Mehrzahl-Bezeichnungen ergeben einen gemeinsamen Reiter.
+5. **Profiltypen** (Haken; ein Haken entfernt den Typ aus den anderen Gruppen). Profile mit mehr als zwei Personen („Paar, Non-binary und Mann“ …) erscheinen als **Mehrere Personen**.
 
 <img src="docs/einstellungen-maenner.png" width="560" alt="Gruppe Männer">
 
-<img src="docs/einstellungen-paare.png" width="560" alt="Gruppe Paare mit Sugar Daddy und Sugar Mom">
+<img src="docs/einstellungen-paare.png" width="560" alt="Gruppe Paare mit Paar-Regel, Sugar Daddy und Sugar Mom">
+
+**Grenzen altern mit mir:** Steigt das eigene Alter (aus dem Geburtszeitraum des eigenen Kontos bzw. dem zuletzt auf dem eigenen Profil gelesenen Alter), wandern die Grenzen der Gruppen mit eingeschaltetem Schalter um die Differenz mit (höchstens bis 100), mit einem kurzen Glückwunsch. Dadurch wird **nie jemand entsperrt** – entsperrt wird nur, wen eine von Hand verschobene Grenze freigibt.
 
 Der Link **Quelltext-Werte** neben der Überschrift setzt eine Gruppe auf die Werte aus dem Quelltext zurück.
 
-**Whitelist** (Zusammenfassung + Button **Whitelist bearbeiten**) und **AWO-Faktor** (siehe [AWO-Faktor](#awo-faktor)):
+**Allgemein:** *Whitelist* (Anzahl, **Whitelist bearbeiten**), *Automatische Whitelist* (Veranstalter, DJs, Freunde, persönlich Bekannte; **Anzeigen**) und *Party-Termine* (Textdatei für die Termine in den Textvorlagen, **Datei wählen …**, Format `Wann - Wo - Was - Link`). **AWO-Faktor** (siehe [AWO-Faktor](#awo-faktor)): Anwesenheitsquote als Raster Männer/Frauen/Paare × Stufe 1–3, darunter die Gewichtung.
 
-<img src="docs/einstellungen-awo.png" width="560" alt="Whitelist und AWO-Faktor">
+<img src="docs/einstellungen-awo.png" width="560" alt="Allgemein und AWO-Faktor">
 
-- **Experten-Einstellungen** (beim Öffnen immer zugeklappt): **Ignorierliste** mit **Rangfolge der Quellen** (▲▼, Erklärung beim Darüberfahren) und **Limit** (rot), **API-Rekorder**, zuletzt **Betrieb** (Debug-Ausgaben, Testlauf, Obergrenze für den ersten Scan von Profilbesuchern/Interaktionen). Die Profilnotiz wird immer vor dem Ignorieren geschrieben; ohne gespeicherte Notiz wird nicht ignoriert (nicht abschaltbar).
+**Sicherung** (immer offen, direkt vor den Experten-Einstellungen), siehe [Sicherung](#sicherung-exporte-und-menü):
 
-  <img src="docs/einstellungen-experten.png" width="480" alt="Experten-Einstellungen">
+<img src="docs/einstellungen-sicherung.png" width="560" alt="Abschnitt Sicherung">
+
+- **Experten-Einstellungen** (beim Öffnen immer zugeklappt): **Ignorierliste** mit **Rangfolge der Quellen** (▲▼, Erklärung beim Darüberfahren) und **Limit** (Hinweis hellrot in Klammern), **API-Rekorder**, **Abgleich mit poppen.de**, zuletzt **Betrieb** (Debug-Ausgaben, Testlauf, Obergrenze für den ersten Scan, **Lauf zurücksetzen**). Jede Zeile hat eine kurze Beschreibung, längere Erklärungen stehen im Tooltip. Die Profilnotiz wird immer vor dem Ignorieren geschrieben; ohne gespeicherte Notiz wird nicht ignoriert (nicht abschaltbar).
+
+  <img src="docs/einstellungen-experten.png" width="560" alt="Experten-Einstellungen">
 - **Speichern / Abbrechen.** Wer die Seite mit ungespeicherten Änderungen verlässt, wird gefragt (*Speichern und verlassen / Verwerfen und verlassen / Abbrechen*); beim Schließen oder Neuladen des Tabs kommt die Standardabfrage des Browsers.
 
   <img src="docs/einstellungen-verlassen.png" width="360" alt="Rückfrage beim Verlassen">
@@ -118,7 +127,7 @@ Der Link **Quelltext-Werte** neben der Überschrift setzt eine Gruppe auf die We
 
 Der Haken **„Unklare Mitglieder erneut prüfen“** ruft deren Profile im Hintergrund auf (mit Sichtbarkeits-Warnung). Wird das Limit verringert, entsperrt das Skript in der Verdrängungs-Reihenfolge. Danach prüft es die JOYclub-Liste gegen die erwarteten Einträge und repariert sie. Von Hand Gesperrte werden nie angefasst. Nach jeder Regeländerung beginnen die Scans von vorn (Partys, Gruppen, Profilbesucher/„Mögen mich“).
 
-**Speicherung:** Die Einstellungen liegen im Tampermonkey-Speicher, zusammen mit dem zuletzt gesehenen Wert aus dem Quelltext. Ändert man einen Wert im Quelltext, gilt ab dann dieser; solange der Quelltext-Wert gleich bleibt, gilt der gespeicherte. Abweichungen vom Quelltext sind mit „°“ markiert, der Link **Quelltext-Wert** setzt zurück. Betroffen: `DRY_RUN`, `DEBUG`, `IGNORE_LIMIT`, `MYJOY_FIRST_MAX`, `GROUPS`, `AWO`, `WHITELIST`, `WRITE_NOTE`, `NOTE_REQUIRED`, `SOURCE_RANK`. Die Altersgrenzen bis 1.73 (`MAX_AGE`, `WARN_AGE`, `COUPLE_BOTH_MIN_AGE`, `COUPLE_AGE_GAP`, `ONLY_TYPES`) werden beim Update einmalig in die neue Tabelle übernommen; die Schalter bleiben dabei aus.
+**Speicherung:** Die Einstellungen liegen im Tampermonkey-Speicher, zusammen mit dem zuletzt gesehenen Wert aus dem Quelltext. Ändert man einen Wert im Quelltext, gilt ab dann dieser; solange der Quelltext-Wert gleich bleibt, gilt der gespeicherte. Der Link **Quelltext-Wert** neben einem abweichenden Wert setzt ihn zurück. Betroffen: `DRY_RUN`, `DEBUG`, `IGNORE_LIMIT`, `MYJOY_FIRST_MAX`, `GROUPS`, `AWO`, `WHITELIST`, `WRITE_NOTE`, `NOTE_REQUIRED`, `SOURCE_RANK`. Die Altersgrenzen bis 1.73 (`MAX_AGE`, `WARN_AGE`, `COUPLE_BOTH_MIN_AGE`, `COUPLE_AGE_GAP`, `ONLY_TYPES`) werden beim Update einmalig in die neue Tabelle übernommen; die Schalter bleiben dabei aus.
 
 ---
 
@@ -222,7 +231,7 @@ Zwei Übersichtsseiten der eigenen Eventanmeldungen haben einen Button **„Opa-
 
 ### Ablauf (im Hintergrund)
 
-Ab 1.93 holt der Hintergrund-Frame die Gästeliste über JOYclubs Schnittstelle (`guests_scroll_data`, 40 Anmeldungen je Abruf) und meldet den Fortschritt laufend; Scrollen nur noch als Rückfall. Kommt 90 Sekunden lang kein Lebenszeichen aus dem Frame, gilt die Party als Fehlschlag und der Scan geht zur nächsten. Bei eingeschaltetem API-Rekorder steht jeder Schritt (Seite geladen, Sonderseite erkannt, Gästeliste n, fertig/Fehler, Pausen) als „ablauf“ in der Zeitleiste.
+Ab 1.93 holt der Hintergrund-Frame die Gästeliste über JOYclubs Schnittstelle (`guests_scroll_data`, 40 Anmeldungen je Abruf) und meldet den Fortschritt laufend; Scrollen nur noch als Rückfall. Kommt 90 Sekunden lang kein Lebenszeichen aus dem Frame, gilt die Party als Fehlschlag und der Scan geht zur nächsten. Ab 1.94: Meldet sich der Frame 30 Sekunden nach dem Laden gar nicht (Seite startet im Hintergrund nicht), wird er einmal neu geladen, sonst nach weiteren 30 Sekunden abgebrochen; Nachrichten des Frames werden auch über Frame-Name und Herkunft erkannt. Bei eingeschaltetem API-Rekorder steht jeder Schritt (Seite geladen, Sonderseite erkannt, Gästeliste n, fertig/Fehler, Pausen) als „ablauf“ in der Zeitleiste.
 
 Ein Klick auf „Opa-Scan starten“ öffnet sofort das Scan-Popup (keine Browser-Meldungen): Es sammelt die Partys, nennt ihre Zahl bzw. den Grund, warum gerade kein Scan möglich ist, und startet erst mit **„Jetzt scannen …“**. Danach wird daraus „Abbrechen“.
 
@@ -243,7 +252,7 @@ Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, das P
 **Effizienz:**
 - Erneute Scans prüfen nur Neuanmeldungen seit dem letzten Scan; ändern sich die Regeln, wird automatisch wieder vollständig gescannt.
 - Reihenfolge: am längsten nicht gescannte Party zuerst – die nächste anstehende Party wird vorgezogen, wenn alle schon einmal gescannt wurden und der älteste Scan jünger ist als die Zeit bis zu dieser Party.
-- Fehlschläge werden mit Party, Profil-Link, Schritt und Meldung gespeichert und sind exportierbar.
+- Fehlschläge werden mit Party, Profil-Link, Schritt und Meldung gespeichert und stecken im Export des API-Rekorders.
 
 ### AWO-Faktor
 
@@ -344,7 +353,7 @@ Ablauf:
 
 ### Sonstiges
 
-- Das Popup während des Scans entspricht dem des Party-Scans (Warnhinweis, Fortschrittsbalken, Statistik, Abbrechen); am Ende gibt es Export-Buttons für Paare mit einer Altersangabe und Fehlschläge.
+- Das Popup während des Scans entspricht dem des Party-Scans (Warnhinweis, Fortschrittsbalken, Statistik, Abbrechen); Paare mit einer Altersangabe und Fehlschläge stecken im Export des API-Rekorders.
 - Header-Badge mit der Zahl der vom Skript blockierten Opas.
 - **Markierung der Ergebnisse** (bei normalem Aufruf, nicht in den Scan-Frames): Karten werden wie Gästelisten auf Partys eingefärbt, ignorierte Mitglieder bleiben sichtbar und bekommen ein rotes X; ein Klick darauf öffnet das Popup *„Du ignorierst …“* („Nicht mehr ignorieren“ schreibt hier `Whitelist: Suche am …`). Bei eingeschalteter visueller Einstufung zeigen die Symbole die Stufe (Opa/Oma in Stufe 3).
 - Eine unterbrochene systematische Suche (Abbrechen, Abmeldung) lässt sich im Auswahl-Popup an derselben Stelle fortsetzen.
@@ -490,7 +499,7 @@ Beim Setzen eines Zustands und bei jedem späteren Profilbesuch mit Änderungen 
 
 ### Meine Fickliste
 
-Unter **Profil verwalten → Fickliste** (erster Eintrag im Bereich „Community & Dating“ vor „Dates“, auch als Kachel dort auf der Startseite der Profilverwaltung und als erster Eintrag „Fickliste“ im Hamburger-Menü unter „Profil & Einstellungen“): jede Zeile ist ein Treffen; Personen ohne Treffen stehen mit „Kein Treffen eingetragen“ in der Liste (bei Datumssortierung am Ende, bei Namenssortierung alphabetisch; ausgeblendet, solange nach Wo, Club oder Datum gefiltert wird). Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Was/Wo (enthält)“, „Wo“ (Mehrfachauswahl inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. „Nein, danke!“ ist beim ersten Aufruf und nach „Filter zurücksetzen“ ausgeblendet; alle Filter und die Sortierung bleiben gespeichert. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
+Unter **Profil verwalten → Fickliste** (erster Eintrag im Bereich „Community & Dating“ vor „Dates“ – auch in der neuen Seitenleiste –, als Kachel nur dort auf der Startseite der Profilverwaltung und als erster Eintrag „Fickliste“ im Hamburger-Menü unter „Profil & Einstellungen“): jede Zeile ist ein Treffen; Personen ohne Treffen stehen mit „Kein Treffen eingetragen“ in der Liste (bei Datumssortierung am Ende, bei Namenssortierung alphabetisch; ausgeblendet, solange nach Wo, Club oder Datum gefiltert wird). Sortieren nach Name oder Datum (auf-/absteigend, Standard: neueste zuerst), filtern nach Mitglied (Vorschläge auch mitten im Nick), „Was/Wo (enthält)“, „Wo“ (Mehrfachauswahl inkl. „unbekannt“) und Datumsbereich; rechts die Zähler je Zustand als Filter. „Nein, danke!“ ist beim ersten Aufruf und nach „Filter zurücksetzen“ ausgeblendet; alle Filter und die Sortierung bleiben gespeichert. Der Nick öffnet das Profil (neuer Tab), „Profil-Archiv“ steht bündig untereinander, ein Klick auf die Zeile öffnet die Eintragung. Gelöschte Profile sind durchgestrichen, vorübergehend deaktivierte rot.
 
 <img src="docs/fickliste-uebersicht.png" width="700" alt="Seite Meine Fickliste">
 
@@ -614,7 +623,7 @@ Am Ende steht ein Bericht je Vorlage und die Liste der Smileys, die sich nicht �
 
 Mit dem Skript für poppen.de gleichen sich die Vorlagen auch automatisch ab (siehe Fickliste › „Automatischer Abgleich (Briefkasten)“).
 
-Die Vorlagen liest und schreibt das Skript über JOYclubs Schnittstelle (`apiv2 /users/<id>/notes`). Anlegen und Löschen sind noch nicht durch einen Mitschnitt bestätigt; schlägt etwas fehl, meldet der Import das und bittet um einen Mitschnitt mit dem API-Rekorder.
+Die Vorlagen liest und schreibt das Skript über JOYclubs Schnittstelle (`apiv2 /users/<id>/notes`). Lesen, Ändern (`PUT`), Anlegen (`POST`) und Löschen (`DELETE`) sind durch Mitschnitte bestätigt.
 
 ---
 
@@ -630,32 +639,32 @@ Die Vorlagen liest und schreibt das Skript über JOYclubs Schnittstelle (`apiv2 
 
 ## Sicherung, Exporte und Menü
 
-Im Tampermonkey-Menü:
+Alle Sicherungen stehen im Abschnitt **Sicherung** der Seite „Opa-Schutz“:
 
-| Menüeintrag | Inhalt |
+| Zeile | Inhalt |
 |---|---|
-| Alle Daten sichern (JSON) | eine Datei mit allem: Einstellungen, Gesperrte, alle Konten, Vorgemerkte, Whitelist, Gruppen, Gedächtnis, Party-Stände … Die **Fickliste** ist mit deinem Nick verschlüsselt (kein durchsuchbarer Klartext). |
-| Alle Daten wiederherstellen (JSON) | ersetzt nach Rückfrage alle Daten durch eine Sicherung; nach einem Nick-Wechsel wird der damalige Nick abgefragt (oder ohne Fickliste wiederherstellen) |
-| Fremde Datensicherung importieren (mischen) | übernimmt aus der Sicherung eines anderen Kontos nur das Wissen über andere Mitglieder: Typ, Geburtszeiträume (geschnitten), Sternzeichen, Online-Angaben, geprüfte Profile, Geschlechts-Zuordnung, unbekannte Typen. Abgleich über die Profil-ID; der zuletzt aufgerufene Stand gewinnt, bei Gleichstand der vollständigere, dann der eigene. Nicht übernommen: Partys/AWO, Einstellungen, Whitelist, Sperren, Ignorierliste, Gedächtnis, Vormerkliste, Sichtungen, Fickliste. Am Ende: neu / aktualisiert / eigene behalten. |
-| Unbekannte Profiltypen exportieren | vom Skript gefundene, unbekannte Profiltypen mit Beispielen |
-| Online-Angaben exportieren | vorkommende „zuletzt online“-Texte |
-| Fehlschläge des Party-Scans exportieren / löschen | gespeicherte Fehlschläge |
-| Paare mit nur einer Altersangabe exportieren | in der Suche gefundene Paare mit nur einem Alter |
-| Fehlschläge der Mitgliedersuche exportieren | gespeicherte Fehlschläge der Mitgliedersuche |
-| Einstellungen (Opa-Schutz) öffnen | öffnet die Seite „Opa-Schutz“ |
-| Partys beim nächsten Scan vollständig prüfen | vergisst die bereits geprüften Anmeldungen |
-| Erledigt-Liste leeren | löscht das Protokoll der vom Skript Ignorierten (mit Rückfrage) |
-| Fehlschläge leeren | löscht alle gespeicherten Fehlschläge (mit Rückfrage) |
-| Typen-Info leeren | löscht die gesammelten unbekannten Profiltypen (mit Rückfrage) |
-| Lauf zurücksetzen | Notfall: beendet alle laufenden Vorgänge und gibt die Tab-Sperre frei |
+| Alle Daten sichern | eine Datei mit allem: Einstellungen, Gesperrte, alle Konten, Vorgemerkte, Whitelist, Gruppen, Gedächtnis, Party-Stände … Die **Fickliste** ist mit deinem Nick verschlüsselt (kein durchsuchbarer Klartext). |
+| Gedächtnis sichern | Wissen über andere Mitglieder (Typ, Geburtszeiträume, Sternzeichen, Online-Angaben, geprüfte Profile, Geschlechts-Zuordnung), dazu **Fickliste** und **Textvorlagen** (beide mit deinem Nick verschlüsselt) – zum Mischen auf einem anderen Konto oder Rechner |
+| Wiederherstellen | ersetzt nach Rückfrage alle Daten durch eine eigene Sicherung; nach einem Nick-Wechsel wird der damalige Nick abgefragt (oder ohne Fickliste wiederherstellen) |
+| Fremde Datensicherung importieren | mischt eine Sicherung oder ein Gedächtnis ein (siehe unten) |
 
-Die CSV-Exporte (`;`, Excel-tauglich) unterhalb der Sicherung dienen nur der Fehlersuche und sind nicht in der Sicherung enthalten. Die früheren Einzel-Exporte (Liste, alle Konten, Vorgemerkte, Whitelist, Gruppen) stecken jetzt in der Sicherung; das Protokoll der Mitgliedersuche und „würden ignoriert“ gibt es nicht mehr.
+**Einmischen** (Abgleich über die Profil-ID; der zuletzt aufgerufene Stand gewinnt, bei Gleichstand der vollständigere, dann der eigene; Geburtszeiträume werden immer geschnitten):
+
+| Herkunft | Wissen über Mitglieder | Fickliste | Textvorlagen |
+|---|---|---|---|
+| **Eigenes Konto**, anderer Browser oder Rechner (Gedächtnis) | ja | abgleichen | abgleichen: neue anlegen, die geänderte Seite gewinnt, Ergänzungen zusammenführen, hier unveränderte und dort gelöschte in den Papierkorb; sind beide Seiten verschieden geändert oder fehlt ein gemeinsamer Stand, wird **übersprungen** (wer die andere Fassung will, löscht die eigene vorher) |
+| **Anderes Konto**, Haken „Auch Textvorlagen migrieren“ (eigenes Zweitkonto) | ja | nein | wie oben, aber Löschungen werden nicht übernommen; beim ersten Mal nur neue Vorlagen |
+| **Anderes Konto** ohne Haken (andere Person) | ja | nein | nie |
+
+Nicht übernommen werden aus fremden Sicherungen: Partys/AWO, Einstellungen, Whitelist, Sperren, Ignorierliste, Vormerkliste, Sichtungen.
+
+**Tampermonkey-Menü:** nur noch **Rekorder exportieren** und **Rekorder leeren**. Der Export des API-Rekorders enthält auch alle Diagnose-Daten (`diag`): unbekannte Profiltypen, Fehlschläge von Party-Scan und Mitgliedersuche, Paare mit nur einer Altersangabe und „zuletzt online“-Angaben, die von den bekannten abweichen. „Rekorder leeren“ leert diese Daten mit. „Lauf zurücksetzen“ steht unter Experten › Betrieb.
 
 ---
 
 ## Schnittstellen und API-Rekorder
 
-Ab 1.93: Listen werden auf 50 Einträge gekürzt (statt 2), je Beispiel höchstens etwa 20 KB; je Adresse bis zu 12 verschiedene Beispiele (gleiche Inhalte nur einmal). Parameter, die eine Art auswählen (`module`, `feed`, `type`, `mode`, `tab`, `filter`, `route`, `kind`), gehören mit ihrem Wert zum Schlüssel. Mehrere Tabs: beim Export schreiben alle Tabs ihren Puffer sofort, „Leeren“ verwirft auch noch nicht geschriebene Puffer anderer Tabs. Solange der Rekorder läuft, stehen „Rekorder exportieren“ und „Rekorder leeren“ auch im Tampermonkey-Menü.
+Ab 1.93: Listen werden auf 50 Einträge gekürzt (statt 2), je Beispiel höchstens etwa 20 KB; je Adresse bis zu 12 verschiedene Beispiele (gleiche Inhalte nur einmal). Parameter, die eine Art auswählen (`module`, `feed`, `type`, `mode`, `tab`, `filter`, `route`, `kind`), gehören mit ihrem Wert zum Schlüssel. Mehrere Tabs: beim Export schreiben alle Tabs ihren Puffer sofort, „Leeren“ verwirft auch noch nicht geschriebene Puffer anderer Tabs. „Rekorder exportieren“ und „Rekorder leeren“ stehen immer im Tampermonkey-Menü. Ab 1.94 schreibt der Rekorder auch Formulare mit, die die Seite selbst per Skript abschickt, und sichert seine Puffer vor dem Verlassen der Seite.
 
 **Schnittstellen:** Wo es geht, arbeitet das Skript über die Schnittstellen, die JOYclub selbst benutzt – schneller und ohne Profilaufruf (also ohne sichtbaren Besuch):
 

@@ -1,6 +1,17 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.94 (28.10.2026)
+- Einstellungen neu gestaltet: Versionsnummer (→ Changelog), „Anleitung“ und „Fehler melden“ im Titel (neuer Tab), keine Brotkrümel mehr (auch nicht auf „Meine Fickliste“); Gruppen-Tabellen über die volle Breite und in allen Gruppen gleich breit (Regler pixelgenau gleich), Erklärungen als Tooltips, Bezeichnungen als Raster Einzahl/Mehrzahl
+- Neu je Gruppe: „Grenzen altern mit mir“ (visuell) und „Grenze altert mit mir“ (Ignorieren) – die Grenzen steigen mit dem eigenen Alter, entsperrt wird dadurch niemand; bei Paaren „Paar-Regel“: beide oder einer über der Grenze
+- Abschnitt „Allgemein“ (Whitelist, Automatische Whitelist, Party-Termine), AWO-Faktor als Raster, neuer Abschnitt „Sicherung“ (immer offen) mit „Gedächtnis sichern“ (Wissen, Fickliste, Textvorlagen), Experten mit kurzen Beschreibungen und „Lauf zurücksetzen“; Markierung „°“ entfällt
+- Gedächtnis-Import: eigenes Konto gleicht Fickliste und Textvorlagen ab; anderes Konto nur mit Haken „Auch Textvorlagen migrieren“ (ohne Löschungen), sonst nie; uneindeutige Textvorlagen werden übersprungen
+- Tampermonkey-Menü nur noch „Rekorder exportieren/leeren“; Diagnose (unbekannte Profiltypen, Fehlschläge, Paare mit einem Alter, neue Online-Angaben) im Rekorder-Export und beim Leeren mit geleert; CSV-Knöpfe entfallen
+- Rekorder: auch per Skript abgeschickte Formulare (z. B. Stornieren), Puffer werden vor dem Verlassen der Seite gesichert
+- Party-Scan: Hintergrund-Frame wird auch über Name und Herkunft erkannt; startet die Seite im Hintergrund nicht, einmal neu laden statt 90 s zu warten
+- Profiltypen: Bezeichnungen des Skripts (Opa, Oma, Geronto-Paar …) werden nicht mehr als unbekannte Typen gelernt (einmalige Bereinigung); Profile mit mehreren Personen als „Mehrere Personen“
+- Fickliste: Kachel nur noch unter „Community & Dating“, Eintrag auch in der neuen Seitenleiste vor „Dates“
+
 1.93 (28.10.2026)
 - Opa-Scan Partys: Gästeliste im Hintergrund über die Schnittstelle (schnell, mit Fortschritt); 90 s ohne Lebenszeichen → Party als Fehlschlag, weiter mit der nächsten
 - „Wartung“ nur noch bei echten Anzeichen; unbekannte Zwischenseiten: neuer Versuch nach 1 min (höchstens 3×) statt 35 Minuten Pause; Wartungspause mit Grund und „Jetzt weiter“
