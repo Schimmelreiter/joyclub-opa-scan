@@ -222,6 +222,8 @@ Zwei Übersichtsseiten der eigenen Eventanmeldungen haben einen Button **„Opa-
 
 ### Ablauf (im Hintergrund)
 
+Ab 1.93 holt der Hintergrund-Frame die Gästeliste über JOYclubs Schnittstelle (`guests_scroll_data`, 40 Anmeldungen je Abruf) und meldet den Fortschritt laufend; Scrollen nur noch als Rückfall. Kommt 90 Sekunden lang kein Lebenszeichen aus dem Frame, gilt die Party als Fehlschlag und der Scan geht zur nächsten. Bei eingeschaltetem API-Rekorder steht jeder Schritt (Seite geladen, Sonderseite erkannt, Gästeliste n, fertig/Fehler, Pausen) als „ablauf“ in der Zeitleiste.
+
 Ein Klick auf „Opa-Scan starten“ öffnet sofort das Scan-Popup (keine Browser-Meldungen): Es sammelt die Partys, nennt ihre Zahl bzw. den Grund, warum gerade kein Scan möglich ist, und startet erst mit **„Jetzt scannen …“**. Danach wird daraus „Abbrechen“.
 
 <img src="docs/party-start.png" width="400" alt="Party-Scan vor dem Start">
@@ -358,17 +360,22 @@ Alle Scans (Party, Mitgliedersuche, Gruppen, Profilprüfungen im Hintergrund) er
 |---|---|---|
 | angemeldet | `body[data-session-user-id]` | normal weiter |
 | abgemeldet | Gast-Seite („Erst einloggen, dann loslegen – Fehler 401“, `body.guest`, Login-Link) | Login in einem kleinen Fenster über `www.joyclub.de/webauth/login/` → `identity.joyclub.com`: sind Benutzername und Passwort (vom Browser) ausgefüllt, hakt das Skript „Angemeldet bleiben“ an und klickt „Login“ – höchstens einmal pro Abmeldung und einmal in 30 Minuten. Klappt das nicht (leere Felder, Cloudflare-Prüfung), pausiert der Scan, bis man sich im Fenster selbst angemeldet hat, und läuft dann weiter |
-| Wartungsseite | weder angemeldet noch Login-Feld | Uhrzeit aus dem Hinweis lesen („bis voraussichtlich 17 Uhr“) und bis dahin plus zufällig 5–10 Minuten **gar nicht** auf JOYclub zugreifen (ohne Uhrzeit: 30 Minuten plus 5–10); danach den unterbrochenen Schritt wiederholen |
+| Wartungsseite | weder angemeldet noch Login-Feld, **und** der Text nennt Wartung, „gleich wieder da“, Überlastung, 502/503 o. Ä. | Uhrzeit aus dem Hinweis lesen („bis voraussichtlich 17 Uhr“) und bis dahin plus zufällig 5–10 Minuten **gar nicht** auf JOYclub zugreifen (ohne Uhrzeit: 30 Minuten plus 5–10); danach den unterbrochenen Schritt wiederholen |
 
-Pausen zählen nicht als Fehlschlag, gelten für alle Tabs und stehen im Protokoll-Export der Mitgliedersuche. Während einer Pause heißt das Popup „Opa-Scan pausiert“. Erkannt werden Uhrzeiten wie „bis voraussichtlich 17 Uhr“, „ab 17:30 Uhr“ oder „17:00“.
+| unerwartete Seite | weder angemeldet noch Login noch Wartungs-Hinweis (z. B. Zwischen- oder Fehlerseite) | nach 1 Minute erneut versuchen, höchstens 3×; danach gilt nur dieser Schritt als Fehlschlag (z. B. diese eine Party), der Scan geht weiter |
+
+Während einer Wartungspause nennt das Fenster den erkannten Hinweis und bietet **„Jetzt weiter“** (sofort erneut versuchen). Pausen zählen nicht als Fehlschlag, gelten für alle Tabs und stehen im Protokoll-Export der Mitgliedersuche. Während einer Pause heißt das Popup „Opa-Scan pausiert“. Erkannt werden Uhrzeiten wie „bis voraussichtlich 17 Uhr“, „ab 17:30 Uhr“ oder „17:00“.
 
 **Ohne laufenden Scan:**
 
 | Seite | Reaktion |
 |---|---|
 | Wartungsseite | Hinweis oben auf der Seite; neu geladen wird zur angegebenen Uhrzeit (jede neue Uhrzeit wird übernommen), ohne oder mit schon vergangener Uhrzeit nach 5, 10, 15 … höchstens 30 Minuten |
+| „Erst einloggen, dann loslegen“ (401) | Hinweis oben und nach 1–2 Sekunden weiter über den Login-Knopf (mit Rücksprung auf die gewünschte Seite); dort meldet das Skript wie unten an. Schlug der letzte automatische Login in den vergangenen 30 Minuten fehl, nur der Hinweis „automatisches Anmelden gesperrt – bitte selbst einloggen“ |
 | „Seite nicht gefunden“ | einmal neu laden; bleibt es dabei, wird die Adresse vermerkt (`jaf_notfound`) |
 | Login-Seite (`identity.joyclub.com/ui/login/…`) | „Angemeldet bleiben“ setzen und „Login“ klicken, sobald der Browser Name und Passwort eingefüllt hat und die Cloudflare-Prüfung durch ist – höchstens einmal in 30 Minuten (gemeinsam mit dem Login aus einem Scan). Das Skript speichert kein Passwort. Chrome/Edge geben eingefüllte Passwörter oft erst nach einem Klick frei; klappt es nicht, erscheint „Bitte einmal selbst auf ‚Login‘ klicken“. |
+
+<img src="docs/login-401.png" width="560" alt="Hinweis auf der 401-Seite">
 
 Werbeseiten werden behandelt, sobald ein Beispiel vorliegt.
 
@@ -647,6 +654,8 @@ Die CSV-Exporte (`;`, Excel-tauglich) unterhalb der Sicherung dienen nur der Feh
 ---
 
 ## Schnittstellen und API-Rekorder
+
+Ab 1.93: Listen werden auf 50 Einträge gekürzt (statt 2), je Beispiel höchstens etwa 20 KB; je Adresse bis zu 12 verschiedene Beispiele (gleiche Inhalte nur einmal). Parameter, die eine Art auswählen (`module`, `feed`, `type`, `mode`, `tab`, `filter`, `route`, `kind`), gehören mit ihrem Wert zum Schlüssel. Mehrere Tabs: beim Export schreiben alle Tabs ihren Puffer sofort, „Leeren“ verwirft auch noch nicht geschriebene Puffer anderer Tabs. Solange der Rekorder läuft, stehen „Rekorder exportieren“ und „Rekorder leeren“ auch im Tampermonkey-Menü.
 
 **Schnittstellen:** Wo es geht, arbeitet das Skript über die Schnittstellen, die JOYclub selbst benutzt – schneller und ohne Profilaufruf (also ohne sichtbaren Besuch):
 

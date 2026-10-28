@@ -1,6 +1,12 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.93 (28.10.2026)
+- Opa-Scan Partys: Gästeliste im Hintergrund über die Schnittstelle (schnell, mit Fortschritt); 90 s ohne Lebenszeichen → Party als Fehlschlag, weiter mit der nächsten
+- „Wartung“ nur noch bei echten Anzeichen; unbekannte Zwischenseiten: neuer Versuch nach 1 min (höchstens 3×) statt 35 Minuten Pause; Wartungspause mit Grund und „Jetzt weiter“
+- 401-Seite „Erst einloggen, dann loslegen“: automatisch über den Login weiter und zurück (höchstens 1× in 30 min, sonst Hinweis)
+- API-Rekorder: Listen bis 50 Einträge, bis 12 verschiedene Beispiele je Adresse, Auswahl-Parameter (module, feed …) im Schlüssel, sicher mit mehreren Tabs, Menüeinträge „Rekorder exportieren/leeren“, Ablauf-Protokoll der Scans in der Zeitleiste
+
 1.92 (25.10.2026)
 - API-Rekorder: Hintergrund-Anfragen mit HTML-Antwort werden bei POST/PUT/DELETE mitgeschnitten (z. B. Stornieren einer Party-Anmeldung)
 

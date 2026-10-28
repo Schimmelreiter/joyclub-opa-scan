@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.92
+// @version      1.93
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -152,6 +152,16 @@
     return '';
   };
   const apiJsonish = (s) => typeof s === 'string' && /^\s*[[{]/.test(s) && (() => { try { JSON.parse(s); return true; } catch (e) { return false; } })();
+  let apiArrMax = 50; // Listen auf so viele Einträge kürzen (Code-Listen bleiben auswertbar)
+  const API_EX_MAX = 12, API_EX_BYTES = 20000;
+  // Beispiel schwärzen und auf ~20 KB begrenzen (erst Listen kürzer, dann abschneiden)
+  function apiRedactCap(v) {
+    let r = apiRedact(v), j = JSON.stringify(r) || '';
+    if (j.length > API_EX_BYTES) { apiArrMax = 5; try { r = apiRedact(v); j = JSON.stringify(r) || ''; } finally { apiArrMax = 50; } }
+    if (j.length > API_EX_BYTES) r = `(gekürzt: ${j.slice(0, 1500)} … ${j.length} Zeichen)`;
+    return r;
+  }
+  const apiHashStr = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); };
   function apiRedact(v, depth = 0, keyHint = '', key = '') {
     if (v == null) return v;
     if (typeof v === 'string') {
@@ -165,8 +175,8 @@
     if (typeof v === 'number' || typeof v === 'boolean') return keyHint && keyHint !== 'Text' ? `[${keyHint}]` : v;
     if (depth > 16) return '[…]';
     if (Array.isArray(v)) {
-      const out = v.slice(0, 2).map((x) => apiRedact(x, depth + 1, keyHint, key));
-      if (v.length > 2) out.push({ '…': `insgesamt ${v.length} Einträge` });
+      const out = v.slice(0, apiArrMax).map((x) => apiRedact(x, depth + 1, keyHint, key));
+      if (v.length > apiArrMax) out.push({ '…': `insgesamt ${v.length} Einträge` });
       return out;
     }
     if (typeof v === 'object') {
@@ -186,9 +196,11 @@
     try { url = new URL(u, location.href); } catch (e) { return { path: String(u).slice(0, 200), qk: '', host: '', example: '' }; }
     const path = url.pathname.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':uuid').replace(/\b[0-9a-f]{24,}\b/gi, ':hex').replace(/\d{3,}/g, ':id');
     const qk = [...url.searchParams.keys()].sort();
+    // Parameter, die eine „Art“ auswählen (module, feed …): Wert gehört zum Schlüssel, IDs nicht
+    const sel = qk.filter((k) => /^(module|feed|type|mode|tab|filter|route|kind)$/i.test(k)).map((k) => `${k}=${String(url.searchParams.get(k) || '').replace(/\d{3,}/g, ':id').slice(0, 40)}`);
     const q = new URLSearchParams();
     for (const [k, x] of url.searchParams) q.append(k, apiRedactKey(k) ? `[${apiRedactKey(k)}]` : apiRedact(x));
-    return { host: url.host, path, qk: qk.join(','), example: url.origin + url.pathname + (q.toString() ? '?' + q.toString() : '') };
+    return { host: url.host, path, qk: qk.join(',') + (sel.length ? ' [' + sel.join('&') + ']' : ''), example: url.origin + url.pathname + (q.toString() ? '?' + q.toString() : '') };
   }
   // Request-Body → Objekt (Formulare: data-JSON wird zerlegt)
   function apiParseBody(b) {
@@ -235,25 +247,30 @@
   let apiFlushT = 0;
   function apiFlush() {
     apiFlushT = 0;
+    const clr = +GM_getValue('jaf_api_clr', 0) || 0; // „Leeren“ in einem Tab: ältere Puffer der anderen Tabs verwerfen
     if (apiBuf) {
       const log = GM_getValue(K_API_LOG, {}) || {};
       for (const [k, e] of Object.entries(apiBuf)) {
+        e.ex = e.ex.filter((x) => x.ts > clr);
+        if (e.last <= clr) continue;
         const o = log[k];
         if (!o) { if (Object.keys(log).length < API_MAX_KEYS) log[k] = e; continue; }
-        o.n += e.n; o.last = e.last;
+        o.n += e.n; o.last = Math.max(o.last || 0, e.last);
         if (e.poll) o.poll = true;
-        for (const x of e.ex) if (o.ex.length < (o.poll ? 1 : 2)) o.ex.push(x);
+        for (const x of e.ex) if (o.ex.length < (o.poll ? 1 : API_EX_MAX) && !o.ex.some((y) => y.h && y.h === x.h)) o.ex.push(x);
       }
       apiBuf = null;
       GM_setValue(K_API_LOG, log);
     }
     if (apiTl) {
-      const tl = (GM_getValue(K_API_TL, []) || []).concat(apiTl).slice(-3000);
+      const tl = (GM_getValue(K_API_TL, []) || []).concat(apiTl.filter((x) => x.ts > clr)).sort((a, b) => a.ts - b.ts).slice(-3000);
       apiTl = null;
       GM_setValue(K_API_TL, tl);
     }
   }
   const apiSched = () => { if (!apiFlushT) apiFlushT = setTimeout(apiFlush, 3000); };
+  // Export in einem Tab: alle anderen Tabs schreiben ihren Puffer sofort
+  try { GM_addValueChangeListener('jaf_api_flushreq', (k, o, n, remote) => { if (remote) apiFlush(); }); } catch (e) { /* egal */ }
   // aktive Erfassung: global an, oder Vorgang mit Rückfällen
   function apiRecState() {
     let on = false, forced = [];
@@ -294,10 +311,12 @@
       e.n++; e.last = now;
       if (poll) e.poll = true;
       const ctx = Object.assign(apiPageInfo(), { trigger: apiTrigger(now) });
-      if (e.ex.length < (e.poll ? 1 : 2) && !poll) {
+      if (e.ex.length < (e.poll ? 1 : API_EX_MAX) && !poll) {
         let res = resBody;
         if (typeof res === 'string') { try { res = JSON.parse(res); } catch (x) { res = `(${ctype || 'Text'}, ${res.length} Zeichen)`; } }
-        e.ex.push({ ts: now, when: apiLocal(now), url: p.example, status, ctx, hdr: (hdrs || []).map((h) => String(h).toLowerCase()), req: apiRedact(req), res: apiRedact(res) });
+        const rq = apiRedactCap(req), rs = apiRedactCap(res);
+        const h = apiHashStr(JSON.stringify([p.example, status, rq, rs]));
+        if (!e.ex.some((x) => x.h === h)) e.ex.push({ ts: now, when: apiLocal(now), url: p.example, status, ctx, hdr: (hdrs || []).map((h2) => String(h2).toLowerCase()), req: rq, res: rs, h });
       }
       apiTlAdd({ t: 'aufruf', key: `${method.toUpperCase()} ${full}${op ? ' ' + op : ''}`, status, page: ctx.page, trigger: ctx.trigger, frame: ctx.frame });
       apiSched();
@@ -5517,6 +5536,7 @@
     return t > Date.now() ? t : null; // schon vorbei → unbekannt
   }
   // Zustand einer (geladenen oder abgerufenen) Seite: null = angemeldet, sonst { type:'login'|'maint', text, until }
+  const GATE_MAINT_RE = /wartung|maintenance|nicht erreichbar|gleich wieder|bald wieder|zurück ?sein|überlastet|ueberlastet|service unavailable|bad gateway|gateway time-?out|too many requests|\b50[234]\b|\b429\b/i;
   function pageGate(doc = document, html = '') {
     const b = doc && doc.body;
     if (!b && !html) return null;
@@ -5530,7 +5550,10 @@
     if (hasPw) return { type: 'login' };
     const text = ((b && (b.innerText || b.textContent)) || '').replace(/\s+/g, ' ').trim();
     const main = (doc.querySelector('#custom_msg_container, h1') || {}).textContent || '';
-    return { type: 'maint', text: (main.trim() || text).slice(0, 240), until: parseUntil(text) };
+    const title = (doc.title || '').trim();
+    // „Wartung“ nur bei echten Anzeichen – sonst eine unerwartete Seite (Fragment, Zwischenseite …), kein langer Stillstand
+    if (GATE_MAINT_RE.test(`${title} ${main} ${text.slice(0, 3000)}`)) return { type: 'maint', text: (main.trim() || text).slice(0, 240), until: parseUntil(text) };
+    return { type: 'odd', text: (main.trim() || title || text).slice(0, 160), title: title.slice(0, 120) };
   }
   const scanActive = () => !!(window.__jafBgBusy || (bgScan && bgScan.running) || getState().running || getOpa().running || getEv().running);
   const fmtHM = (t) => { const d = new Date(t); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
@@ -5542,22 +5565,30 @@
   async function gateWaitStored() {
     const g = gmGet(K_GATE, null);
     if (!g || !g.until || g.until <= Date.now()) return;
-    const head = 'JOYclub ist vorübergehend nicht erreichbar';
+    const head = `JOYclub ist vorübergehend nicht erreichbar${g.text ? ` („${String(g.text).slice(0, 80)}“)` : ''}`;
     const pop = document.getElementById('jaf-bg-popup');
     const oldTitle = pop && pop.querySelector('.jaf-bg-title').textContent;
-    if (pop) bgTitle(opaT('Opa-Scan pausiert'), true);
+    if (pop) { bgTitle(opaT('Opa-Scan pausiert'), true); bgButtons([{ label: 'Jetzt weiter', fn: () => { gmSet(K_GATE, null); } }, bgStopButton()]); }
+    bgDiag(`Pause wegen Wartung bis ${fmtHM(g.until)}: ${g.text || '?'}`);
     while (Date.now() < g.until) {
       if (bgScan && bgScan.stop) throw new Error('abgebrochen');
       const left = Math.ceil((g.until - Date.now()) / 60000);
-      gateNotice(`${head} – nächster Versuch um ${fmtHM(g.until)} (noch ${left} min). Bis dahin kein Zugriff auf JOYclub.`);
+      gateNotice(`${head} – nächster Versuch um ${fmtHM(g.until)} (noch ${left} min). Bis dahin kein Zugriff auf JOYclub. „Jetzt weiter“ versucht es sofort.`);
       await sleep(Math.min(15000, Math.max(500, g.until - Date.now())));
       const g2 = gmGet(K_GATE, null);
       if (!g2 || g2.until !== g.until) break; // anderer Tab hat neu entschieden
     }
-    if (pop && document.getElementById('jaf-bg-popup')) bgTitle(oldTitle || opaT('Opa-Scan läuft im Hintergrund'), true);
+    if (pop && document.getElementById('jaf-bg-popup')) { bgTitle(oldTitle || opaT('Opa-Scan läuft im Hintergrund'), true); bgButtons([bgStopButton()]); }
   }
   // Seite war Wartung/Login: warten bzw. einloggen. Wirft bei Abbruch oder gescheitertem Login.
   async function handleGate(g, url) {
+    if (g.type === 'odd') {
+      // unerwartete Seite: kurz warten und erneut versuchen (der Aufrufer zählt die Versuche)
+      bgDiag(`Unerwartete Seite statt ${url}: „${g.title || g.text || '?'}“ – neuer Versuch in 1 min`);
+      gateNotice(`Unerwartete Seite („${(g.title || g.text || '?').slice(0, 60)}“) – neuer Versuch in 1 Minute.`);
+      for (let i = 0; i < 60; i++) { if (bgScan && bgScan.stop) throw new Error('abgebrochen'); await sleep(1000); }
+      return;
+    }
     if (g.type === 'maint') {
       const base = g.until || (Date.now() + 30 * 60000);
       const until = base + rand(5 * 60000, 10 * 60000);
@@ -5619,7 +5650,7 @@
       if (!/html/i.test(ct) && !/^\s*</.test(html)) return { ok: r.ok, status: r.status, url: r.url, html, doc: null };
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const g = pageGate(doc, html);
-      if (!g) return { ok: r.ok, status: r.status, url: r.url, html, doc };
+      if (!g || g.type === 'odd') return { ok: r.ok, status: r.status, url: r.url, html, doc };
       if (!scanActive()) throw Object.assign(new Error(g.type === 'login' ? 'Abgemeldet' : 'JOYclub ist vorübergehend nicht erreichbar'), { gate: g });
       await handleGate(g, r.url);
     }
@@ -5627,14 +5658,36 @@
   }
   // Hintergrund-Frame mit Wartungs-/Login-Behandlung (für Scans)
   async function bgFrameG(url, name, onProgress, timeoutMs) {
+    let odd = 0;
     for (let i = 0; i < 50; i++) {
       await gateWaitStored();
       try { return await bgFrame(url, name, onProgress, timeoutMs); } catch (e) {
         if (!e.gate) throw e;
+        if (e.gate.type === 'odd' && ++odd >= 3) throw new Error(`Seite nicht lesbar („${e.gate.title || e.gate.text || '?'}“)`);
         await handleGate(e.gate, e.gateUrl || url);
       }
     }
     throw new Error('JOYclub bleibt nicht erreichbar');
+  }
+  // „Erst einloggen, dann loslegen“ (401) im Tab: über den Login-Knopf weiter (zurück zur gewünschten Seite);
+  // dort meldet das Skript an, wenn der Browser die Felder ausfüllt. Höchstens 1× je 30 min, sonst nur ein Hinweis.
+  function login401() {
+    if (IN_FRAME) return false;
+    const last = GM_getValue('jaf_login_try', 0) || 0;
+    const b = document.createElement('div');
+    b.id = 'jaf-login401';
+    b.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:2147483646;background:#3a2a10;border:1px solid #ffb300;color:#fff;border-radius:8px;padding:10px 16px;font:14px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5);max-width:92vw';
+    if (Date.now() - last < LOGIN_RETRY_MS) {
+      b.textContent = opaT(`Opa-Scan: Nicht eingeloggt – automatisches Anmelden ist bis ${fmtHM(last + LOGIN_RETRY_MS)} gesperrt (letzter Versuch schlug fehl). Bitte selbst einloggen.`);
+      (document.body || document.documentElement).appendChild(b);
+      return true;
+    }
+    b.textContent = opaT('Opa-Scan: Nicht eingeloggt – melde automatisch an und komme hierher zurück …');
+    (document.body || document.documentElement).appendChild(b);
+    const a = document.querySelector('a[href*="/webauth/login/"]');
+    const target = (a && a.href) || loginUrlFor(location.href.split('#')[0]);
+    setTimeout(() => { location.href = target; }, 1500);
+    return true;
   }
   // oberste Seite ist Wartung/Login, während ein Scan mit Seitenwechsel läuft → warten bzw. einloggen. true = behandelt
   async function topGate() {
@@ -5645,6 +5698,18 @@
       if (tok) { gmSet(K_LOGIN_RESULT, { token: tok, ok: true, ts: Date.now() }); if (window.name === 'jaf-login') setTimeout(() => window.close(), 500); }
       return plainSpecialPage(null);
     }
+    if (g.type === 'odd') {
+      if (!scanActive()) return false;
+      // unerwartete Seite während eines Scans mit Seitenwechsel: höchstens 3× nach 1 min neu laden
+      let n = 0; const key = 'jaf_odd_' + location.pathname;
+      try { n = +(sessionStorage.getItem(key) || 0); sessionStorage.setItem(key, String(n + 1)); } catch (e) { n = 9; }
+      if (n >= 3) return false;
+      const p = panel(); p.innerHTML = '<b>Alter-Filter</b><br>';
+      log(`Unerwartete Seite („${(g.title || g.text || '?').slice(0, 60)}“) – lade in 1 Minute neu (Versuch ${n + 1}/3).`);
+      setTimeout(() => location.reload(), 60000);
+      return true;
+    }
+    if (g.type === 'login' && !scanActive() && !/^\/webauth\//.test(location.pathname) && document.querySelector('.error_page_container')) return login401();
     if (!scanActive()) return g.type === 'maint' && /wartung|maintenance|nicht erreichbar|gleich wieder|bald wieder/i.test(`${g.text || ''} ${document.title}`) ? plainSpecialPage(g) : false;
     if (/^\/webauth\//.test(location.pathname)) return true; // Login-Weiterleitung läuft gerade
     const p = panel(); p.innerHTML = '<b>Alter-Filter</b><br>';
@@ -5666,6 +5731,13 @@
     return true;
   }
 
+  // Ablauf-Protokoll für Scans (Rekorder-Zeitleiste, wenn er läuft; immer auch in der Konsole)
+  function bgDiag(msg) {
+    try {
+      console.log('[Alter-Filter][Ablauf]', msg);
+      if (API_STATE.on || API_STATE.forced.length) { apiTlAdd(Object.assign({ t: 'ablauf', label: String(msg).slice(0, 200) }, apiPageInfo())); apiSched(); }
+    } catch (e) { /* egal */ }
+  }
   // allgemeiner Hintergrund-Frame: lädt url mit Frame-Namen name, wartet auf die Antwort (postMessage jaf:'bg')
   function bgFrame(url, name, onProgress, timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -5674,16 +5746,24 @@
       f.src = url;
       f.style.cssText = 'position:fixed;left:0;top:0;width:1100px;height:900px;opacity:0;pointer-events:none;z-index:-1;border:0';
       f.setAttribute('aria-hidden', 'true'); f.tabIndex = -1;
-      const done = (fn, v) => { window.removeEventListener('message', onMsg); clearTimeout(t); f.remove(); fn(v); };
+      const done = (fn, v) => { window.removeEventListener('message', onMsg); clearTimeout(t); if (f.__jafCleanup) f.__jafCleanup(); f.remove(); fn(v); };
       const onMsg = (ev) => {
         if (ev.source !== f.contentWindow || !ev.data || ev.data.jaf !== 'bg') return;
+        if (ev.data.diag) { bgDiag(`Frame ${name}: ${ev.data.diag}`); return; }
         if (ev.data.vis != null) lastVis = { v: ev.data.vis, ts: Date.now() };
         if (ev.data.progress != null) { if (onProgress) onProgress(ev.data.progress); return; }
-        if (ev.data.gate) done(reject, Object.assign(new Error(ev.data.gate.type === 'login' ? 'Abgemeldet' : 'JOYclub ist vorübergehend nicht erreichbar'), { gate: ev.data.gate, gateUrl: ev.data.url }));
+        if (ev.data.gate) done(reject, Object.assign(new Error(ev.data.gate.type === 'login' ? 'Abgemeldet' : ev.data.gate.type === 'odd' ? 'Unerwartete Seite' : 'JOYclub ist vorübergehend nicht erreichbar'), { gate: ev.data.gate, gateUrl: ev.data.url }));
         else if (ev.data.error) done(reject, new Error(ev.data.error)); else done(resolve, ev.data);
       };
       const t = setTimeout(() => done(reject, new Error('Zeitüberschreitung')), timeoutMs);
+      // Party-Seiten: höchstens 90 s ohne jedes Lebenszeichen aus dem Frame
+      let alive = Date.now();
+      const idle = name === 'jaf-bg-ev' ? setInterval(() => { if (Date.now() - alive > 90000) { clearInterval(idle); bgDiag(`Frame ${name}: 90 s ohne Fortschritt – abgebrochen`); done(reject, new Error('Kein Fortschritt (90 s)')); } }, 5000) : 0;
+      const onAny = (ev) => { if (ev.source === f.contentWindow && ev.data && ev.data.jaf === 'bg') alive = Date.now(); };
+      window.addEventListener('message', onAny);
       window.addEventListener('message', onMsg);
+      f.addEventListener('load', () => { alive = Date.now(); });
+      f.__jafCleanup = () => { window.removeEventListener('message', onAny); if (idle) clearInterval(idle); };
       document.body.appendChild(f);
     });
   }
@@ -5692,6 +5772,7 @@
   // IM Frame: Event-Seite auslesen (Party-Infos, VIP-Links, Veranstalter, komplette Gästeliste „Alle“)
   async function bgEventFrame() {
     try {
+      bgPost({ diag: 'Event-Seite geladen' });
       await waitFor(() => document.querySelector('#guest_list'), 30000);
       const info = eventInfo();
       const vips = [];
@@ -5702,16 +5783,33 @@
         if (!vips.some((v) => v.id === id)) vips.push({ id, name: a.textContent.trim(), url: location.origin + path, path });
       });
       const orgs = eventOrganizers();
-      const gTab = document.querySelector('a[href="#guest_list"]');
-      if (gTab) gTab.click();
-      await sleep(500);
-      const aTab = document.querySelector('a[href="#guest_alle"]');
-      if (aTab) aTab.click();
-      await sleep(800);
-      const pane = document.getElementById('guest_alle');
-      const html = pane ? (await loadPaneFully(pane, (n) => bgPost({ progress: n })), [...pane.querySelectorAll('li.date_card')].map((li) => li.outerHTML)) : [];
-      bgPost({ info, vips, orgs, html, hasList: !!pane });
-    } catch (e) { bgPost({ error: e.message || String(e) }); }
+      // Gästeliste zuerst über die Schnittstelle (schnell, mit Fortschritt), sonst wie bisher per Scrollen
+      const eid = eventIdOf(location.pathname);
+      let html = null;
+      if (eid) {
+        try { html = await apiGuests(eid, 'alle', (n) => bgPost({ progress: n })); } catch (e) { html = null; }
+        bgPost({ diag: html && html.length ? `Gästeliste über die Schnittstelle: ${html.length}` : 'Schnittstelle lieferte nichts – lade per Seite' });
+      }
+      let hasList = !!(html && html.length);
+      if (!hasList) {
+        const gTab = document.querySelector('a[href="#guest_list"]');
+        if (gTab) gTab.click();
+        await sleep(500);
+        const aTab = document.querySelector('a[href="#guest_alle"]');
+        if (aTab) aTab.click();
+        await sleep(800);
+        const pane = document.getElementById('guest_alle');
+        hasList = !!pane;
+        if (pane) {
+          // lädt die Seite dieselbe Liste schon selbst (Reiter-Aufteilung), darauf warten statt halb abzubrechen
+          if (pane.__jafLoading) { bgPost({ diag: 'Liste wird schon geladen – warte' }); await waitFor(() => (!pane.__jafLoading ? true : null), 180000); }
+          await loadPaneFully(pane, (n) => bgPost({ progress: n }));
+          html = [...pane.querySelectorAll('li.date_card')].map((li) => li.outerHTML);
+        } else html = [];
+      }
+      bgPost({ diag: `fertig: ${html.length} Anmeldungen` });
+      bgPost({ info, vips, orgs, html, hasList });
+    } catch (e) { bgPost({ diag: `Fehler: ${e.message || e}` }); bgPost({ error: e.message || String(e) }); }
   }
 
   // IM Frame: ein Profil bearbeiten (Notiz-Auftrag, prüfen, Notiz schreiben, ignorieren). Auftrag kommt aus GM-Speicher.
@@ -5769,7 +5867,7 @@
   async function bgFrameDispatch() {
     const n = window.name || '';
     const gate = pageGate(document);
-    if (gate) { bgPost({ gate, url: location.href }); return; }
+    if (gate) { bgPost({ diag: `Sonderseite erkannt: ${gate.type} („${(gate.title || gate.text || document.title || '').slice(0, 80)}“)` }); bgPost({ gate, url: location.href }); return; }
     if (n === 'jaf-bg-ev') return bgEventFrame();
     if (n.startsWith('jaf-bg-act-')) return bgActFrame();
     if (n.startsWith('jaf-bg-evst-')) return evStornoFrame();
@@ -6041,6 +6139,18 @@
     GM_setValue(K_API_FB, fb);
     return JSON.stringify(out, null, 1);
   }
+  // Export mit den Puffern aller offenen Tabs
+  async function apiRecDownload() {
+    GM_setValue('jaf_api_flushreq', Date.now());
+    apiFlush();
+    await sleep(1200);
+    flDownload(`joyclub-api-rekorder-${isoDay(new Date())}.json`, apiRecExport());
+  }
+  function apiRecClear() {
+    GM_setValue('jaf_api_clr', Date.now());
+    apiBuf = null; apiTl = null;
+    GM_setValue(K_API_LOG, {}); GM_setValue(K_API_TL, []);
+  }
   function apiRecControl() {
     const w = document.createElement('div');
     w.style.cssText = 'display:flex;gap:12px;align-items:center;flex-wrap:wrap';
@@ -6060,9 +6170,9 @@
     };
     cb.addEventListener('change', () => { GM_setValue(K_API_REC, cb.checked); upd(); });
     const ex = document.createElement('a'); ex.href = '#'; ex.textContent = 'Exportieren';
-    ex.addEventListener('click', (e) => { e.preventDefault(); flDownload(`joyclub-api-rekorder-${isoDay(new Date())}.json`, apiRecExport()); upd(); });
+    ex.addEventListener('click', async (e) => { e.preventDefault(); await apiRecDownload(); upd(); });
     const cl = document.createElement('a'); cl.href = '#'; cl.textContent = 'Leeren';
-    cl.addEventListener('click', (e) => { e.preventDefault(); GM_setValue(K_API_LOG, {}); GM_setValue(K_API_TL, []); upd(); });
+    cl.addEventListener('click', (e) => { e.preventDefault(); apiRecClear(); upd(); });
     w.append(lb, info, ex, cl, warn);
     upd();
     return w;
@@ -6767,6 +6877,7 @@
         const head = `Party ${ei + 1}/${events.length}: ${e.name} (${e.date})`;
         const frac0 = ei / events.length, fracN = 1 / events.length;
         bgUi(head, 'Lade Event-Seite und Gästeliste …', frac0, stats());
+        bgDiag(`${head}: lade Event-Seite und Gästeliste`);
         let data;
         try {
           data = await bgFrameG(e.url, 'jaf-bg-ev', (n) => bgUi(null, `Lade Gästeliste … ${n} Anmeldungen`, null, null), 240000);
@@ -6774,8 +6885,9 @@
         } catch (err) {
           if (err.fatal || bgScan.stop) { bgScan.stop = true; bgScan.stopMsg = bgScan.stopMsg || (err.fatal ? err.message : ''); break; }
           note(`${e.name}: Event-Seite nicht ladbar (${err.message})`);
+          bgDiag(`${e.name}: Event-Seite nicht ladbar (${err.message}) – weiter mit der nächsten Party`);
           addEvFailure({ party: e.name, partyDate: e.date, partyUrl: e.url, step: 'Event-Seite laden', msg: err.message });
-          if (!firstFrameOk && ei === 0) throw new Error('Event-Seiten lassen sich im Hintergrund nicht laden.');
+          if (!firstFrameOk && ei === 0 && !/Kein Fortschritt|nicht lesbar|Unerwartete/.test(err.message)) throw new Error('Event-Seiten lassen sich im Hintergrund nicht laden.');
           continue;
         }
         const info = data.info || {};
@@ -12610,6 +12722,10 @@
   if (BG_FRAME) { bgFrameDispatch(); return; }
 
   try {
+    if (API_STATE.on || API_STATE.forced.length) {
+      GM_registerMenuCommand('Alter-Filter: Rekorder exportieren', () => { apiRecDownload(); });
+      GM_registerMenuCommand('Alter-Filter: Rekorder leeren', () => { if (confirm('Alle Rekorder-Daten löschen?')) apiRecClear(); });
+    }
     GM_registerMenuCommand('Alter-Filter: Alle Daten sichern (JSON)', () => downloadBackup());
     GM_registerMenuCommand('Alter-Filter: Alle Daten wiederherstellen (JSON)', () => restoreBackup());
     GM_registerMenuCommand('Alter-Filter: Fremde Datensicherung importieren (mischen)', () => importForeignBackup());
