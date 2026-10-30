@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.96
+// @version      1.97
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -4119,13 +4119,19 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   // Kandidaten „verify“ vorab klären: Cache, sonst Profil im Hintergrund laden
   async function precheck(items, ctx, onProgress, stop = () => false) {
     const todo = items.filter((x) => x.c.kind === 'verify');
-    let n = 0, fetched = 0, failed = 0;
+    let n = 0, fetched = 0, failed = 0, api = 0;
+    // erst gesammelt über die Schnittstelle (füllt den Prüf-Cache); übrig bleiben nur Profile mit unklarem Typ
+    if (todo.length && !stop()) {
+      const pre = await apiPrime(todo.filter((x) => CONFIG.PROFILE_PATH_RE.test(x.g.path || '')).map((x) => ({ id: x.g.id, path: x.g.path, type: x.g.type || (x.c.item && x.c.item.type), name: x.g.name })));
+      api = pre.size;
+    }
     for (const x of todo) {
       n++;
       const g = x.g;
       if (!CONFIG.PROFILE_PATH_RE.test(g.path || '')) { x.c = { kind: 'anon', why: 'kein Mitgliederprofil' }; continue; }
       const wl = ctx.ignoreWhite ? null : ctx.white;
       let d = cachedDecision(g, wl);
+      if (!d && cachedNonProfile(g.id)) { x.c = { kind: 'anon', why: `kein Mitgliederprofil (${cachedNonProfile(g.id)})` }; if (onProgress) onProgress(n, todo.length); continue; }
       if (!d) {
         if (stop()) break;
         try {
@@ -4153,7 +4159,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       }
       if (onProgress) onProgress(n, todo.length);
     }
-    return { fetched, failed };
+    return { fetched, failed, api };
   }
 
   // ---- Entscheidung für einen Gast wie im Opa-Scan der Partys ----
@@ -5704,6 +5710,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       else cnt.knownSkip++;
     }
     if (pc.failed) evLog(`${party.name}: ${pc.failed} Profil(e) ließen sich im Hintergrund nicht lesen – werden geöffnet.`);
+    if (pc.api) evLog(`${party.name}: ${pc.api} Profil(e) über die Schnittstelle geklärt, ${pc.fetched} aufgerufen.`);
     // Vorgemerkte, die inzwischen über der Grenze sind, an den Anfang
     const due = dueFromWatch();
     if (due.length) { const inDue = new Set(due.map((d) => d.path)); hits = due.concat(hits.filter((h) => !inDue.has(h.path))); }
@@ -6365,6 +6372,175 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     return lines.filter((l) => !ownNoteRe().test(l)).join('\n').replace(/^\n+|\n+$/g, '');
   }
   // Auftrag ohne Profilaufruf erledigen; null = Seitenweg nötig
+  // ---------- Profildaten gesammelt über die Schnittstelle (getUserListByIdList): Alter, Geschlecht, online ----------
+  // (Abfragetext wörtlich wie in der JOYclub-Seite.) Spart Profilaufrufe: Alter kommt für viele IDs in einer Anfrage; der feine Profiltyp (Transfrau, Paar-Art …) kommt nicht mit,
+  // er stammt aus der Gästeliste/Karte bzw. dem Gedächtnis und muss zum Geschlecht passen – sonst bleibt der Profilaufruf.
+  const UI_QUERY = `query getUserListByIdList($idList: [PositiveInteger!]!) {
+  userBaseInfo {
+    byIdList(userIdList: $idList) {
+      __typename
+      ... on PrivateUser {
+        profile {
+          __typename
+          ... on ProfileDescription {
+            id
+            name
+            verifyStatus
+            onlineStatus {
+              __typename
+              ... on UserOnlineStatusByUserId {
+                onlineStatus
+              }
+            }
+            age
+            age2
+            area
+            province
+            country
+            distance
+            gender
+            avatar {
+              __typename
+              ... on ImageUIData {
+                ...ImageUIDataFragment
+              }
+            }
+          }
+        }
+      }
+      ... on BusinessUser {
+        profile {
+          __typename
+          ... on BusinessProfileDescription {
+            name
+            id
+            verifyStatus
+            onlineStatus {
+              __typename
+              ... on UserOnlineStatusByUserId {
+                onlineStatus
+              }
+            }
+            area
+            province
+            country
+            distance
+            trustedPartnerStatus
+            avatar {
+              __typename
+              ... on ImageUIData {
+                ...ImageUIDataFragment
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fragment ImageUIDataFragment on ImageUIData {
+  __typename
+  alt_text
+  system_image
+  image_id
+  image_module
+  is_pixelated
+  fsk_checked
+  aspect_ratio
+  webp_image_source_set {
+    mime_type
+    source_list {
+      width
+      resource_path
+    }
+  }
+  fallback_image_source_set {
+    mime_type
+    source_list {
+      width
+      resource_path
+    }
+  }
+}`;
+  const UI_TTL = 6 * 3600000;
+  const uiCache = new Map(); // id → { ts, v: { id, name, biz, gender, ages, online } }
+  let uiBatch = 50;
+  async function apiUserInfo(ids) {
+    const out = new Map();
+    const want = [...new Set((ids || []).map(String).filter((x) => /^\d+$/.test(x)))];
+    const todo = [];
+    for (const id of want) { const c = uiCache.get(id); if (c && Date.now() - c.ts < UI_TTL) { if (c.v) out.set(id, c.v); } else todo.push(id); }
+    for (let i = 0; i < todo.length;) {
+      const part = todo.slice(i, i + uiBatch);
+      const r = await apiTry('Profildaten', () => api2('POST', '/graph/', { operationName: 'getUserListByIdList', query: UI_QUERY, variables: { idList: part.map(Number) } }));
+      const list = r.ok && r.v && r.v.data && r.v.data.userBaseInfo && r.v.data.userBaseInfo.byIdList;
+      if (!Array.isArray(list)) {
+        if (r.skipped || uiBatch <= 10) break; // Schnittstelle gestört: Rest wie bisher über das Profil
+        uiBatch = Math.max(10, Math.floor(uiBatch / 2));
+        continue;
+      }
+      for (const u of list) {
+        const p = u && u.profile;
+        if (!p || p.id == null) continue;
+        const v = { id: String(p.id), name: p.name || '', biz: u.__typename === 'BusinessUser',
+          gender: p.gender || '', ages: [p.age, p.age2].filter((a) => Number.isFinite(a) && a >= 18 && a <= 120),
+          online: ((p.onlineStatus || {}).onlineStatus || '') };
+        uiCache.set(v.id, { ts: Date.now(), v }); out.set(v.id, v);
+      }
+      for (const id of part) if (!out.has(id)) uiCache.set(id, { ts: Date.now(), v: null }); // gelöscht/gesperrt: nicht erneut fragen
+      i += part.length;
+      if (i < todo.length) await sleep(rand(300, 700));
+    }
+    return out;
+  }
+  // passt ein bekannter Profiltyp zum Geschlecht der Schnittstelle?
+  function uiTypeFits(type, gender) {
+    if (!type || /^Typ |\|/.test(type) || !/^(FEMALE|MALE|COUPLE)$/.test(gender || '')) return false;
+    if ((gender === 'COUPLE') !== isCoupleType(type)) return false;
+    if (normType(type) === normType('Mann') && gender !== 'MALE') return false;
+    if (normType(type) === normType('Frau') && gender !== 'FEMALE') return false;
+    return true;
+  }
+  const uiGenderType = (g) => ({ FEMALE: 'Frau', MALE: 'Mann', COUPLE: 'Paar' })[g] || '';
+  // bekannter Typ zu einem Mitglied: Gästeliste/Karte, sonst Gedächtnis
+  function uiKnownType(id, path, type) {
+    if (type && !/^Typ |\|/.test(type)) return type;
+    const acc = getAccounts();
+    const k = (path && acc[path]) || Object.entries(acc).find(([p]) => idOf(p) === String(id))?.[1];
+    if (k && k.type) return k.type;
+    const c = getChecked()[id];
+    return (c && c.type) || '';
+  }
+  // Ergebnis der Schnittstelle übernehmen: Gedächtnis + Prüf-Cache; liefert { type, ages } oder { biz } oder null
+  function uiApply(v, path, type, name) {
+    if (!v) return null;
+    if (v.biz) { setNonProfile(v.id, v.name || name, 'Business-Profil'); return { biz: true }; }
+    if (!v.ages.length) return null;
+    const p = path || Object.keys(getAccounts()).find((k) => idOf(k) === v.id) || '';
+    const t = uiKnownType(v.id, p, type);
+    const fits = uiTypeFits(t, v.gender);
+    // Paar-Typ ohne zweites Alter: lieber das Profil ansehen
+    if (fits && isCoupleType(t) && v.ages.length < 2) return null;
+    const acc = getAccounts()[p];
+    const n = acc && acc.persons ? acc.persons.length : 0;
+    if (p && (fits || !n || n === v.ages.length)) recordAccounts([{ path: p, name: v.name || name, ages: v.ages, type: fits ? t : '', cardOnline: v.online === 'ONLINE' }]);
+    if (!fits) return null;
+    setChecked(v.id, { name: v.name || name, type: t, ages: v.ages });
+    return { type: t, ages: v.ages };
+  }
+  // viele Mitglieder vorab klären: [{ id?, path?, type?, name? }] → Map id → { type, ages } | { biz }
+  async function apiPrime(list) {
+    const res = new Map();
+    const rows = (list || []).map((x) => Object.assign({}, x, { id: String(x.id || idOf(x.path || x.url || '')) })).filter((x) => x.id);
+    if (!rows.length) return res;
+    let m;
+    try { m = await apiUserInfo(rows.map((x) => x.id)); } catch (e) { return res; }
+    for (const x of rows) { const a = uiApply(m.get(x.id), x.path && cleanPath(x.path), x.type, x.name); if (a) res.set(x.id, a); }
+    return res;
+  }
+  // Trefferlisten vor dem Abarbeiten gesammelt klären (blockItem nutzt dann den Zwischenspeicher)
+  const primeVerify = (arr) => apiPrime((arr || []).filter((x) => x && x.verify && !x.action).map((x) => ({ path: x.path, type: x.type, name: x.name }))).catch(() => null);
   async function apiActJob(cur, source) {
     if (CONFIG.DRY_RUN) return null;
     const id = idOf(cur.path || cur.url || '');
@@ -7103,6 +7279,18 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       try { await autoWhiteRefresh(false); } catch (e) { /* egal */ }
       if (isWhiteMember(it)) return { result: 'skipped', msg: 'Whitelist' };
     }
+    // „auf dem Profil prüfen“: erst über die Schnittstelle klären – Nicht-Treffer brauchen keinen Profilaufruf,
+    // Treffer werden mit Typ und Alter direkt über die Schnittstelle ignoriert
+    if (!it.action && it.verify) {
+      const id = idOf(it.path || it.url || '');
+      const a = id ? (await apiPrime([{ id, path: it.path, type: it.type, name: it.name }])).get(id) : null;
+      if (a && a.biz) return { result: 'skipped', msg: 'kein Mitgliederprofil (Business-Profil)' };
+      if (a) {
+        const j = judge({ name: it.name, path: it.path, type: a.type, ages: a.ages }, it.source || source);
+        if (!j.active) return { result: 'skipped', msg: `Schnittstelle: ${a.type}, ${a.ages.join('+')} Jahre – erfüllt die Kriterien nicht`, type: a.type, ages: a.ages };
+        it = Object.assign({}, it, { verify: false, type: a.type, ages: a.ages, kind: j.kind, reason: KIND_REASON[j.kind] });
+      }
+    }
     if (!it.action && !(await ensureSlot(Object.assign({ source }, it), cnt))) return { result: 'limit', msg: 'Limit erreicht, nicht gesperrt' };
     const r = await actJob(it, source);
     if (CONFIG.DRY_RUN && !it.action && r && r.result !== 'failed') memNote(it.path, 'would', Object.assign({ source }, it));
@@ -7377,6 +7565,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
         let complete = hits.length <= limit;
         const unfinished = new Set(hits.slice(limit).map((h) => idOf(h.path)));
         note(`${party.name}: ${guests.length} Anmeldungen, ${queue.length} Profil(e) zu bearbeiten`);
+        await primeVerify(queue);
         // Profile nacheinander im Hintergrund bearbeiten
         for (let qi = 0; qi < queue.length && !bgScan.stop; qi++) {
           const it = queue[qi];
@@ -7890,6 +8079,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     };
     const ignoreHits = async (hits, search, fracOf) => {
       let done = 0;
+      await primeVerify(hits);
       for (let qi = 0; qi < hits.length && !bgScan.stop; qi++) {
         if (testLeft <= 0) { st.skipped++; continue; }
         const it = hits[qi];
@@ -8136,10 +8326,26 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       const readUnits = 1 + (notes ? jcList.length : 0);
       const info = {}; // path → { note, own, type, ages }
       if (notes) {
+        // Typ und Alter gesammelt über die Schnittstelle, Notiz einzeln über die Schnittstelle – Profilaufruf nur noch als Rückfall
+        bgUi(null, `Lese Profildaten über die Schnittstelle …`, show(0.01), null);
+        let pre = new Map();
+        try { pre = await apiPrime(jcList.map(([path, e]) => ({ id: e.id || idOf(path), path, name: e.name }))); } catch (err) { /* Rückfall */ }
         for (let i = 0; i < jcList.length && !bgScan.stop; i++) {
           const [path, e] = jcList[i];
           bgUi(null, `Lese Profilnotizen … ${i + 1}/${jcList.length}: ${e.name}`, show(0.5 * (1 + i) / readUnits), null);
           try {
+            const a = pre.get(String(e.id || idOf(path)));
+            if (a && a.type) {
+              const g = await apiNoteGet(e.id || idOf(path));
+              if (g.ok) {
+                const note = String(g.v || '').trim();
+                info[path] = { note, own: parseOwnLine(note), type: a.type, ages: a.ages };
+                st.notesRead++;
+                bgUi(null, null, null, stats());
+                await sleep(rand(150, 350));
+                continue;
+              }
+            }
             const d = await fetchDoc(e.url || location.origin + path);
             const note = noteFromDoc(d);
             const pi = parseProfileDoc(d);
@@ -8584,6 +8790,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       const limit = CONFIG.DRY_RUN ? Math.min(CONFIG.TEST_MAX_PROFILES, CONFIG.MAX_PER_RUN) : CONFIG.MAX_PER_RUN;
       const queue = hits.slice(0, limit);
       complete = hits.length <= limit;
+      await primeVerify(queue);
       for (let qi = 0; qi < queue.length && !bgScan.stop; qi++) {
         const it = queue[qi];
         bgUi(null, `Profil ${qi + 1}/${queue.length}: ${it.name} …`, 0.1 + 0.9 * qi / Math.max(1, queue.length), stats());
@@ -8699,6 +8906,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
         const limit = CONFIG.DRY_RUN ? Math.min(CONFIG.TEST_MAX_PROFILES, CONFIG.MAX_PER_RUN) : CONFIG.MAX_PER_RUN;
         const queue = hits.slice(0, limit);
         let complete = !res.partial && hits.length <= limit;
+        await primeVerify(queue);
         for (let qi = 0; qi < queue.length && !bgScan.stop; qi++) {
           const it = queue[qi];
           bgUi(null, `Profil ${qi + 1}/${queue.length}: ${it.name} …`, f0 + fN * (0.4 + 0.6 * qi / Math.max(1, queue.length)), stats());
@@ -9114,6 +9322,10 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       try { await syncIgnoreList(true); } catch (e) { /* egal */ }
       let plan = planRules();
       if (recheck && plan.unclear.length) {
+        // erst gesammelt über die Schnittstelle, danach nur noch die übrig gebliebenen auf dem Profil
+        bgUi('Unklare Mitglieder prüfen', `Schnittstelle: ${plan.unclear.length} Mitglieder …`, 0.04, stats());
+        try { const pre = await apiPrime(plan.unclear.map((p) => ({ path: p }))); st.checked += pre.size; } catch (e) { /* weiter über die Profile */ }
+        plan = planRules();
         for (let i = 0; i < plan.unclear.length && !bgScan.stop; i++) {
           const p = plan.unclear[i];
           bgUi('Unklare Mitglieder prüfen', `${i + 1}/${plan.unclear.length}`, 0.05 + 0.25 * i / plan.unclear.length, stats());
@@ -9159,6 +9371,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       // 3. sperren, was neu dazukommt (wichtigste zuerst)
       if ((mode === 'all' || mode === 'block') && !bgScan.stop) {
         const add = plan.added.map((p) => plan.want.get(p)).sort(prioCmp);
+        await primeVerify(add.map((w) => ({ path: w.path, type: w.type, name: w.name, verify: true })));
         for (let i = 0; i < add.length && !bgScan.stop; i++) {
           const w = add[i];
           bgUi('Sperren', `${i + 1}/${add.length} · ${w.name}`, 0.5 + 0.3 * i / add.length, stats());
@@ -10797,6 +11010,14 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   async function flResolveProfile(id, path) {
     const k = flKnownProfiles().get(id);
     if (k && k.nick) return k;
+    // Nick, Geschlecht und Alter über die Schnittstelle (kein Profilaufruf)
+    try {
+      const v = (await apiUserInfo([id])).get(String(id));
+      if (v && v.name && !v.biz) {
+        const t = uiKnownType(id, path, '');
+        return { id, nick: v.name, path: path || `/profile/${id}.html`, type: uiTypeFits(t, v.gender) ? t : uiGenderType(v.gender), age: v.ages[0] || 0 };
+      }
+    } catch (x) { /* Rückfall über das Profil */ }
     try {
       const r = await jfetch(location.origin + (path || `/profile/${id}.html`));
       const d = r.doc && parseProfileDoc(r.doc);

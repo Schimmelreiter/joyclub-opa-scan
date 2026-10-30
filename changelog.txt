@@ -1,6 +1,13 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.97 (30.10.2026)
+- Profildaten gesammelt über die Schnittstelle (getUserListByIdList, bis 50 je Abruf): Alter, Geschlecht und Online-Status ohne Profilaufruf
+- Kandidaten „auf dem Profil prüfen“ (Party-Scan, Suche, Gruppen, Besucher/Likes, Einstellungen anwenden): Nicht-Treffer ohne Aufruf übersprungen, Treffer direkt über die Schnittstelle notiert und ignoriert; Profil nur noch bei unklarem Typ
+- Ignorierliste abgleichen: Profilnotizen und Alter über die Schnittstelle statt über jedes Profil
+- Fickliste: Nick zu einer Profil-ID über die Schnittstelle
+- Party-Protokoll nennt, wie viele Profile über die Schnittstelle geklärt und wie viele aufgerufen wurden
+
 1.96 (30.10.2026)
 - Gemeinsame Ablage mit dem poppen-Skript (FORMAT.md): Fickliste und Textvorlagen liegen genau einmal im Briefkasten, Schreiben mit Versionszähler, gleichzeitige Änderungen werden zusammengeführt, Löschmarken; der alte Abgleich über Postfächer entfällt
 - Textvorlagen: JOYclub maßgeblich – Änderungen, neue und gelöschte Vorlagen anderer Plattformen werden auf JOYclub übertragen; bei Konflikt gewinnt JOYclub, die andere Fassung kommt in den Papierkorb

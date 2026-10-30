@@ -190,6 +190,19 @@ Seiten `/my_joy/visitors/` (Reiter „Profilbesuche“, Quelle **Profilbesucher*
 
 ---
 
+## Profildaten ohne Profilaufruf (ab 1.97)
+
+Alter, Geschlecht und Online-Status vieler Mitglieder holt das Skript in **einer** Anfrage über JOYclubs Schnittstelle (`getUserListByIdList`, bis zu 50 IDs je Abruf; bei Fehlern kleinere Pakete, danach Rückfall aufs Profil). Ergebnisse gelten 6 Stunden.
+
+| Wo | vorher | ab 1.97 |
+|---|---|---|
+| Party-Scan, Mitgliedersuche, Gruppen, „Mögen mich“/Besucher: Kandidaten „auf dem Profil prüfen“ | ein Profilaufruf je Kandidat | Nicht-Treffer: kein Aufruf. Treffer: Notiz und Ignorieren direkt über die Schnittstelle |
+| Einstellungen anwenden: „Unklare Mitglieder erneut prüfen“ und neue Sperren | ein Profilaufruf je Mitglied | gesammelt, Aufruf nur für den Rest |
+| Ignorierliste abgleichen mit Profilnotizen | ein Profilaufruf je Eintrag | Notiz und Alter über die Schnittstelle |
+| Fickliste: Nick zu einer Profil-ID | Profilaufruf | Schnittstelle |
+
+Den feinen Profiltyp (Transfrau, Männer-Paar …) liefert die Schnittstelle nicht, nur Frau/Mann/Paar. Das Skript nimmt den Typ aus der Gästeliste, der Karte oder dem Gedächtnis; passt er nicht zum Geschlecht (z. B. Typwechsel) oder fehlt bei einem Paar das zweite Alter, wird das Profil wie bisher aufgerufen. Business-Profile (Clubs, Shops) erkennt die Schnittstelle direkt.
+
 ## Sichtbarkeit (Unsichtbar-Modus)
 
 Profilaufrufe hinterlassen Besuche. Das Skript liest den Status unter dem Profilnamen (leer = sichtbar, „Für Freunde sichtbar“, „Unsichtbar eingeloggt“; „Für Freunde sichtbar“ zählt als unsichtbar).
@@ -247,7 +260,7 @@ Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, das P
    - Paare werden direkt anhand der beiden Altersangaben entschieden (mit nur einer Angabe: Profil prüfen),
    - Einzelpersonen werden nur auf dem Profil geprüft, wenn schon das Anmeldealter die Schwelle der Gruppe erreicht,
    - externe und anonyme Anmeldungen, Shops sowie Club-/Veranstalter-Profile (`business_profile`) werden übersprungen.
-5. Profile im Hintergrund prüfen (Ergebnis wird 1 Jahr zwischengespeichert) und Treffer ignorieren.
+5. Profile prüfen (Ergebnis wird 1 Jahr zwischengespeichert) und Treffer ignorieren. Ab 1.97 zuerst gesammelt über die Schnittstelle (siehe *Profildaten ohne Profilaufruf*); aufgerufen werden nur noch Profile, deren Typ dabei unklar bleibt.
 
 **Effizienz:**
 - Erneute Scans prüfen nur Neuanmeldungen seit dem letzten Scan; ändern sich die Regeln, wird automatisch wieder vollständig gescannt.
