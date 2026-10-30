@@ -1,6 +1,13 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.96 (30.10.2026)
+- Gemeinsame Ablage mit dem poppen-Skript (FORMAT.md): Fickliste und Textvorlagen liegen genau einmal im Briefkasten, Schreiben mit Versionszähler, gleichzeitige Änderungen werden zusammengeführt, Löschmarken; der alte Abgleich über Postfächer entfällt
+- Textvorlagen: JOYclub maßgeblich – Änderungen, neue und gelöschte Vorlagen anderer Plattformen werden auf JOYclub übertragen; bei Konflikt gewinnt JOYclub, die andere Fassung kommt in den Papierkorb
+- Gemeinsame Termin-Datei (eine für alle Skripte, neuere gewinnt), „Ich“-Eintrag, Einstellungs-Kopie im Briefkasten mit Angebot nach Neuinstallation
+- Kontobindung: Daten gehören einem Konto; anderes Konto angemeldet → Skript komplett aus mit Hinweis; Übergabe unter Experten › Kontobindung (7 Tage, zurücknehmbar); fremde Sicherung wird beim Wiederherstellen abgelehnt
+- Gedächtnis eines anderen Kontos: Fickliste nach der Fallliste (nur wo man selbst „der Fick“ ist, mit Treffen-Auswahl und Terminen)
+
 1.95 (30.10.2026)
 - Gästeliste: anonyme Anmeldungen fehlten fast alle (beim Laden über die Schnittstelle als doppelt aussortiert) – jetzt vollständig; Abweichung von JOYclubs Reiter-Zahlen steht im Ablauf-Protokoll
 - Anonyme und externe Anmeldungen werden wie Profile einsortiert und eingefärbt (Art aus dem Text), ohne Alter als älteste Stufe, und zählen im AWO-Faktor mit; Shops und Clubs nie, sie stehen nur unter „Alle“

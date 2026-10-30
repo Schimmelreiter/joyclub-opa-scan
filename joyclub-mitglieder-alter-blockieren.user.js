@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.95
+// @version      1.96
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -29,8 +29,13 @@
 // @downloadURL  https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
 // ==/UserScript==
 
+const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirmung durch die Kontobindung
 (function () {
   'use strict';
+  // Kontobindung (ab 1.96): gehört der Speicher einem anderen Konto, schreibt das Skript nichts und läuft nicht
+  let OWNER_BLOCK = false;
+  const GM_setValue = (k, v) => (OWNER_BLOCK ? undefined : __jafGmSet(k, v));
+  const GM_deleteValue = (k) => (OWNER_BLOCK ? undefined : __jafGmDel(k));
   // ---------- Briefkasten: Abgleich mit dem Skript auf poppen.de (ab 1.90) ----------
   // Eine leere Seite ohne Code auf GitHub Pages wird unsichtbar eingebettet. Beide Skripte laufen darin und tauschen über
   // deren localStorage aus – die Seiten-Codes von JOYclub und poppen.de kommen an diesen Speicher nicht heran.
@@ -78,12 +83,8 @@
         const max = Math.max(...items.map((x) => +x.seq));
         if (max < last) last = 0; // Speicher drüben zurückgesetzt
         const fresh = items.filter((x) => +x.seq > last).sort((a, b) => a.seq - b.seq);
-        if (fresh.length) {
-          const inbox = gv(K_BK_IN, []) || [];
-          for (const x of fresh) inbox.push(Object.assign({}, x, { account: ob.account || '', platform: ob.platform || BK_OTHER }));
-          GM_setValue(K_BK_IN, inbox.slice(-500));
-          GM_setValue(K_BK_INSEQ, max);
-        }
+        // ab 1.96 läuft der Abgleich über die gemeinsame Ablage – der alte Postausgang des poppen-Skripts wird nur noch quittiert
+        if (fresh.length) GM_setValue(K_BK_INSEQ, max);
         bkLs((ls) => ls.setItem(`opa-bk:ack:${BK_OTHER}`, String(max)));
       } finally { busy = false; }
     };
@@ -93,20 +94,117 @@
     publish(); read();
     setInterval(() => { read(); GM_setValue(K_BK_ALIVE, { ts: Date.now(), ls: true }); }, 5000);
   }
+  // ---------- Gemeinsame Ablage „opa-gemeinsam“ im Briefkasten (ab 1.96, Formatdefinition: FORMAT.md im poppen-Repo) ----------
+  // IndexedDB auf github.io, für alle Opa-Scan-Skripte; nur dieser Rahmen öffnet sie. Seite ↔ Rahmen über den eigenen
+  // Tampermonkey-Speicher: Anfragen jaf_rpcq_<Tab>, Antworten jaf_rpcr_<Tab>, Lebenszeichen jaf_rpca_<Tab>.
+  const SHARED_DB = 'opa-gemeinsam';
+  const SHARED_SCHEMA = 1;
+  const SHARED_STORES = { meta: { keyPath: 'k' }, fick: { keyPath: 'id' }, tpl: { keyPath: 'id' }, ich: { keyPath: 'id' }, arch: { keyPath: 'id', autoIncrement: true, index: 'uid' } };
+  const SH_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '';
+  function jafBkServer(parentTab) {
+    let dbp = null;
+    const sdb = () => dbp || (dbp = new Promise((resolve, reject) => {
+      const rq = indexedDB.open(SHARED_DB, 1);
+      rq.onupgradeneeded = () => {
+        const d = rq.result;
+        for (const [n, def] of Object.entries(SHARED_STORES)) {
+          if (d.objectStoreNames.contains(n)) continue;
+          const st = d.createObjectStore(n, { keyPath: def.keyPath, autoIncrement: !!def.autoIncrement });
+          if (def.index) st.createIndex(def.index, def.index, { unique: false });
+        }
+      };
+      rq.onsuccess = () => resolve(rq.result);
+      rq.onerror = () => { dbp = null; reject(rq.error); };
+    }));
+    const rp = (rq) => new Promise((res, rej) => { rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+    let bc = null; try { bc = new BroadcastChannel('opa-gemeinsam'); bc.onmessage = (e) => { const m = e.data || {}; if (m.store) GM_setValue('jaf_bkv_' + m.store, Date.now()); }; } catch (e) { /* egal */ }
+    const notify = (store) => { GM_setValue('jaf_bkv_' + store, Date.now()); try { if (bc) bc.postMessage({ store, at: Date.now(), by: 'joyclub' }); } catch (e) { /* egal */ } };
+    const VERSIONED = new Set(['fick', 'tpl']);
+    const defBy = () => ({ pf: 'joyclub', ver: SH_VERSION });
+    async function op(o, a) {
+      const d = await sdb();
+      const store = a && a.s;
+      if (store && !SHARED_STORES[store]) throw new Error('unbekannte Ablage ' + store);
+      if (o === 'get') return rp(d.transaction(store).objectStore(store).get(a.k));
+      if (o === 'all') return rp(d.transaction(store).objectStore(store).getAll());
+      if (o === 'put' || o === 'del') {
+        // Lesen und Schreiben in EINER Transaktion; versionierte Ablagen mit Versionszähler gegen gleichzeitiges Schreiben
+        return new Promise((res, rej) => {
+          const t = d.transaction(store, 'readwrite'); const st = t.objectStore(store);
+          let out = null;
+          const key = o === 'del' ? a.k : a.v[SHARED_STORES[store].keyPath];
+          const doWrite = (cur) => {
+            if (VERSIONED.has(store)) {
+              const curRev = (cur && cur.rev) || 0;
+              if ('expect' in a && a.expect !== null && a.expect !== curRev) { out = { conflict: cur }; return; }
+              if ('expect' in a && a.expect === null && cur && !cur.deleted) { out = { conflict: cur }; return; }
+              const v = o === 'del' ? Object.assign({}, cur || { [SHARED_STORES[store].keyPath]: key }, { deleted: true }) : Object.assign({}, a.v);
+              if (o !== 'del') delete v.deleted;
+              v.rev = curRev + 1; v.updatedAt = Date.now(); v.updatedBy = a.by || defBy();
+              st.put(v); out = { ok: true, rev: v.rev, v };
+            } else if (o === 'del') { st.delete(key); out = { ok: true }; } else { st.put(a.v); out = { ok: true }; }
+          };
+          if (key === undefined || key === null) { const r = st.put(a.v); r.onsuccess = () => { out = { ok: true, id: r.result }; }; } else { const g = st.get(key); g.onsuccess = () => doWrite(g.result); }
+          t.oncomplete = () => { if (out && out.ok && store !== 'meta') notify(store); res(out); };
+          t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+        });
+      }
+      if (o === 'count') return rp(d.transaction(store).objectStore(store).count());
+      throw new Error('unbekannter Aufruf ' + o);
+    }
+    (async () => { // Formatversion festhalten (nur erhöhen, nie senken)
+      try { const d = await sdb(); const cur = await rp(d.transaction('meta').objectStore('meta').get('schema')); if (!cur || cur.schema < SHARED_SCHEMA) await rp(d.transaction('meta', 'readwrite').objectStore('meta').put({ k: 'schema', schema: SHARED_SCHEMA, minRead: Math.max(1, (cur && cur.minRead) || 1) })); } catch (e) { /* egal */ }
+    })();
+    if (!parentTab) return;
+    const qk = 'jaf_rpcq_' + parentTab, rk = 'jaf_rpcr_' + parentTab, ak = 'jaf_rpca_' + parentTab;
+    const doneIds = new Set();
+    let busy = false, again = false;
+    async function pump() {
+      if (busy) { again = true; return; }
+      busy = true;
+      try {
+        do {
+          again = false;
+          const q = GM_getValue(qk, []) || [];
+          for (const r of q) {
+            if (doneIds.has(r.id)) continue;
+            doneIds.add(r.id);
+            let ans;
+            try { ans = { id: r.id, v: await op(r.op, r.args) }; } catch (e) { ans = { id: r.id, err: (e && e.message) || String(e) }; }
+            const out = (GM_getValue(rk, []) || []).slice(-40); out.push(ans); GM_setValue(rk, out);
+          }
+        } while (again);
+      } finally { busy = false; }
+    }
+    try { GM_addValueChangeListener(qk, () => pump()); } catch (e) { /* egal */ }
+    const beat = () => GM_setValue(ak, Date.now());
+    beat(); setInterval(beat, 5000);
+    setInterval(pump, 3000);
+    pump();
+  }
   // Briefkasten in die besuchte Seite einbetten (nur im obersten Fenster, nur einmal je Tab)
   function bkEnsureFrame() {
     if (window.top !== window) return;
     setTimeout(() => {
-      if (document.getElementById('opa-briefkasten') || !document.documentElement) return;
+      if (document.getElementById('opa-briefkasten-jaf') || !document.documentElement) return;
       const f = document.createElement('iframe');
-      f.id = 'opa-briefkasten';
-      f.src = `${BK_URL}#host=${location.hostname}`;
+      f.id = 'opa-briefkasten-jaf';
+      let tab = ''; try { tab = sessionStorage.getItem('jaf_tab_id') || ''; } catch (e) { /* egal */ }
+      f.src = `${BK_URL}#host=${location.hostname}&tab=${encodeURIComponent(tab)}&jaf=1`;
       f.setAttribute('aria-hidden', 'true'); f.tabIndex = -1;
       f.style.cssText = 'position:fixed;width:0;height:0;border:0;left:-9999px;top:-9999px;visibility:hidden';
       document.documentElement.appendChild(f);
     }, Math.floor(Math.random() * 1500));
   }
-  if (location.hostname === BK_HOST) { if (window.top !== window && /\/briefkasten\.html$/.test(location.pathname)) bkFrameMain(); return; }
+  if (location.hostname === BK_HOST) {
+    if (window.top !== window && /\/briefkasten\.html$/.test(location.pathname)) {
+      bkFrameMain();
+      // nur im eigenen Rahmen (jaf=1) die Anfragen des eigenen Tabs bearbeiten
+      const h = location.hash || '';
+      if (/[#&]jaf=1/.test(h)) { const m = /[#&]tab=([^&]*)/.exec(h); try { jafBkServer(m ? decodeURIComponent(m[1]) : ''); } catch (e) { console.warn('[Alter-Filter] Briefkasten-Ablage', e); } }
+    }
+    return;
+  }
   if (/(^|\.)poppen\.de$/.test(location.hostname)) {
     // passiv: nur den Briefkasten einbetten – keine Oberfläche, keine Eingriffe, keine Aufrufe
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bkEnsureFrame, { once: true }); else bkEnsureFrame();
@@ -614,7 +712,7 @@
   const BG_FRAME = IN_FRAME && /^jaf-bg-/.test(window.name || '');
   if (IN_FRAME && !BG_FRAME) return;
   // im Hintergrund-Frame keine Dauer-Timer (Markieren, Wächter …)
-  const setInterval = BG_FRAME ? (() => 0) : globalThis.setInterval.bind(globalThis);
+  const setInterval = BG_FRAME ? (() => 0) : (fn, ms, ...a) => globalThis.setInterval(() => { if (!OWNER_BLOCK) fn(...a); }, ms);
 
   // ===================== EINSTELLUNGEN =====================
   const CONFIG = {
@@ -2663,7 +2761,7 @@
   // ---------- Sicherung aller Daten (JSON) ----------
   // Enthält Einstellungen, Protokoll (Gesperrte), Ignorierliste, alle Konten, Vorgemerkte, Whitelist, Gruppen, Gedächtnis usw.
   // Nicht enthalten: laufende Vorgänge/Sperren und die Fehlersuche-Listen.
-  const BACKUP_SKIP = /^(jaf_state|jaf_lock|jaf_gate|jaf_login_|jaf_vis_run|jaf_bg_job_|jaf_peek|jaf_opa$|jaf_evscan$|jaf_ms_resume|jaf_evscan_failures|jaf_ms_failures|jaf_ms_single_age_couples|jaf_failed)/;
+  const BACKUP_SKIP = /^(jaf_rpc[qra]_|jaf_bkv_|jaf_state|jaf_lock|jaf_gate|jaf_login_|jaf_vis_run|jaf_bg_job_|jaf_peek|jaf_opa$|jaf_evscan$|jaf_ms_resume|jaf_evscan_failures|jaf_ms_failures|jaf_ms_single_age_couples|jaf_failed)/;
   function fullBackup() {
     const data = {};
     for (const k of GM_listValues()) {
@@ -2705,6 +2803,9 @@
       let b;
       try { b = JSON.parse(await file.text()); } catch (e) { alert('Die Datei ist keine gültige Sicherung.'); return; }
       if (!b || b.format !== 'opa-scan-backup' || !b.data) { alert('Die Datei ist keine Sicherung des Opa-Scans.'); return; }
+      // Kontobindung: Sicherung eines anderen Kontos nicht wiederherstellen
+      const bo = b.data[K_OWNER], meNow = GM_getValue(K_OWNER, null);
+      if (bo && bo.uid && sessionId() && String(bo.uid) !== String(sessionId())) { alert(`Diese Sicherung gehört zu ${bo.nick || 'einem anderen Konto'}. Daten eines anderen Kontos bitte über „Fremde Datensicherung importieren“ einmischen.`); return; }
       const n = Object.keys(b.data).length;
       if (!confirm(`Sicherung vom ${fmtTs(b.ts)} (Version ${b.version || '?'}, ${n} Bereiche${b.fl ? ', Fickliste verschlüsselt' : ''}) wiederherstellen?\n\nAlle aktuellen Daten werden dabei ersetzt.`)) return;
       // Fickliste entschlüsseln (eigener Nick; nach Nick-Wechsel fragen)
@@ -2726,6 +2827,8 @@
       for (const nme of BIG_KEYS) if (BIG[nme]) BIG[nme].loaded = false;
       if (!storeNeedsMigration()) { const l = GM_getValue(K_STORE_V, []) || []; GM_setValue(K_STORE_V, [...new Set(l.concat(BIG_KEYS))]); }
       for (const [k, v] of Object.entries(b.data)) { if (BIG_KEYS.includes(k)) bigSet(k, v); else if (k !== K_STORE_V) GM_setValue(k, v); }
+      if (meNow) GM_setValue(K_OWNER, meNow); // Bindung an das angemeldete Konto bleibt
+      for (const k of ['jaf_sh_fick', 'jaf_sh_ids', 'jaf_sh_tpl']) GM_deleteValue(k); // Abgleich mit der Ablage neu beginnen
       alert('Sicherung wiederhergestellt. Die Seite wird neu geladen.');
       location.reload();
     });
@@ -2880,7 +2983,15 @@
         lines.push(`Fickliste: ${f.neu} neu · ${f.auto} ergänzt · ${f.merged} zusammengeführt · ${f.same} unverändert`);
         try { flRefreshAll(); } catch (e) { /* egal */ }
       } catch (e) { lines.push(`Fickliste: ${e.message || e}`); }
-    } else if (b.fl) lines.push('Fickliste: aus fremden Konten nicht übernommen');
+    } else if (b.fl) {
+      // fremdes Konto: nur, wo man selbst „der Fick“ ist – Dialoge nach der Fallliste (FORMAT.md)
+      try {
+        const d = await flParseImport(JSON.stringify(b.fl), askNick);
+        let tpls = [];
+        if (b.tpl) { try { tpls = (await tplParse(JSON.stringify(b.tpl), askNick)).templates || []; } catch (e) { tpls = []; } }
+        lines.push(await fickImportForeign(d.persons || [], { nick: b.account || '', uid: b.accountId || '', pf: b.platform || 'joyclub' }, tpls));
+      } catch (e) { lines.push(`Fickliste: ${e.message || e}`); }
+    }
     if (b.tpl && ok.tpl) {
       try {
         const imp = await tplParse(JSON.stringify(b.tpl), askNick);
@@ -9204,6 +9315,7 @@
     saveSettings(vals);
     for (const k of SETTING_KEYS) CONFIG[k] = cloneJ(d[k]);
     rememberNoteLabels();
+    try { shMirrorSettings(true); } catch (e) { /* egal */ }
     // automatische Whitelist: gelöschte Einträge und solche, die jetzt auf der eigenen Whitelist stehen, entfernen
     const own = new Set(Object.values(d.WHITELIST || {}).flat().map(norm));
     const w = getDynWhite();
@@ -9713,7 +9825,7 @@
           const pickFn = window.showOpenFilePicker || (typeof unsafeWindow !== 'undefined' && unsafeWindow.showOpenFilePicker);
           if (!pickFn) { flToast('Dein Browser kann keine Datei dauerhaft öffnen (Chrome nötig).'); return; }
           const [h] = await pickFn.call(window, { types: [{ description: 'Textdatei', accept: { 'text/plain': ['.txt', '.csv', '.md'] } }], multiple: false });
-          if (h) { await tplHandle(h); showT(); }
+          if (h) { await tplHandle(h); try { await shTermineText(h, true); } catch (err) { /* egal */ } showT(); }
         } catch (e) { /* abgebrochen */ }
       };
       const showT = async () => { let h = null; try { h = await tplHandle(); } catch (e) { h = null; } st.textContent = `${h && h.name ? h.name : 'keine Datei gewählt'} · Format: Wann - Wo - Was - Link`; };
@@ -9784,6 +9896,23 @@
         if (!confirm('Alle laufenden Vorgänge und die Tab-Sperre zurücksetzen? Listen bleiben erhalten.')) return;
         resetAll(); location.reload();
       }), '');
+      tb2 = section('Kontobindung');
+      {
+        const o = GM_getValue(K_OWNER, null);
+        const info = document.createElement('span');
+        info.textContent = o ? `${o.nick || o.uid}, seit ${fmtTs(o.seit || 0)}` : 'noch nicht gebunden';
+        rowE(tb2, 'Daten gehören zu', 'Nur dieses Konto nutzt die Daten in diesem Browser-Profil', info, 'Ist ein anderes Konto angemeldet, bleibt das Skript komplett aus und zeigt nur einen Hinweis.');
+        if (o && o.handover && Date.now() - o.handover < OWNER_HANDOVER_MS) {
+          const w = document.createElement('span'); w.style.cssText = 'display:inline-flex;gap:10px;align-items:center;flex-wrap:wrap';
+          w.append(`Übergabe läuft bis ${fmtTs(o.handover + OWNER_HANDOVER_MS)}`, jb('Zurücknehmen', () => { ownerHandover(false); renderSettingsPage(); }));
+          rowE(tb2, 'Übergabe', 'Das nächste andere Konto wird gefragt, ob es übernimmt', w, '');
+        } else if (o) {
+          rowE(tb2, 'Daten an anderes Konto übergeben', 'Innerhalb von 7 Tagen fragt das nächste andere angemeldete Konto, ob es übernimmt', jb('Übergeben …', () => {
+            if (!confirm('Daten zur Übergabe an ein anderes Konto freigeben? Das nächste andere angemeldete Konto wird innerhalb von 7 Tagen gefragt. Bis dahin lässt sich das zurücknehmen.')) return;
+            ownerHandover(true); renderSettingsPage();
+          }), '');
+        }
+      }
     }
     // ---- Buttons ----
     const bw = document.createElement('div');
@@ -11195,6 +11324,7 @@
       ids.forEach((id) => done.add(id));
       const x = Object.assign({}, prim.xfer || {});
       x.id = prim.xid || prim.id;
+      Object.defineProperty(x, '__lid', { value: prim.id, enumerable: false }); // lokale ID (nur intern)
       x.status = FL_X_ST[prim.status] || null;
       x.statusAt = flStatusAt(prim);
       x.main = flMainOf(prim);
@@ -13481,7 +13611,7 @@
       delete s.meta[id];
     }
     tplSave(s);
-    try { bkCheckTemplates(list, s); } catch (e) { /* Briefkasten ist Nebensache */ }
+    try { shTplLast = { list, s }; } catch (e) { /* Ablage ist Nebensache */ }
     return { list, s };
   }
 
@@ -13861,21 +13991,27 @@
         const pickFn = window.showOpenFilePicker || (typeof unsafeWindow !== 'undefined' && unsafeWindow.showOpenFilePicker);
         if (!pickFn) { flToast('Dein Browser kann keine Datei dauerhaft öffnen (Chrome nötig).'); return; }
         const [h] = await pickFn.call(window, { types: [{ description: 'Textdatei', accept: { 'text/plain': ['.txt', '.csv', '.md'] } }], multiple: false });
-        if (h) { await tplHandle(h); tplTermineRender(ov, box); }
+        if (h) { await tplHandle(h); ov.__jafTermPicked = true; tplTermineRender(ov, box); }
       } catch (e) { /* abgebrochen */ }
     };
     let h = null;
     try { h = await tplHandle(); } catch (e) { h = null; }
-    if (!h) { wrap.appendChild(btn('Datei mit Terminen wählen …', pick)); return; }
-    let perm = 'granted';
-    try { perm = await h.queryPermission({ mode: 'read' }); } catch (e) { perm = 'prompt'; }
-    if (perm !== 'granted') {
+    const picked = !!ov.__jafTermPicked; ov.__jafTermPicked = false;
+    // gemeinsame Termin-Datei (Briefkasten): eigene Datei oder der Stand der anderen Skripte
+    let shr = null;
+    try { shr = await shTermineText(h, picked); } catch (e) { shr = null; }
+    if (!h && !shr) { wrap.appendChild(btn('Datei mit Terminen wählen …', pick)); return; }
+    let perm = h ? 'granted' : 'none';
+    if (h) { try { perm = await h.queryPermission({ mode: 'read' }); } catch (e) { perm = 'prompt'; } }
+    if (h && perm !== 'granted') {
       wrap.appendChild(btn('Zugriff auf die Datei erlauben', async () => { try { if ((await h.requestPermission({ mode: 'read' })) === 'granted') tplTermineRender(ov, box); } catch (e) { /* egal */ } }));
       wrap.appendChild(btn('Datei ändern …', pick));
-      return;
+      if (!shr) return;
     }
+    if (!h) wrap.appendChild(btn('Eigene Datei wählen …', pick));
+    if (shr && shr.note) wrap.appendChild(flEl('div', 'font-size:12px;color:#9a9a9a', escHtml(shr.note)));
     let list = [];
-    try { const f = await h.getFile(); list = tplParseTermine(await f.text()); } catch (e) { wrap.appendChild(flEl('div', 'color:#ffb020', 'Datei nicht lesbar.')); }
+    try { list = tplParseTermine(shr ? shr.text : ''); } catch (e) { wrap.appendChild(flEl('div', 'color:#ffb020', 'Datei nicht lesbar.')); }
     if (!list.length) wrap.appendChild(flEl('div', 'opacity:.75', 'Keine kommenden Termine'));
     for (const t of list) {
       const full = tplTerminLabel(t);
@@ -14089,44 +14225,499 @@
     } finally { bkPendBusy = false; }
   }
   function bkStatusText() {
-    const st = GM_getValue(K_BK_STAT, {}) || {}, alive = GM_getValue(K_BK_ALIVE, null), peer = GM_getValue(K_BK_PEER, null);
+    const st = GM_getValue(K_BK_STAT, {}) || {}, peer = GM_getValue(K_BK_PEER, null);
     if (!st.start) return 'Noch nicht geprüft.';
-    if (!alive || alive.ts < st.start - 60000) return Date.now() - st.start < 15000 ? 'Wird geprüft …' : 'Briefkasten blockiert – vermutlich durch die Sicherheitsrichtlinie der Seite oder einen Werbeblocker. Export/Import per Hand geht weiter.';
-    if (!alive.ls) return 'Speicher gesperrt – vermutlich ist „Drittanbieter-Cookies blockieren“ eingeschaltet. Export/Import per Hand geht weiter.';
-    if (!peer) return 'Briefkasten bereit. poppen-Skript noch nicht gefunden (es muss einmal auf poppen.de oder hier laufen).';
+    if (shOwnerOk === false) return 'Die gemeinsame Ablage gehört einem anderen Konto – kein Abgleich.';
+    if (!SH.alive()) return Date.now() - st.start < 20000 ? 'Wird geprüft …' : 'Briefkasten blockiert – vermutlich durch die Sicherheitsrichtlinie der Seite, einen Werbeblocker oder gesperrte Drittanbieter-Daten. Export/Import per Hand geht weiter.';
     const last = Math.max(st.recv || 0, st.sent || 0);
-    return `Abgleich aktiv mit dem poppen-Skript${peer.version ? ' ' + peer.version : ''}` + (last ? ` · letzter Austausch ${fmtTs(last)}` : '') +
+    return 'Gemeinsame Ablage aktiv' + (peer && peer.version ? ` · poppen-Skript ${peer.version}` : '') + (last ? ` · letzter Abgleich ${fmtTs(last)}` : '') +
       (st.err ? ` · zuletzt Fehler: ${st.err}` : '');
   }
-  function bkStart() {
-    if (IN_FRAME || window.top !== window) return;
+  // ---------- Kontobindung (ab 1.96, wie poppen 2.34): der Tampermonkey-Speicher gehört EINEM JOYclub-Konto ----------
+  // jaf_owner = { uid, nick, seit, handover? }. Anderes Konto angemeldet → Skript komplett aus (kein Schreiben, keine Scans,
+  // kein Briefkasten, kein Rekorder), nur ein roter Hinweis. Wechsel nur bewusst über Experten › Kontobindung.
+  const K_OWNER = 'jaf_owner';
+  const OWNER_HANDOVER_MS = 7 * 864e5;
+  function ownerBlockHint(o) {
+    OWNER_BLOCK = true;
+    const show = () => {
+      if (!document.body || document.getElementById('jaf-owner-off')) return;
+      const d = document.createElement('div'); d.id = 'jaf-owner-off';
+      d.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:2147483646;background:#7f1d1d;color:#fff;border:1px solid #e53935;border-radius:8px;padding:8px 14px;font:13px system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.5);max-width:92vw;cursor:pointer';
+      d.textContent = opaT(`Opa-Scan aus – die Daten in diesem Browser-Profil gehören zu ${o && o.nick ? o.nick : 'einem anderen Konto'}. Falsches Konto angemeldet?`);
+      d.title = 'Klick blendet den Hinweis aus';
+      d.addEventListener('click', () => d.remove());
+      document.body.appendChild(d);
+    };
+    if (document.body) show(); else document.addEventListener('DOMContentLoaded', show, { once: true });
+  }
+  const hasOwnData = () => GM_listValues().some((k) => /^jaf_(settings|fl$|log|ignored|accounts|events)/.test(k));
+  async function ownerGate() {
+    if (IN_FRAME) return !OWNER_BLOCK;
+    const uid = sessionId();
+    if (!uid) return true; // nicht angemeldet: nur Login-Hilfe/Hinweise wie bisher
+    const nick = ownNick() || '';
+    const o = GM_getValue(K_OWNER, null);
+    const bind = () => GM_setValue(K_OWNER, { uid: String(uid), nick, seit: Date.now() });
+    if (o && String(o.uid) === String(uid)) { if (nick && o.nick !== nick) GM_setValue(K_OWNER, Object.assign({}, o, { nick })); return true; }
+    if (o) {
+      if (o.handover && Date.now() - o.handover < OWNER_HANDOVER_MS) {
+        const v = await askPopup({ title: opaT('Opa-Scan: Daten übernehmen?'), lines: [`Die Opa-Scan-Daten in diesem Browser-Profil gehören zu ${o.nick || 'einem anderen Konto'} und wurden zur Übergabe freigegeben.`, `Sollen sie ab jetzt zu ${nick || 'diesem Konto'} gehören?`],
+          buttons: [{ label: 'Übernehmen', value: 'yes', focus: true }, { label: 'Nicht übernehmen', value: 'no' }] });
+        if (v === 'yes') { GM_setValue(K_OWNER, { uid: String(uid), nick, seit: Date.now(), prev: { uid: o.uid, nick: o.nick } }); GM_setValue('jaf_sh_tpl', {}); GM_setValue('jaf_sh_fick', {}); GM_setValue('jaf_sh_ids', {}); return true; }
+      }
+      ownerBlockHint(o);
+      return false;
+    }
+    if (!hasOwnData()) { bind(); return true; }
+    const refused = GM_getValue('jaf_owner_refused', {}) || {};
+    if (refused[uid]) { ownerBlockHint({ nick: '' }); return false; }
+    const v = await askPopup({ title: opaT('Opa-Scan: Daten zuordnen'), lines: [`Gehören die vorhandenen Opa-Scan-Daten zu ${nick || 'diesem Konto'}?`, 'Nur dieses Konto kann sie dann in diesem Browser-Profil nutzen. Ein Wechsel geht später unter Experten › Kontobindung.'],
+      buttons: [{ label: 'Ja', value: 'yes', focus: true }, { label: 'Nein', value: 'no' }] });
+    if (v === 'yes') { bind(); return true; }
+    if (v === 'no') { refused[uid] = Date.now(); GM_setValue('jaf_owner_refused', refused); ownerBlockHint({ nick: '' }); return false; }
+    return false; // Popup weggeklickt → diesmal aus, beim nächsten Aufruf wieder fragen
+  }
+  function ownerHandover(on) {
+    const o = GM_getValue(K_OWNER, null); if (!o) return;
+    const n = Object.assign({}, o); if (on) n.handover = Date.now(); else delete n.handover;
+    GM_setValue(K_OWNER, n);
+  }
+  // =====================================================================
+  // ---------- Gemeinsame Ablage (ab 1.96): Seite ↔ eigener Briefkasten-Rahmen, Abgleich von Fickliste, ----------
+  // ---------- Textvorlagen, Termin-Datei, „Ich“ und Einstellungs-Kopie (Regeln: FORMAT.md im poppen-Repo) ----------
+  // =====================================================================
+  const SH = (() => {
+    const qk = 'jaf_rpcq_' + TAB_ID, rk = 'jaf_rpcr_' + TAB_ID, ak = 'jaf_rpca_' + TAB_ID;
+    const pend = new Map();
+    let seq = 0, listening = false;
+    function listen() {
+      if (listening) return; listening = true;
+      try {
+        GM_addValueChangeListener(rk, (n, o, v) => {
+          const done = [];
+          for (const r of v || []) { const p = pend.get(r.id); if (!p) continue; pend.delete(r.id); done.push(r.id); if (r.err) p.rej(new Error(r.err)); else p.res(r.v); }
+          if (done.length) GM_setValue(qk, (GM_getValue(qk, []) || []).filter((x) => !done.includes(x.id) && pend.has(x.id)));
+        });
+      } catch (e) { console.warn('[Alter-Filter] Ablage', e); }
+      window.addEventListener('pagehide', () => { try { GM_deleteValue(qk); GM_deleteValue(rk); GM_deleteValue(ak); } catch (e) { /* egal */ } });
+    }
+    const alive = () => Date.now() - (GM_getValue(ak, 0) || 0) < 15000;
+    async function call(op, args, timeout = 15000) {
+      listen();
+      bkEnsureFrame();
+      const t0 = Date.now();
+      while (!alive()) { if (Date.now() - t0 > timeout) throw new Error('Briefkasten nicht erreichbar'); await sleep(250); }
+      return new Promise((res, rej) => {
+        const id = (++seq) + '.' + Date.now().toString(36);
+        pend.set(id, { res, rej });
+        const q = GM_getValue(qk, []) || []; q.push({ id, op, args }); GM_setValue(qk, q);
+        setTimeout(() => { if (pend.has(id)) { pend.delete(id); GM_setValue(qk, (GM_getValue(qk, []) || []).filter((x) => x.id !== id)); rej(new Error('Briefkasten antwortet nicht')); } }, timeout);
+      });
+    }
+    return { call, alive };
+  })();
+  const shBy = () => ({ pf: 'joyclub', ver: SH_VERSION, acc: ownNick() || '' });
+  const shMyIch = () => (sessionId() ? 'joyclub:' + sessionId() : '');
+  let shOwnerOk = null; // null = noch nicht geprüft; false = Ablage gehört einem anderen Konto → nicht schreiben
+
+  // ---- „Ich“: eigenes Profil eintragen; Besitzer der Ablage prüfen (owner in tpl unter den eigenen ich-Einträgen?) ----
+  async function shRegisterIch() {
+    const uid = sessionId(); if (!uid) return;
+    const path = GM_getValue('jaf_own_path', '') || `/profile/${uid}.html`;
+    await SH.call('put', { s: 'ich', v: { id: 'joyclub:' + uid, pf: 'joyclub', uid: String(uid), nick: ownNick() || '', url: 'https://www.joyclub.de' + path, at: Date.now() } });
+  }
+  async function shIchIds() {
+    let l = [];
+    try { l = (await SH.call('all', { s: 'ich' })) || []; } catch (e) { l = []; }
+    const ids = new Set(l.map((i) => i.id || `${i.pf}:${i.uid}`));
+    if (shMyIch()) ids.add(shMyIch());
+    return { ids, list: l };
+  }
+  async function shCheckOwner(remoteTpl) {
+    const owners = [...new Set((remoteTpl || []).map((r) => r && r.owner).filter(Boolean))];
+    if (!owners.length) { shOwnerOk = true; return true; }
+    const { ids } = await shIchIds();
+    shOwnerOk = owners.every((o) => ids.has(o));
+    if (!shOwnerOk) bkStat({ err: 'Die gemeinsame Ablage gehört einem anderen Konto – kein Abgleich' });
+    return shOwnerOk;
+  }
+
+  // ---- Fickliste ----
+  const K_SH_FICK = 'jaf_sh_fick'; // { sid: { rev, h, deleted } } – zuletzt gesehener/geschriebener Stand je Eintrag
+  const K_SH_IDS = 'jaf_sh_ids';   // { lokale ID: ID in der Ablage }
+  function shClean(x) {
+    const v = JSON.parse(JSON.stringify(x));
+    delete v.rev; delete v.updatedAt; delete v.updatedBy; delete v.deleted;
+    if (v.notesBy && (v.notesBy.platform || v.notesBy.account)) v.notesBy = { pf: v.notesBy.pf || v.notesBy.platform || 'joyclub', acc: v.notesBy.acc || v.notesBy.account || '' };
+    return v;
+  }
+  let shFickBusy = false;
+  async function shFickSync() {
+    if (shFickBusy || !shOwnerOk || CONFIG.DRY_RUN) return;
+    shFickBusy = true;
+    try {
+      const all = (await SH.call('all', { s: 'fick' }, 20000)) || [];
+      const byId = new Map(all.map((r) => [r.id, r]));
+      const st = GM_getValue(K_SH_FICK, {}) || {}, ids = GM_getValue(K_SH_IDS, {}) || {};
+      // 1. Neues aus der Ablage übernehmen (wie ein Import; Rückfragen werden vorgemerkt)
+      const fresh = all.filter((r) => r && r.id && !(st[r.id] && st[r.id].rev === r.rev));
+      const live = fresh.filter((r) => !r.deleted);
+      if (live.length) {
+        const res = await flImportRun({ platform: 'poppen', persons: live.map(shClean) }, () => 'defer');
+        if (res.deferred && res.deferred.length) GM_setValue(K_BK_PEND_FL, (GM_getValue(K_BK_PEND_FL, []) || []).concat(res.deferred).slice(-200));
+        bkStat({ recv: Date.now() });
+      }
+      // Löschmarken: lokal nur löschen, wenn hier seit dem letzten Abgleich nichts geändert wurde
+      const exp0 = new Map(flExportPersons().map((x) => [x.__lid, x]));
+      for (const r of fresh.filter((x) => x.deleted)) {
+        const lid = Object.keys(ids).find((l) => ids[l] === r.id);
+        const k = st[r.id];
+        if (lid && k && k.h && exp0.has(lid)) {
+          const v = shClean(exp0.get(lid)); v.id = r.id;
+          if (bkHash(JSON.stringify(v)) === k.h) { flDeleteAll(lid); delete ids[lid]; }
+        }
+        st[r.id] = { rev: r.rev, h: null, deleted: true };
+      }
+      for (const r of live) st[r.id] = { rev: r.rev, h: (st[r.id] && st[r.id].h) || null };
+      // 2. Zuordnung lokale Person ↔ Eintrag der Ablage (über Profil-Links/IDs)
+      const idx = flLocalIndex();
+      for (const r of all) {
+        if (!r || r.deleted) continue;
+        let lid = null;
+        try { lid = flXKeys(flRebaseX(r)).map((k) => idx.get(k)).find(Boolean); } catch (e) { lid = null; }
+        if (lid) { const p = flPrimaryId(lid); if (!ids[p]) ids[p] = r.id; }
+      }
+      // 3. Eigene Änderungen schreiben (Versionsprüfung; bei Konflikt beim nächsten Durchlauf zusammenführen)
+      const seen = new Set();
+      for (const x of flExportPersons()) {
+        const lid = x.__lid;
+        let sid = ids[lid];
+        if (!sid) { sid = byId.has(String(lid)) ? String(lid) : (flIsExt(lid) ? 'x:' : 'j:') + lid; ids[lid] = sid; }
+        seen.add(sid);
+        const v = shClean(x); v.id = sid;
+        if (v.ext === true) v.ext = { name: (x.main && (x.main.nick || x.main.name)) || '' };
+        const h = bkHash(JSON.stringify(v));
+        const k = st[sid];
+        if (k && k.h === h && !k.deleted) continue;
+        const cur = byId.get(sid);
+        let res = null;
+        try { res = await SH.call('put', { s: 'fick', v, expect: cur ? (cur.rev || 0) : null, by: shBy() }); } catch (e) { bkStat({ err: e.message || String(e) }); break; }
+        if (res && res.ok) { st[sid] = { rev: res.rev, h }; bkStat({ sent: Date.now() }); } else if (res && res.conflict) st[sid] = { rev: -1, h: null };
+      }
+      // 4. Hier gelöschte Personen → Löschmarke (nur, wenn die Ablage seitdem unverändert ist)
+      for (const [sid, k] of Object.entries(st)) {
+        if (seen.has(sid) || !k || !k.h || k.deleted) continue;
+        const cur = byId.get(sid);
+        if (!cur || cur.deleted) { st[sid] = { rev: cur ? cur.rev : k.rev, h: null, deleted: true }; continue; }
+        if (cur.rev !== k.rev) continue;
+        try { const res = await SH.call('del', { s: 'fick', k: sid, expect: k.rev, by: shBy() }); if (res && res.ok) st[sid] = { rev: res.rev, h: null, deleted: true }; } catch (e) { break; }
+      }
+      GM_setValue(K_SH_FICK, st); GM_setValue(K_SH_IDS, ids);
+      if (live.length) { try { flRefreshAll(); } catch (e) { /* egal */ } }
+    } catch (e) { bkStat({ err: e.message || String(e) }); } finally { shFickBusy = false; }
+  }
+
+  // ---- Textvorlagen: JOYclub-Server maßgeblich (Regelwerk 3.2/3.3) ----
+  const K_SH_TPL = 'jaf_sh_tpl'; // { sid: { rev, h (gemeinsamer Stand), note (Notiz-ID auf JOYclub), deleted } }
+  let shTplLast = null, shTplBusy = false;
+  const shTplHash = (name, text) => bkHash(norm(name).replace(/\s+/g, '') + '\u0001' + smNorm(text || ''));
+  async function shTplSync() {
+    if (shTplBusy || !shOwnerOk || CONFIG.DRY_RUN) return;
+    shTplBusy = true;
+    try {
+      const { list, s } = await tplSync();
+      const remote = (await SH.call('all', { s: 'tpl' }, 20000)) || [];
+      if (!(await shCheckOwner(remote))) return;
+      const st = GM_getValue(K_SH_TPL, {}) || {};
+      const owner = shMyIch();
+      const R = new Map(remote.map((r) => [r.id, r]));
+      const used = new Set();
+      const nk = (t) => norm(t || '').replace(/\s+/g, '');
+      const findRemote = (n, m) => {
+        let r = remote.find((x) => x.pfIds && String(x.pfIds.joyclub) === String(n.id));
+        if (!r) r = R.get('j:' + n.id) || (m && R.get(m.uid));
+        if (!r) r = remote.find((x) => !x.deleted && !used.has(x.id) && !(x.pfIds && x.pfIds.joyclub) && nk(x.name) === nk(n.name));
+        return r || null;
+      };
+      const put = (v, expect) => SH.call('put', { s: 'tpl', v: Object.assign({}, v, { owner }), expect, by: shBy() });
+      const toTrash = (r, why) => { if (r && !r.deleted) s.trash.push({ uid: r.id, name: r.name, text: r.text || '', deletedAt: Date.now(), by: r.updatedBy || null, why }); };
+      const n0 = list.length;
+      for (const n of list) {
+        const m = s.meta[String(n.id)];
+        const hS = shTplHash(n.name, n.text);
+        const r = findRemote(n, m);
+        if (r) used.add(r.id);
+        const sid = r ? r.id : 'j:' + n.id;
+        const B = st[sid] && !st[sid].deleted ? st[sid].h : null;
+        const mine = (x) => Object.assign({}, x || {}, { id: sid, name: n.name, text: n.text, pfIds: Object.assign({}, (x && x.pfIds) || {}, { joyclub: n.id }) });
+        const done = (res, h) => { if (res && res.ok) st[sid] = { rev: res.rev, h, note: n.id }; };
+        if (!r) { done(await put(mine(null), null), hS); continue; }
+        const hR = r.deleted ? null : shTplHash(r.name, r.text);
+        if (!B) { // erster Abgleich ohne gemeinsamen Stand: gleich → verknüpfen, sonst gewinnt JOYclub
+          if (hR === hS) { if (!r.pfIds || String(r.pfIds.joyclub) !== String(n.id) || r.owner !== owner) done(await put(mine(r), r.rev || 0), hS); else st[sid] = { rev: r.rev, h: hS, note: n.id }; continue; }
+          toTrash(r, 'JOYclub gewinnt (erster Abgleich)');
+          done(await put(mine(r), r.rev || 0), hS);
+          continue;
+        }
+        const sChanged = hS !== B;
+        if (r.deleted) {
+          if (!sChanged) { // anderswo gelöscht, hier unverändert → auf JOYclub löschen
+            try { await tplApiDelete(n.id); } catch (e) { continue; }
+            s.trash.push({ uid: m.uid, name: n.name, text: n.text, deletedAt: Date.now(), by: r.updatedBy || null });
+            delete s.meta[String(n.id)];
+            st[sid] = { rev: r.rev, h: null, note: null, deleted: true };
+          } else done(await put(mine(r), r.rev || 0), hS); // hier geändert → JOYclub gewinnt, Löschmarke aufheben
+          continue;
+        }
+        const rChanged = hR !== B;
+        if (hR === hS) { st[sid] = { rev: r.rev, h: hS, note: n.id }; continue; }
+        if (sChanged && !rChanged) { done(await put(mine(r), r.rev || 0), hS); continue; }
+        if (!sChanged && rChanged) { // nur anderswo geändert → auf JOYclub übertragen
+          const text = String(r.text || '').slice(0, TPL_TEXT_MAX), name = String(r.name || n.name).slice(0, 200);
+          try { await tplApiUpdate(n.id, name, text); } catch (e) { continue; }
+          m.name = name; m.text = text; m.hash = await smHash(text); m.at = r.updatedAt || Date.now(); m.by = r.updatedBy || tplBy();
+          st[sid] = { rev: r.rev, h: shTplHash(name, text), note: n.id };
+          continue;
+        }
+        toTrash(r, 'JOYclub gewinnt'); // beide geändert
+        done(await put(mine(r), r.rev || 0), hS);
+      }
+      // Einträge der Ablage ohne Gegenstück auf JOYclub
+      let count = n0;
+      for (const r of remote) {
+        if (!r || used.has(r.id)) continue;
+        const k = st[r.id];
+        if (r.deleted) { if (k && !k.deleted) st[r.id] = Object.assign({}, k, { rev: r.rev, deleted: true }); continue; }
+        if (k && k.note && k.h && !k.deleted) { // war verknüpft → auf JOYclub gelöscht: Löschmarke (JOYclub gewinnt)
+          if (shTplHash(r.name, r.text) !== k.h) toTrash(r, 'auf JOYclub gelöscht');
+          try { const res = await SH.call('del', { s: 'tpl', k: r.id, expect: r.rev || 0, by: shBy() }); if (res && res.ok) st[r.id] = { rev: res.rev, h: null, deleted: true }; } catch (e) { /* später */ }
+          continue;
+        }
+        // neu von einer anderen Plattform → auf JOYclub anlegen
+        if (count >= TPL_MAX) continue;
+        const name = String(r.name || 'Vorlage').slice(0, 200), text = String(r.text || '').slice(0, TPL_TEXT_MAX);
+        let id = null;
+        try { const cr = await tplApiCreate(name, text); id = cr && (cr.id || (cr.note && cr.note.id)); } catch (e) { continue; }
+        if (!id) continue;
+        count++;
+        s.meta[String(id)] = { uid: r.id, name, text, hash: await smHash(text), at: r.updatedAt || Date.now(), by: r.updatedBy || tplBy() };
+        const res = await put(Object.assign({}, r, { pfIds: Object.assign({}, r.pfIds || {}, { joyclub: id }) }), r.rev || 0);
+        if (res && res.ok) st[r.id] = { rev: res.rev, h: shTplHash(name, text), note: id };
+      }
+      s.trash = s.trash.filter((t) => Date.now() - (t.deletedAt || 0) < TPL_TRASH_DAYS * 864e5);
+      tplSave(s); GM_setValue(K_SH_TPL, st);
+      bkStat({ sent: Date.now() });
+    } catch (e) { bkStat({ err: e.message || String(e) }); } finally { shTplBusy = false; }
+  }
+
+  // ---- Termin-Datei (meta.termine_file): eine Datei für alle, neuere gewinnt, Text immer roh ----
+  // h = Datei-Griff (oder null), picked = gerade neu gewählt → { text, note } oder null
+  async function shTermineText(h, picked) {
+    let remote = null, reach = true;
+    try { remote = await SH.call('get', { s: 'meta', k: 'termine_file' }, 2500); } catch (e) { reach = false; }
+    let f = null;
+    if (h) { try { if ((await h.queryPermission({ mode: 'read' })) === 'granted') f = await h.getFile(); } catch (e) { f = null; } }
+    const upload = async (file, text) => { if (!reach || !shOwnerOk) return; try { await SH.call('put', { s: 'meta', v: { k: 'termine_file', name: file.name, size: file.size || 0, lastModified: file.lastModified || 0, text: String(text).slice(0, 200000), at: Date.now(), by: shBy() } }); } catch (e) { /* egal */ } };
+    if (!f) return remote && remote.text != null ? { text: remote.text, note: `Stand vom Briefkasten („${remote.name}“)` } : null;
+    const text = await f.text();
+    if (!remote || !remote.name) { await upload(f, text); return { text, note: '' }; }
+    if (f.name !== remote.name) {
+      if (picked && confirm(`Termin-Datei für alle Skripte auf „${f.name}“ wechseln?`)) { await upload(f, text); return { text, note: '' }; }
+      return { text: remote.text || '', note: `Für alle Skripte gilt „${remote.name}“ – bitte diese Datei neu wählen.` };
+    }
+    if ((f.lastModified || 0) > (remote.lastModified || 0)) { await upload(f, text); return { text, note: '' }; }
+    if ((remote.lastModified || 0) > (f.lastModified || 0)) return { text: remote.text || '', note: 'Neuerer Stand vom Briefkasten' };
+    return { text, note: '' };
+  }
+
+  // ---- Einstellungs-Kopie (meta.joyclub_gm): bei jedem Speichern, sonst alle 6 Stunden ----
+  const SH_GM_SKIP = /\||^jaf_(fl|api_|rpc[qra]_|bk|sh_|lock|state|gate|login|vis_run|bg_job|peek|opa$|evscan|ms_|failed|accounts|log$|ignored|checked|watch|mem|pi_|store_v|mig|events|group_done|mj|done|other_types|gender_map|tpl$|owner)/;
+  async function shMirrorSettings(force) {
+    if (!shOwnerOk) return;
+    if (!force && Date.now() - (GM_getValue('jaf_sh_gm_at', 0) || 0) < 6 * 3600e3) return;
+    const data = {};
+    for (const k of GM_listValues()) if (k.startsWith('jaf_') && !SH_GM_SKIP.test(k)) data[k] = GM_getValue(k);
+    if (JSON.stringify(data).length > 1500000) return;
+    try { await SH.call('put', { s: 'meta', v: { k: 'joyclub_gm', at: Date.now(), ver: SH_VERSION, acc: ownNick() || '', uid: sessionId() || '', data } }); GM_setValue('jaf_sh_gm_at', Date.now()); } catch (e) { /* später */ }
+  }
+  // Neuinstallation: keine Einstellungen, aber eine Kopie im Briefkasten → anbieten
+  async function shOfferSettingsRestore() {
+    if (GM_getValue(K_SETTINGS, null) || GM_getValue('jaf_sh_gm_asked', 0)) return;
+    let r = null;
+    try { r = await SH.call('get', { s: 'meta', k: 'joyclub_gm' }, 20000); } catch (e) { return; }
+    GM_setValue('jaf_sh_gm_asked', Date.now());
+    if (!r || !r.data || !Object.keys(r.data).length || (r.uid && r.uid !== sessionId())) return;
+    const v = await askPopup({ title: opaT('Opa-Scan: Frühere Einstellungen gefunden'), lines: [`Im Briefkasten liegt eine Kopie Deiner Einstellungen und kleinen Listen vom ${fmtTs(r.at)} (Version ${r.ver || '?'}).`, 'Übernehmen?'],
+      buttons: [{ label: 'Übernehmen', value: 'yes', focus: true }, { label: 'Nicht übernehmen', value: 'no' }] });
+    if (v !== 'yes') return;
+    for (const [k, val] of Object.entries(r.data)) if (k.startsWith('jaf_') && !SH_GM_SKIP.test(k)) GM_setValue(k, val);
+    flToast('Einstellungen übernommen – Seite wird neu geladen …', 2500);
+    setTimeout(() => location.reload(), 1500);
+  }
+
+  // ---------- Import einer fremden Fickliste – Fallliste (FORMAT.md, Texte wörtlich) ----------
+  // persons: fremde Liste (Austauschformat), exp: { nick, uid, pf } des Exporteurs, tpls: fremde Textvorlagen (für „Termine“)
+  const FX_RANK = { no: 0, want: 1, done: 2, never: 3 };
+  async function fickImportForeign(persons, exp, tpls) {
+    const E = exp.nick || '?';
+    const { list: ich } = await shIchIds().catch(() => ({ list: [] }));
+    const me = ich.slice();
+    if (sessionId()) me.push({ pf: 'joyclub', uid: String(sessionId()), nick: ownNick() || '', url: 'https://www.joyclub.de' + (GM_getValue('jaf_own_path', '') || `/profile/${sessionId()}.html`) });
+    const isMe = (pr) => pr && me.some((i) => (i.pf && pr.pf === i.pf && pr.uid != null && String(pr.uid) === String(i.uid)) ||
+      (i.nick && (pr.nick || pr.name) && norm(pr.nick || pr.name) === norm(i.nick)) || (i.url && pr.url && flCanonLink(pr.url) === flCanonLink(i.url)));
+    const hits = (persons || []).filter((X) => X && [X.main, ...(X.profiles || [])].some(isMe));
+    if (!hits.length) return 'Fickliste: Du stehst nicht in der fremden Liste';
+    // zusammenfassen (Fall I): Treffen vereint, Status = der höchste
+    let fs = null; const fMeets = [];
+    for (const X of hits) {
+      if (X.status && (fs == null || FX_RANK[X.status] > FX_RANK[fs])) fs = X.status;
+      for (const m of X.meets || []) fMeets.push(m);
+    }
+    if (!fs && fMeets.length) fs = 'done'; // Fall H
+    if (!fs || fs === 'no') return 'Fickliste: nichts zu tun'; // Fall G bzw. ohne Status und Treffen
+    // eigener Eintrag {E}
+    const eid = exp.uid && /^\d+$/.test(String(exp.uid)) ? String(exp.uid) : '';
+    let P = eid ? flGet(eid) : Object.values(getFl()).find((q) => norm(q.nick) === norm(E));
+    const own = P ? (FL_X_ST[P.status] || null) : null;
+    // neue Treffen (gleiches Datum + gleicher Ort/Link gibt es bei {E} noch nicht)
+    const place = (m) => [norm(m.where || m.wo), norm(m.club), flCanonLink(m.link || m.url || '')];
+    const samePlace = (a, b) => { const x = place(a), y = place(b); return (x[2] && x[2] === y[2]) || (x[1] && x[1] === y[1]) || (x[0] && x[0] === y[0]); };
+    const ownMeetsE = (P && P.meets) || [];
+    const newMeets = [];
+    for (const m of fMeets) {
+      if (!m.date) continue;
+      if (ownMeetsE.some((o) => o.date === m.date && samePlace({ where: o.wo, club: o.club, link: o.url }, m))) continue;
+      if (newMeets.some((o) => o.date === m.date && samePlace(o, m))) continue;
+      newMeets.push(Object.assign({}, m));
+    }
+    // Treffen-Liste: an, wenn an dem Tag kein eigenes Treffen oder am selben Ort; sonst aus mit rotem Hinweis
+    for (const m of newMeets) {
+      m.__on = true; m.__warn = '';
+      for (const q of Object.values(getFl())) {
+        if (P && q.id === P.id) continue;
+        for (const o of q.meets || []) {
+          if (o.date !== m.date) continue;
+          const om = { where: o.wo, club: o.club, link: o.url };
+          if (samePlace(om, m)) { for (const [k, v] of [['where', o.wo], ['club', o.club], ['link', o.url], ['time', o.time]]) if (!m[k] && v) { m[k] = v; (m.__added = m.__added || []).push(k); } }
+          else { m.__on = false; m.__warn = `Laut Deiner Fickliste warst Du an dem Tag woanders (${[o.club, o.wo].filter(Boolean).join(', ') || 'anderer Ort'}, mit ${q.nick || '?'}).`; }
+        }
+      }
+    }
+    // Termine aus der fremden Vorlage „Termine“
+    const tt = (tpls || []).find((t) => t && !t.deletedAt && norm(t.name) === 'termine');
+    const termine = tt ? tplParseTermine(tt.text || '') : [];
+    // Fall bestimmen
+    const T = (t) => t.replace(/\{E\}/g, E);
+    const K4 = [['Ja, gerne wieder', 'done', true], ['Ja, einmal ist keinmal', 'never', true], ['Im Leben nicht', 'no', false], ['Stimmt nicht', null, false]];
+    let c = null;
+    const hTerm = 'Hier hättet Ihr die Gelegenheit dazu:', hTerm2 = 'Hier hättet Ihr erneut die Gelegenheit dazu:';
+    if (fs === 'want') {
+      if (!own) c = { title: T('{E} will Dich ficken! 😁'), sub: T('Du hast {E} noch nicht in Deiner Fickliste.'), th: hTerm, btns: [['Will ich auch!', 'want', false], ['Nein, danke!', 'no', false], ['Mal sehen', null, false]] };
+      else if (own === 'want') c = { title: T('{E} will Dich auch ficken! 😁'), bold: true, sub: '', th: hTerm, btns: [['OK', null, false]] };
+      else if (own === 'done') c = { title: T('{E} will Dich ficken! 😁'), sub: T('Ihr hattet laut Deiner Fickliste schon das Vergnügen – {E} hat es offenbar noch nicht eingetragen.'), th: hTerm2, btns: [['OK', null, false]] };
+      else if (own === 'never') c = { title: T('{E} will Dich ficken! 😳'), sub: '... aber eine Wiederholung ist eigentlich überflüssig.', th: hTerm2, btns: [['OK', null, false]] };
+      else if (own === 'no') c = { title: T('{E} will Dich ficken! 😳'), sub: '... das beruht nicht auf Gegenseitigkeit.', th: hTerm, btns: [['Doch, will ich!', 'want', false], ['Bleibt dabei', null, false]] };
+    } else { // done / never
+      const subB = T('{E} hat diese Treffen mit Dir eingetragen. Ausgewählte werden als eigene Treffen mit {E} übernommen.');
+      if (!own || (own === 'want' && fs === 'done')) c = { title: T('{E} hat wohl schon mit Dir gefickt!?'), sub: subB, meets: true, th: hTerm2, btns: K4 };
+      else if (own === 'want' && fs === 'never') c = { title: T('{E} hat wohl schon mit Dir gefickt!?'), sub: '... fand es aber nicht so toll.', meets: true, th: hTerm2, btns: K4 };
+      else if (own === 'no') c = { title: T('{E} hat wohl schon mit Dir gefickt!? 😳'), sub: T('Dabei steht {E} bei Dir auf ‚Nein, danke!‘.'), meets: true, th: hTerm2, btns: K4 };
+      else { // eigen done/never
+        const sub = own === 'never' && fs === 'never' ? T('{E} fand es auch nicht so toll.') : own === 'done' && fs === 'never' ? 'Beim nächsten Mal mehr Mühe geben!' : own === 'never' && fs === 'done' ? 'Hätte aber nicht sein müssen ...' : 'Immer wieder gerne 😁';
+        if (!newMeets.length && !termine.length) return 'Fickliste: nichts Neues';
+        c = { title: 'Erneut gelandet!', sub, meets: true, th: T('{E} wäre hier wieder fickbar:'),
+          btns: newMeets.length ? [['Ja, gerne wieder', 'done', true], ['Ja, wieder nicht aufgepasst', 'never', true], ['Im Leben nicht', 'no', false], ['Stimmt nicht', null, false]] : [['OK', null, false]] };
+      }
+    }
+    if (!c) return 'Fickliste: nichts zu tun';
+    const choice = await new Promise((resolve) => {
+      const { ov, box } = flOverlay('jaf-fl-foreign');
+      ov.style.zIndex = '2147483647';
+      box.appendChild(flEl('div', `font:${c.bold ? 'bold ' : 'bold '}19px system-ui;margin-bottom:6px`, escHtml(c.title)));
+      if (c.sub) box.appendChild(flEl('div', 'font-size:13.5px;color:#bbb;margin-bottom:10px', escHtml(c.sub)));
+      const sw = [];
+      if (c.meets && newMeets.length) {
+        for (const m of newMeets) {
+          const lab = flEl('label', 'display:flex;gap:10px;align-items:flex-start;margin:6px 0;cursor:pointer;font-size:13.5px');
+          const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = m.__on; cb.style.cssText = 'width:17px;height:17px;margin-top:2px';
+          const txt = flEl('div', '', '');
+          const parts = [...new Set([m.date ? fmtDay(Date.parse(m.date)) : '', m.time || '', m.club || '', m.where || ''].filter(Boolean))];
+          txt.innerHTML = parts.map((p) => escHtml(p)).join(' · ') + (m.link ? ` · <a href="${escHtml(m.link)}" target="_blank" rel="noopener">Link</a>` : '') +
+            (m.__added ? ` <span style="color:#9ec5ff;font-size:12px">(ergänzt: ${m.__added.join(', ')})</span>` : '') +
+            (m.__warn ? `<div style="color:#ff6b6b;font-size:12.5px">${escHtml(m.__warn)}</div>` : '');
+          lab.append(cb, txt); box.appendChild(lab); sw.push([m, cb]);
+        }
+      }
+      if (termine.length) {
+        box.appendChild(flEl('div', 'font-weight:bold;margin:12px 0 4px', escHtml(c.th)));
+        for (const t of termine) box.appendChild(flEl('div', 'font-size:13.5px;margin:2px 0', t.link ? `<a href="${escHtml(t.link)}" target="_blank" rel="noopener">${escHtml(tplTerminLabel(t))}</a>` : escHtml(tplTerminLabel(t))));
+      }
+      const row = flEl('div', 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px');
+      c.btns.forEach(([label, st, withMeets], i) => row.appendChild(flBtn(label, () => { ov.remove(); resolve({ st, meets: withMeets ? sw.filter(([, cb]) => cb.checked).map(([m]) => m) : [] }); }, i === 0)));
+      box.appendChild(row);
+    });
+    if (!choice || (!choice.st && !choice.meets.length)) return 'Fickliste: nichts übernommen';
+    if (!P) {
+      const id = eid || 'x-' + flNewId();
+      flPut({ id, nick: E, path: eid ? `/profile/${eid}.html` : '', type: '', status: '', meets: [], hist: [], created: Date.now() });
+      P = flGet(id);
+    }
+    for (const m of choice.meets) {
+      const nm = flMeetIn({ date: m.date, time: m.time || '', where: m.where || '', club: m.club || '', link: m.link || '', imported: `von ${E}` });
+      (P.meets = P.meets || []).push(nm);
+    }
+    if (choice.st) {
+      const ns = FL_X_ST_R[choice.st] || '';
+      if (ns !== (P.status || '')) flHist(P, `Fickstatus: ${P.status ? flLabel(P.status) : '–'} → ${flLabel(ns)} (Import von ${E})`);
+      P.status = ns; P.statusAt = Date.now();
+    }
+    if (choice.meets.length) flHist(P, `${choice.meets.length} Treffen aus der Fickliste von ${E} übernommen`);
+    flPut(P);
+    try { flRefreshAll(); } catch (e) { /* egal */ }
+    return `Fickliste: ${choice.st ? 'Status „' + flLabel(FL_X_ST_R[choice.st]) + '“' : ''}${choice.meets.length ? `${choice.st ? ', ' : ''}${choice.meets.length} Treffen übernommen` : ''}`;
+  }
+  // ---- Start: nach der Kontobindung, nur im obersten Fenster ----
+  function shStart() {
+    if (IN_FRAME || window.top !== window || !sessionId()) return;
     bkStat({ start: Date.now() });
     bkEnsureFrame();
-    // erster Kontakt bzw. Zurücksetzen drüben → Vollabgleich
-    const firstCheck = () => {
-      const peer = GM_getValue(K_BK_PEER, null), acked = +GM_getValue(K_BK_ACK, 0) || 0, seq = +GM_getValue(K_BK_SEQ, 0) || 0;
-      if (peer && (!GM_getValue(K_BK_SENT, null) || acked > seq)) bkSendFull();
+    const run = async () => {
+      try {
+        if (shOwnerOk === null) { const remote = (await SH.call('all', { s: 'tpl' }, 20000)) || []; await shCheckOwner(remote); }
+        if (!shOwnerOk) return;
+        if (Date.now() - (GM_getValue('jaf_sh_ich_at', 0) || 0) > 864e5) { await shRegisterIch(); GM_setValue('jaf_sh_ich_at', Date.now()); }
+        await shFickSync();
+        await shMirrorSettings(false);
+      } catch (e) { bkStat({ err: e.message || String(e) }); }
     };
-    setTimeout(firstCheck, 4000);
-    try { GM_addValueChangeListener(K_BK_PEER, () => firstCheck()); } catch (e) { /* egal */ }
-    try { GM_addValueChangeListener(K_BK_IN, (k, o, n, remote) => { if (n && n.length) setTimeout(() => bkProcessInbox().catch(() => {}), 300); }); } catch (e) { /* egal */ }
-    setTimeout(() => bkProcessInbox().catch(() => {}), 2500);
-    setInterval(() => { const r = GM_getValue(K_BK_RETRY, null); if (r && r.at <= Date.now()) bkProcessInbox().catch(() => {}); }, 60000);
-    setInterval(() => { try { if (GM_getValue(K_BK_PEER, null)) bkCheckPersons(); } catch (e) { /* egal */ } }, 5000);
-    // Textvorlagen gelegentlich mit JOYclub abgleichen (nur wenn das poppen-Skript bekannt ist)
-    setInterval(() => { if (GM_getValue(K_BK_PEER, null) && !tplSyncing) tplSync().catch(() => {}); }, 15 * 60000);
-    setTimeout(() => { if (GM_getValue(K_BK_PEER, null) && !tplSyncing) tplSync().catch(() => {}); }, 8000);
+    setTimeout(() => { run(); shOfferSettingsRestore().catch(() => {}); }, 3000);
+    let t = 0;
+    const soon = (fn) => { clearTimeout(t); t = setTimeout(fn, 1200); };
+    try { GM_addValueChangeListener('jaf_bkv_fick', () => soon(() => shFickSync())); } catch (e) { /* egal */ }
+    try { GM_addValueChangeListener('jaf_bkv_tpl', () => soon(() => { if (!tplSyncing) shTplSync(); })); } catch (e) { /* egal */ }
+    try { GM_addValueChangeListener(K_FL, (k, o, n, remote) => { if (!remote) soon(() => shFickSync()); }); } catch (e) { /* egal */ }
+    setInterval(() => shFickSync(), 60000);
+    setInterval(() => { if (!tplSyncing) shTplSync(); }, 15 * 60000);
+    setTimeout(() => { if (!tplSyncing) shTplSync(); }, 9000);
   }
-  bkStart();
   setInterval(() => {
     if (IN_FRAME) return;
     try { if (flOverviewPage()) bkPendingFl().catch(() => {}); } catch (e) { /* weiter */ }
     try { if (document.querySelector('j-overlay[data-e2e="overlay-templates"] [data-e2e="button-add-template"]')) bkPendingTpl().catch(() => {}); } catch (e) { /* weiter */ }
   }, 2000);
 
-  safeInit();
-  let lastPath = location.pathname;
-  setInterval(() => { if (location.pathname !== lastPath) { lastPath = location.pathname; safeInit(); } }, 1000);
+  // Start erst nach der Kontobindung (braucht die angemeldete Nutzer-ID der Seite)
+  (async () => {
+    if (document.readyState === 'loading') await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
+    let ok = true;
+    try { ok = await ownerGate(); } catch (e) { console.warn('[Alter-Filter] Kontobindung', e); }
+    if (!ok) return;
+    shStart();
+    safeInit();
+    let lastPath = location.pathname;
+    setInterval(() => { if (location.pathname !== lastPath) { lastPath = location.pathname; safeInit(); } }, 1000);
+  })();
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', __jafMain, { once: true });
   else __jafMain();

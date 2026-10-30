@@ -570,15 +570,26 @@ Unter poppen.de schlägt die Verwaltung importierte poppen-Einträge vor; ein Kl
 
 <img src="docs/fickliste-import.png" width="420" alt="Popup Import">
 
-### Automatischer Abgleich (Briefkasten)
+### Automatischer Abgleich (gemeinsame Ablage)
 
-Ist auch das Skript für poppen.de installiert, gleichen sich Fickliste und Textvorlagen **ohne Export/Import** ab – sofort nach jeder Änderung, auf JOYclub wie auf poppen.de. Dafür bettet das Skript unsichtbar eine leere Seite ohne eigenen Code ein (`https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html`, GitHub Pages dieses Repositorys). Beide Skripte laufen darin und tauschen über deren Browser-Speicher aus; die Seiten von JOYclub und poppen.de kommen an diesen Speicher nicht heran, die Daten verlassen den Browser nie.
+Ist auch das Skript für poppen.de installiert, nutzen beide **dieselbe Fickliste und dieselben Textvorlagen** – ohne Export/Import. Sie liegen genau einmal in der gemeinsamen Ablage `opa-gemeinsam` (Browser-Datenbank der unsichtbar eingebetteten, leeren Seite `https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html`). Die Seiten von JOYclub und poppen.de kommen an diese Ablage nicht heran; die Daten verlassen den Browser nie. Das Format ist in [FORMAT.md](https://github.com/Schimmelreiter/poppen-opa-scan/blob/main/FORMAT.md) festgelegt (für alle Skripte gleich).
 
-- **Fickliste:** geänderte Personen werden einzeln übertragen, beim ersten Kontakt die ganze Liste; eingehende Personen werden wie beim Import abgeglichen.
-- **Textvorlagen:** nach jedem Abgleich mit JOYclub (Öffnen der Vorlagen, Speichern, alle 15 Minuten) gehen geänderte Vorlagen hinüber; eingehende werden nach den Import-Regeln eingemischt (Dreiwege-Abgleich, Smileys übersetzt).
-- **Rückfragen** (eine Person passt zu zwei Einträgen; beide Seiten haben eine Vorlage verschieden geändert, z. B. in der JOYclub-App) werden nicht mitten im Surfen gestellt, sondern beim nächsten Öffnen von „Meine Fickliste“ bzw. der Textvorlagen.
-- Auf poppen.de ist dieses Skript **passiv**: keine Oberfläche, keine Eingriffe, keine Aufrufe – nur der Briefkasten. Umgekehrt genauso.
-- **Status** unter Experten-Einstellungen › „Abgleich mit poppen.de“: aktiv, „Briefkasten blockiert“ (Sicherheitsrichtlinie oder Werbeblocker), „Speicher gesperrt“ („Drittanbieter-Cookies blockieren“) oder „poppen-Skript noch nicht gefunden“. In allen Fällen bleibt Export/Import per Hand.
+- **Fickliste:** Änderungen werden sofort geschrieben, mit Versionszähler – ändern zwei Skripte gleichzeitig, wird zusammengeführt statt überschrieben. Personen behalten ihre gemeinsame Kennung (`j:<Profil-ID>` für JOYclub-Profile), gelöscht wird per Löschmarke; unbekannte Felder anderer Skripte bleiben erhalten.
+- **Textvorlagen:** Maßgeblich sind die Vorlagen auf JOYclub. Geänderte, neue und gelöschte Vorlagen anderer Plattformen (z. B. aus dem Editor des poppen-Skripts) überträgt das Skript auf JOYclub; haben beide Seiten dieselbe Vorlage verschieden geändert, gewinnt JOYclub und die andere Fassung kommt in den Papierkorb.
+- **Termin-Datei:** Der Stand der Termin-Datei wird geteilt (eine Datei für alle Skripte, die neuere gewinnt, immer der unveränderte Text). Wer keine eigene Datei gewählt hat, sieht die Termine der anderen.
+- **„Ich“ und Einstellungs-Kopie:** Jedes Skript trägt sein eigenes Profil ein. Eine Kopie der Einstellungen und kleinen Listen liegt ebenfalls dort (bei jedem Speichern, sonst alle 6 Stunden) – nach einer Neuinstallation bietet das Skript an, sie zu übernehmen.
+- **Rückfragen** (eine Person passt zu zwei Einträgen) erscheinen beim nächsten Öffnen von „Meine Fickliste“.
+- **Status** unter Experten-Einstellungen › „Abgleich mit poppen.de“: aktiv, „Briefkasten blockiert“ (Sicherheitsrichtlinie, Werbeblocker oder gesperrte Drittanbieter-Daten) oder „gehört einem anderen Konto“. Export/Import per Hand bleibt immer möglich.
+
+### Kontobindung
+
+Die Daten in einem Browser-Profil gehören **einem** JOYclub-Konto. Beim ersten Start mit vorhandenen Daten fragt das Skript einmal, ob sie zum angemeldeten Konto gehören. Ist später ein **anderes** Konto angemeldet (vertauschte Browser-Profile, Zweit- oder Drittkonto), bleibt das Skript komplett aus – keine Scans, kein Schreiben, kein Abgleich, kein Rekorder – und zeigt nur „Opa-Scan aus – die Daten in diesem Browser-Profil gehören zu … Falsches Konto angemeldet?“. Gehört die gemeinsame Ablage einem anderen Konto, gleicht das Skript Fickliste und Vorlagen nicht ab.
+
+Wechsel nur bewusst vom bisherigen Konto aus: Experten-Einstellungen › **Kontobindung** › „Daten an anderes Konto übergeben“. Innerhalb von 7 Tagen fragt das nächste andere angemeldete Konto, ob es übernimmt; bis dahin lässt sich die Übergabe zurücknehmen. „Wiederherstellen“ lehnt die Sicherung eines anderen Kontos ab.
+
+### Fremde Fickliste (Gedächtnis eines anderen Kontos)
+
+Enthält ein importiertes Gedächtnis eines anderen Kontos eine Fickliste, wird nur übernommen, wo man selbst „der Fick“ ist. Je nach eigenem und fremdem Status fragt ein Dialog nach („… will Dich ficken! 😁“, „… hat wohl schon mit Dir gefickt!?“, „Erneut gelandet!“ …); neue Treffen lassen sich einzeln an- und abwählen, zukünftige Termine aus der Vorlage „Termine“ des Exporteurs stehen verlinkt darunter. War man laut eigener Liste an dem Tag woanders, ist das Treffen abgewählt und rot markiert. Fallliste und Texte: FORMAT.md.
 
 ### Gelöschte Kontakte (ClubMail)
 
@@ -636,7 +647,7 @@ Am Ende steht ein Bericht je Vorlage und die Liste der Smileys, die sich nicht �
 
 <img src="docs/textvorlagen-termine.png" width="400" alt="Termine im Bearbeiten-Fenster">
 
-Mit dem Skript für poppen.de gleichen sich die Vorlagen auch automatisch ab (siehe Fickliste › „Automatischer Abgleich (Briefkasten)“).
+Mit dem Skript für poppen.de teilen sich die Vorlagen eine gemeinsame Ablage (siehe Fickliste › „Automatischer Abgleich (gemeinsame Ablage)“).
 
 Die Vorlagen liest und schreibt das Skript über JOYclubs Schnittstelle (`apiv2 /users/<id>/notes`). Lesen, Ändern (`PUT`), Anlegen (`POST`) und Löschen (`DELETE`) sind durch Mitschnitte bestätigt.
 
