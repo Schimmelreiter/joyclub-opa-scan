@@ -1,6 +1,15 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.95 (30.10.2026)
+- Gästeliste: anonyme Anmeldungen fehlten fast alle (beim Laden über die Schnittstelle als doppelt aussortiert) – jetzt vollständig; Abweichung von JOYclubs Reiter-Zahlen steht im Ablauf-Protokoll
+- Anonyme und externe Anmeldungen werden wie Profile einsortiert und eingefärbt (Art aus dem Text), ohne Alter als älteste Stufe, und zählen im AWO-Faktor mit; Shops und Clubs nie, sie stehen nur unter „Alle“
+- Einsortiert wird nur bei zugeordnetem Profiltyp, sonst Reiter „Männer (übrige)“ usw.; Original-Reiter verschwinden nicht mehr mit Anmeldungen darin
+- Paare mit nur einem Alter: Reiter nach dem bekannten Alter; im AWO-Faktor mit ergänztem Partner (Frau + 7 bzw. Mann − 7 nach Profiltyp); Paar-Regel „einer über der Grenze“ gilt jetzt auch für Reiter und AWO
+- Geschlechterverteilung wie in der App (♀/⚤/♂ je Anmeldung): Diagramm in „Meine Event-Anmeldungen“, Kurzansicht auf der Termine-Seite und im Slider; vorab gesammelt über die Party-Seite (6 h gültig)
+- AWO-Gewichtung: Frauen lila, Paare orange
+- API-Rekorder: neue, abweichende Beispiele ersetzen das älteste
+
 1.94 (28.10.2026)
 - Einstellungen neu gestaltet: Versionsnummer (→ Changelog), „Anleitung“ und „Fehler melden“ im Titel (neuer Tab), keine Brotkrümel mehr (auch nicht auf „Meine Fickliste“); Gruppen-Tabellen über die volle Breite und in allen Gruppen gleich breit (Regler pixelgenau gleich), Erklärungen als Tooltips, Bezeichnungen als Raster Einzahl/Mehrzahl
 - Neu je Gruppe: „Grenzen altern mit mir“ (visuell) und „Grenze altert mit mir“ (Ignorieren) – die Grenzen steigen mit dem eigenen Alter, entsperrt wird dadurch niemand; bei Paaren „Paar-Regel“: beide oder einer über der Grenze

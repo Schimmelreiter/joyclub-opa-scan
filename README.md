@@ -258,10 +258,11 @@ Der Scan läuft in unsichtbaren Frames; die Übersichtsseite bleibt offen, das P
 
 Ein Maß für den Anteil alter Gäste einer Party (Stufen nach den visuellen Werten der Quelle „Partygäste“):
 
+- **Wer zählt:** jede Anmeldung (ein Paar einmal), auch anonyme und externe – mit Alter nach ihrer Stufe, ohne Alter als Stufe 3. Shops und Clubs zählen nie. Paar-Anmeldungen mit nur einem Alter werden ergänzt: Ist laut Profiltyp die Frau bekannt, gilt der Mann als 7 Jahre älter, sonst die Frau als 7 Jahre jünger; dann gilt die Paar-Regel („einer über der Grenze“ → höhere, sonst niedrigere Stufe).
 - Je Gruppe und Stufe eine **Anwesenheitsquote** (Standard: Männer 33 / 66 / 95 %, Frauen 95 / 95 / 95 %, Paare 90 / 90 / 90 %): So viele der Angemeldeten erscheinen voraussichtlich.
 - **Anteil je Gruppe** = erwartete Anwesende der Stufe 3 ÷ alle erwarteten Anwesenden der Gruppe (Sugar Daddys/Moms zählen als Stufe 3).
 - **AWO** = gewichtete Summe der Anteile, Gewichte Standard Männer 67 / Frauen 0 / Paare 33 %. Hat eine Gruppe keine Anmeldungen, wird ihr Gewicht anteilig auf die anderen verteilt.
-- Einstellbar auf der Seite „Opa-Schutz“ im Abschnitt **AWO-Faktor**: drei ganzzahlige %-Felder je Gruppe (die Grenzen in der Beschriftung folgen den Reglern) und ein Gewichtungs-Regler mit zwei Griffen (bei Frauen 0 % liegen sie bündig nebeneinander; Tooltips „Männer = xx % / Frauen = yy %“ bzw. „Frauen = yy % / Paare = zz %“). Die Gewichte ergeben immer 100 %.
+- Einstellbar auf der Seite „Opa-Schutz“ im Abschnitt **AWO-Faktor**: Raster mit drei ganzzahligen %-Feldern je Gruppe und ein Gewichtungs-Regler mit zwei Griffen (Männer blau `#5c8dd6`, Frauen lila `#b06ad6`, Paare orange `#e0a33c`) (bei Frauen 0 % liegen sie bündig nebeneinander; Tooltips „Männer = xx % / Frauen = yy %“ bzw. „Frauen = yy % / Paare = zz %“). Die Gewichte ergeben immer 100 %.
 - Farben: unter 10 % hellgrün, unter 25 % grün, unter 35 % orange, ab 35 % rot
 
 Angezeigt wird er
@@ -269,11 +270,25 @@ Angezeigt wird er
 - auf den Karten der eigenen Eventanmeldungen und im Slider „Dates & Events“ der **Profilseiten**: oben rechts das Datum des letzten Scans, darunter „AWO xx %“. Auf dem eigenen Profil zeigen noch nicht gescannte Partys die Platzhalter „--.--.----“ und „AWO –“; auf fremden Profilen erscheint bei ungescannten Partys nichts,
 - auf „Dates & Events“ hinter „… Personen angemeldet.“ samt Zeitpunkt des letzten Scans, ungescannt „AWO – (--.--.----)“.
 
+### Geschlechterverteilung
+
+Wie in der JOYclub-App: Anteile **♀ Frauen / ⚤ Paare / ♂ Männer** an den Anmeldungen (ein Paar zählt einmal – JOYclubs „135 Gäste“ zählt dagegen Personen). Quelle sind die Reiter-Zahlen der Party-Seite („Männer (75) / Frauen (8) / Paare (26)“) bzw. die beim Scan geladene Gästeliste.
+
+- **„Meine Event-Anmeldungen“ (Desktop):** Blasen-Diagramm (Fläche ∝ Anteil, ♀ und ⚤ rot, ♂ orange) in der linken Spalte zwischen Party-Logo und Club, der freie Platz wird gleichmäßig verteilt.
+- **Termine-Seite und Slider „Dates & Events“:** Kurzansicht rechts neben dem Datum, schmale Listenkarten: Zeile unter „… Teilnehmer“.
+- **Vorab gesammelt:** Für Partys auf dem Bildschirm ruft das Skript die Party-Seite einmal ab und liest die Reiter-Zahlen (sonst die Gästeliste über die Schnittstelle) – nacheinander mit Pausen, Ergebnis 6 Stunden gültig, nicht während eines Scans; nach zwei Fehlern in Folge Pause von 30 Minuten.
+
+<img src="docs/party-geschlechter.png" width="560" alt="Diagramm in der Detailkarte (Testdaten)">
+
+<img src="docs/termine-geschlechter.png" width="560" alt="Kurzansicht auf der Termine-Seite (Testdaten)">
+
 ### Event-Seite
 
 - Die Gästeliste wird im Hintergrund in zusätzliche Reiter aufgeteilt – je Gruppe mit eingeschalteter visueller Einstufung nach den Mehrzahl-Bezeichnungen der Stufen, z. B. **Männer → Männer / Opas**, **Frauen → Frauen / Omas**, **Paare → Pärchen / Paare / Geronto-Paare** (gleiche Bezeichnungen = ein Reiter). Trans*/Non-binary-Anmeldungen wandern in die zugeordnete Gruppe, Paare (auch Männer-/Frauen-Paare) bleiben bei den Paaren. Die Originalliste bleibt sichtbar, bis die Reiter fertig sind.
   - Leere Reiter entstehen nicht. Hat eine Gruppe gar keine Anmeldungen, bleibt ihr Original-Reiter von JOYclub stehen.
-  - Ein Original-Reiter wird nur ausgeblendet, wenn alle seine Anmeldungen in neue Reiter umgezogen sind.
+  - Einsortiert wird nur, wenn der Profiltyp einer Gruppe zugeordnet ist; die übrigen stehen in einem Reiter „Männer (übrige)“ usw. direkt hinter den Stufen-Reitern. Shops und Clubs stehen nur unter „Alle“.
+  - **Anonyme und externe** Anmeldungen werden wie Profile einsortiert und eingefärbt (Art aus dem Text, z. B. „Paar (Anonym) 57 Jahre“); ohne Alter als älteste Stufe. Paare mit nur einem Alter kommen nach diesem Alter in ihren Reiter.
+  - Die Liste wird über die Schnittstelle vollständig geladen (ab 1.95 auch alle anonymen Anmeldungen); weicht die Zahl von JOYclubs Reitern ab, steht das im Ablauf-Protokoll des Rekorders.
   - Anmeldungen, deren zugeordnete Gruppe keine visuelle Einstufung hat (z. B. eine den Frauen zugeordnete Transfrau aus „Männer“), kommen in den Original-Reiter dieser Gruppe; dessen Zahl wird angepasst, fehlt er, wird er angelegt.
 - Gäste werden nach Anmeldealter eingefärbt; ignorierte Mitglieder bekommen ein rotes X.
 - Klick auf ein ignoriertes Mitglied öffnet ein Popup *„Du ignorierst …“* mit Grund (Profilnotiz) und den Buttons **Trotzdem öffnen**, **Nicht mehr ignorieren** (entsperrt und setzt auf die Whitelist) und **Abbrechen**:
@@ -664,7 +679,7 @@ Nicht übernommen werden aus fremden Sicherungen: Partys/AWO, Einstellungen, Whi
 
 ## Schnittstellen und API-Rekorder
 
-Ab 1.93: Listen werden auf 50 Einträge gekürzt (statt 2), je Beispiel höchstens etwa 20 KB; je Adresse bis zu 12 verschiedene Beispiele (gleiche Inhalte nur einmal). Parameter, die eine Art auswählen (`module`, `feed`, `type`, `mode`, `tab`, `filter`, `route`, `kind`), gehören mit ihrem Wert zum Schlüssel. Mehrere Tabs: beim Export schreiben alle Tabs ihren Puffer sofort, „Leeren“ verwirft auch noch nicht geschriebene Puffer anderer Tabs. „Rekorder exportieren“ und „Rekorder leeren“ stehen immer im Tampermonkey-Menü. Ab 1.94 schreibt der Rekorder auch Formulare mit, die die Seite selbst per Skript abschickt, und sichert seine Puffer vor dem Verlassen der Seite.
+Ab 1.93: Listen werden auf 50 Einträge gekürzt (statt 2), je Beispiel höchstens etwa 20 KB; je Adresse bis zu 12 verschiedene Beispiele (gleiche Inhalte nur einmal). Parameter, die eine Art auswählen (`module`, `feed`, `type`, `mode`, `tab`, `filter`, `route`, `kind`), gehören mit ihrem Wert zum Schlüssel. Mehrere Tabs: beim Export schreiben alle Tabs ihren Puffer sofort, „Leeren“ verwirft auch noch nicht geschriebene Puffer anderer Tabs. „Rekorder exportieren“ und „Rekorder leeren“ stehen immer im Tampermonkey-Menü. Ab 1.95 ersetzt ein neues, abweichendes Beispiel das älteste, wenn eine Adresse ihre 12 Beispiele erreicht hat. Ab 1.94 schreibt der Rekorder auch Formulare mit, die die Seite selbst per Skript abschickt, und sichert seine Puffer vor dem Verlassen der Seite.
 
 **Schnittstellen:** Wo es geht, arbeitet das Skript über die Schnittstellen, die JOYclub selbst benutzt – schneller und ohne Profilaufruf (also ohne sichtbaren Besuch):
 

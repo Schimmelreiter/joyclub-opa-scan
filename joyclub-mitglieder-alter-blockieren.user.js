@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.94
+// @version      1.95
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -257,7 +257,10 @@
         if (!o) { if (Object.keys(log).length < API_MAX_KEYS) log[k] = e; continue; }
         o.n += e.n; o.last = Math.max(o.last || 0, e.last);
         if (e.poll) o.poll = true;
-        for (const x of e.ex) if (o.ex.length < (o.poll ? 1 : API_EX_MAX) && !o.ex.some((y) => y.h && y.h === x.h)) o.ex.push(x);
+        // neue, abweichende Beispiele kommen dazu; ist die Höchstzahl erreicht, fällt das älteste weg
+        for (const x of e.ex) if (!o.ex.some((y) => y.h && y.h === x.h)) o.ex.push(x);
+        const cap = o.poll ? 1 : API_EX_MAX;
+        if (o.ex.length > cap) o.ex = o.ex.sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(-cap);
       }
       apiBuf = null;
       GM_setValue(K_API_LOG, log);
@@ -311,12 +314,16 @@
       e.n++; e.last = now;
       if (poll) e.poll = true;
       const ctx = Object.assign(apiPageInfo(), { trigger: apiTrigger(now) });
-      if (e.ex.length < (e.poll ? 1 : API_EX_MAX) && !poll) {
+      if (!poll) {
         let res = resBody;
         if (typeof res === 'string') { try { res = JSON.parse(res); } catch (x) { res = `(${ctype || 'Text'}, ${res.length} Zeichen)`; } }
         const rq = apiRedactCap(req), rs = apiRedactCap(res);
         const h = apiHashStr(JSON.stringify([p.example, status, rq, rs]));
-        if (!e.ex.some((x) => x.h === h)) e.ex.push({ ts: now, when: apiLocal(now), url: p.example, status, ctx, hdr: (hdrs || []).map((h2) => String(h2).toLowerCase()), req: rq, res: rs, h });
+        if (!e.ex.some((x) => x.h === h)) {
+          e.ex.push({ ts: now, when: apiLocal(now), url: p.example, status, ctx, hdr: (hdrs || []).map((h2) => String(h2).toLowerCase()), req: rq, res: rs, h });
+          const cap = e.poll ? 1 : API_EX_MAX;
+          if (e.ex.length > cap) e.ex.splice(0, e.ex.length - cap); // ältestes Beispiel weicht dem neuen
+        }
       }
       apiTlAdd({ t: 'aufruf', key: `${method.toUpperCase()} ${full}${op ? ' ' + op : ''}`, status, page: ctx.page, trigger: ctx.trigger, frame: ctx.frame });
       apiSched();
@@ -3744,6 +3751,9 @@
     if (!type || /^Typ /.test(type)) {
       if (/\bPaar\b/i.test(text)) type = 'Paar'; else if (/\bMann\b|\bMänner\b|\bOpa\b|\bSchwanz\b|\bJungschwanz\b/i.test(text)) type = 'Mann'; else if (/\bFrau\b|\bFrauen\b/i.test(text)) type = 'Frau';
     }
+    // anonyme/externe Anmeldung: Art steht im Text („Paar (Anonym) 57 Jahre“, „3 Männer (Extern)“) – gilt vor dem Symbol
+    const anonKind = text.match(/(Paare?|Frauen?|Männer|Mann)\s*\((?:Anonym|Extern)\)/i);
+    if (anonKind) { const w = anonKind[1].toLowerCase(); type = /^paar/.test(w) ? 'Paar' : /^frau/.test(w) ? 'Frau' : 'Mann'; }
     // Links auf Shops, Clubs, Veranstalter usw. sind keine Mitgliederprofile
     const anyLink = li.querySelector('a.card[href], a[href]');
     const nonProfile = !a && !!anyLink && !/\/(profile|my)\/\d+\./.test(anyLink.getAttribute('href') || '');
@@ -3765,7 +3775,7 @@
     if (!CONFIG.PROFILE_PATH_RE.test(path)) { path = ''; id = ''; }
     return {
       li, a, path, url: path ? location.origin + path : '', id, name,
-      ages, num, type, anon, nonProfile, noLink: !a, extern: /(^|[^\p{L}])extern([^\p{L}]|$)/iu.test(text),
+      ages, num: anonKind ? ({ Paar: '3', Frau: '2', Mann: '1' }[type]) : num, type, anon, nonProfile, noLink: !a, extern: /(^|[^\p{L}])extern([^\p{L}]|$)/iu.test(text),
     };
   }
 
@@ -3773,9 +3783,15 @@
   const groupOfReg = (g) => (isCoupleType(g.type) || g.num === '3' || g.gender === '3' ? 'p' : groupOfType(g.type) || ({ 1: 'm', 2: 'f' }[g.num || g.gender] || null));
   // Farbe/Schild (nur mit „Visuelle Einstufung“ der Gruppe): { none } oder { color, txt, fg, dashed, group, j }
   function guestStyle(g, ctx, src = 'Party') {
+    if (g.nonProfile) return { none: true, group: null, j: {} };
     const j = judge({ type: g.type, ages: g.ages }, src);
     const grp = j.group || groupOfReg(g);
     if (!grp || !CONFIG.GROUPS[grp].visual) return { none: true, group: grp, j };
+    // externe/anonyme Anmeldungen: wie Profile einfärben; ohne Alter als älteste Stufe
+    if ((g.extern || g.anon) && !(g.ages || []).length) {
+      const c = STAGE_COLORS[3];
+      return { color: c, txt: CONFIG.GROUPS[grp].names.one[2], fg: '#fff', group: grp, j };
+    }
     if (!g.anon && (g.name || g.id) && isWhiteMember(g, ctx.white)) return { color: COLORS.white, txt: 'Whitelist', fg: '#000', group: grp, j };
     if (j.active) return { color: COLORS.red, txt: j.why, group: grp, j };
     if (!j.stage) return { color: COLORS.grey, txt: j.why || '', dashed: true, group: grp, j };
@@ -4319,22 +4335,37 @@
   const GUEST_PANE = { m: 'm', f: 'w', p: 'p' };
   // Gruppe einer Anmeldung für Reiter/AWO
   const guestGroup = (g) => (isCoupleType(g.type) || g.num === '3' ? 'p' : groupOfType(g.type) || groupOfReg(g));
-  // Anzeige-Stufe einer Anmeldung (Werte „Partygäste“); ohne Alter → Stufe 3; Sugar Daddy/Mom → Stufe 3
-  function guestStage(g, grp, cfg = CONFIG, src = 'Party') {
-    const ages = (g.ages || []).filter((a) => a >= 18 && a <= 120);
+  // Wessen Alter zeigt eine Paar-Anmeldung mit nur einem Alter? Nach dem Profiltyp des Kontos (Frau → 'f', sonst 'm')
+  function oneAgeWho(g) {
+    let t = '';
+    try { const a = g.path && bigGet1('jaf_accounts', g.path); t = (a && a.type) || ''; } catch (e) { /* egal */ }
+    return /frau/i.test(t) && !/paar/i.test(t) ? 'f' : 'm';
+  }
+  // Anzeige-Stufe einer Anmeldung (Werte „Partygäste“); ohne Alter → Stufe 3; Sugar Daddy/Mom → Stufe 3.
+  // Paar mit nur einem Alter: für den Reiter (opt.tab) nach dem bekannten Alter; für den AWO mit ergänztem Partner
+  // (Frau bekannt → Mann = Alter + 7, Mann bekannt → Frau = Alter − 7). Paar-Regel: „einer“ → höhere, sonst niedrigere Stufe.
+  function guestStage(g, grp, cfg = CONFIG, src = 'Party', opt = {}) {
+    let ages = (g.ages || []).filter((a) => a >= 18 && a <= 120);
     if (!ages.length) return 3;
     if (grp !== 'p') return stageOf(Math.max(...ages), vals(grp, src, null, cfg));
+    const P = cfg.GROUPS.p;
     const k = knownType(String(g.type || '').split('|')[0]);
-    if (k === 'Männer-Paar' || k === 'Frauen-Paar' || ages.length < 2) {
+    if (k === 'Männer-Paar' || k === 'Frauen-Paar') {
       const who = k === 'Frauen-Paar' ? 'f' : 'm';
-      const P = cfg.GROUPS.p, gap = ages.length === 2 ? Math.abs(ages[0] - ages[1]) : null;
+      const gap = ages.length === 2 ? Math.abs(ages[0] - ages[1]) : null;
       const rule = who === 'm' ? P.sd : P.sm;
       if (gap != null && rule && rule.on && gap >= rule.gap) return 3;
       return stageOf(Math.max(...ages), vals('p', src, who, cfg));
     }
-    const P = cfg.GROUPS.p, [fa, ma] = ages;
+    if (ages.length < 2) {
+      const who = oneAgeWho(g), a = ages[0];
+      if (opt.tab) return stageOf(a, vals('p', src, who, cfg));
+      ages = who === 'f' ? [a, Math.min(120, a + 7)] : [Math.max(18, a - 7), a];
+    }
+    const [fa, ma] = ages;
     if ((P.sd && P.sd.on && ma - fa >= P.sd.gap) || (P.sm && P.sm.on && fa - ma >= P.sm.gap)) return 3;
-    return Math.min(stageOf(fa, vals('p', src, 'f', cfg)), stageOf(ma, vals('p', src, 'm', cfg)));
+    const sf = stageOf(fa, vals('p', src, 'f', cfg)), sm = stageOf(ma, vals('p', src, 'm', cfg));
+    return P.coupleMode === 'any' ? Math.max(sf, sm) : Math.min(sf, sm);
   }
   // Reiter einer Gruppe: [{ key, label, stages:[…] }] – gleiche Bezeichnungen zusammengefasst
   function groupTabs(grp, cfg = CONFIG) {
@@ -4346,12 +4377,41 @@
     return out;
   }
   let guestAll = null; // geladene Anmeldungen (für den AWO-Faktor); false = nicht ladbar
+  // ---- Geschlechterverteilung (wie die JOYclub-App: Anteile an den Anmeldungen, ein Paar zählt einmal) ----
+  // Reiter-Zahlen „Männer (75) / Frauen (8) / Paare (26)“ einer Party-Seite → { m, f, p } oder null
+  function guestTabCounts(doc) {
+    const n = (sel) => { const a = doc.querySelector(`#guest_list a[href="${sel}"]`); const m = a && (a.textContent || '').match(/\((\d+)\)/); return m ? +m[1] : null; };
+    const r = { m: n('#guest_m'), f: n('#guest_w'), p: n('#guest_p') };
+    if (r.m == null && r.f == null && r.p == null) return null;
+    return { m: r.m || 0, f: r.f || 0, p: r.p || 0 };
+  }
+  // Anteile aus einer geladenen Gästeliste (ohne Shops/Clubs; nach JOYclubs Geschlechts-Einordnung)
+  function genderCountsOf(guests) {
+    const c = { m: 0, f: 0, p: 0 };
+    for (const g of guests || []) {
+      if (g.nonProfile) continue;
+      const k = isCoupleType(g.type) || g.num === '3' ? 'p' : g.num === '2' || /frau/i.test(g.type || '') ? 'f' : 'm';
+      c[k]++;
+    }
+    return c;
+  }
+  function saveGenderShares(eid, c, how) {
+    if (!eid || !c) return;
+    const n = (c.m || 0) + (c.f || 0) + (c.p || 0);
+    if (!n) return;
+    const m = getEvents();
+    m[eid] = Object.assign(m[eid] || {}, { gv: { m: c.m || 0, f: c.f || 0, p: c.p || 0, n, ts: Date.now(), how } });
+    gmSet(K_EVENTS, m);
+  }
 
   async function setupGuestTabs() {
     if (window.__jafSplits) return;
     if (!document.querySelector('#guest_list a[href="#guest_alle"], #guest_list a[href="#guest_m"], #guest_list a[href="#guest_p"]')) return;
     window.__jafSplits = 'loading';
     renderAwo();
+    // Reiter-Zahlen von JOYclub (Anmeldungen je Geschlecht) – vor jeder Änderung lesen
+    const joyCounts = guestTabCounts(document);
+    if (joyCounts) saveGenderShares(eventIdOf(location.pathname), joyCounts, 'Seite');
     let items;
     try { items = htmlToItems(await bgLoadGuests('alle')); } catch (e) {
       console.warn('[Alter-Filter] Gästeliste im Hintergrund nicht ladbar – Original-Reiter bleiben.', e);
@@ -4405,22 +4465,35 @@
     const buckets = {}; // Gruppe → Reiter-Schlüssel → [li]
     const moved = {};   // Ziel-Gruppe (ohne Aufteilung) → [li] aus aufgeteilten Gruppen
     const hasNew = {}, srcCount = {};
+    const stay = {}; // Anmeldungen, die im Reiter ihres Geschlechts bleiben (Typ keiner Gruppe zugeordnet) → Karten-Kopien
+    const loaded = { m: 0, f: 0, p: 0 };
     items.forEach((li, i) => {
       const g = guestAll[i];
-      if (g.extern) return;
-      const tgt = guestGroup(g) || origGroup(g);
       const src = origGroup(g);
+      loaded[src]++;
       srcCount[src] = (srcCount[src] || 0) + 1;
+      // Shops/Clubs: nur unter „Alle“ (JOYclub ordnet sie keinem Geschlecht erkennbar zu)
+      if (g.nonProfile) return;
+      // einsortiert wird nur, wenn der Profiltyp einer Gruppe zugeordnet ist (Paare immer bei den Paaren)
+      const assigned = isCoupleType(g.type) || g.num === '3' ? 'p' : groupOfType(g.type);
+      const tgt = assigned || src;
+      if (!assigned) { (stay[src] = stay[src] || []).push(cloneCard(li)); return; }
       if (splitOn(tgt)) {
         const tabs = groupTabs(tgt);
-        const st = guestStage(g, tgt);
+        const st = guestStage(g, tgt, CONFIG, 'Party', { tab: true });
         const t = tabs.find((x) => x.stages.includes(st)) || tabs[tabs.length - 1];
         ((buckets[tgt] = buckets[tgt] || {})[t.key] = buckets[tgt][t.key] || []).push(cloneCard(li));
         hasNew[tgt] = true;
       } else if (splitOn(src) && tgt !== src) {
         (moved[tgt] = moved[tgt] || []).push(cloneCard(li));
-      }
+      } else (stay[src] = stay[src] || []).push(cloneCard(li));
     });
+    // Prüfung: geladene Anmeldungen je Geschlecht gegen JOYclubs Reiter-Zahlen
+    if (joyCounts) {
+      const sumJ = GROUP_KEYS.reduce((n, k) => n + (joyCounts[k] || 0), 0), sumL = GROUP_KEYS.reduce((n, k) => n + loaded[k], 0);
+      if (sumJ !== sumL) bgDiag(`Gästeliste: geladen ${GROUP_KEYS.map((k) => `${GROUP_LABELS[k]} ${loaded[k]}`).join(' / ')} – JOYclub zeigt ${GROUP_KEYS.map((k) => `${GROUP_LABELS[k]} ${joyCounts[k]}`).join(' / ')}`);
+    }
+    const lastTab = {};
     if (content) {
       // 1. neue Reiter je aufgeteilter Gruppe – nur nicht leere
       for (const grp of GROUP_KEYS) {
@@ -4437,6 +4510,7 @@
           list.forEach((li) => tab.ul.appendChild(li));
           after = tab.tli;
         }
+        lastTab[grp] = after;
       }
       // 2. Anmeldungen ohne neuen Reiter in den Original-Reiter ihrer Gruppe (fehlt er: anlegen)
       for (const [grp, list] of Object.entries(moved)) {
@@ -4452,12 +4526,18 @@
         list.forEach((li) => ulc.appendChild(li));
         bumpCount(oLink, list.length);
       }
-      // 3. Original-Reiter aufgeteilter Gruppen ausblenden (alle ihre Anmeldungen sind umgezogen); leere Gruppe: Original bleibt
+      // 3. Original-Reiter aufgeteilter Gruppen ausblenden; Anmeldungen, die bleiben (Typ keiner Gruppe zugeordnet),
+      //    stehen dann in einem eigenen Reiter mit dem Namen des Geschlechts direkt dahinter
       for (const grp of GROUP_KEYS) {
         if (!splitOn(grp) || !srcCount[grp]) continue;
         const oLink = document.querySelector(`#guest_list a[href="#guest_${GUEST_PANE[grp]}"]`);
         if (!oLink) continue;
         const oLi = oLink.closest('li');
+        const rest = (stay[grp] || []).filter((c) => !moved[grp] || !moved[grp].includes(c));
+        if (splitOn(grp) && rest.length) {
+          const tab = mkTab(`jaf_guest_rest_${grp}`, `${GROUP_LABELS[grp]} (übrige)`, `${GROUP_LABELS[grp]}: Profiltyp keiner Gruppe zugeordnet`, rest.length, lastTab[grp] || oLi, content);
+          rest.forEach((c) => tab.ul.appendChild(c));
+        }
         const wasActive = oLi.classList.contains('active');
         oLi.style.display = 'none';
         if (wasActive) { const nx = oLi.parentElement.querySelector(':scope > li.jaf-guest-tab a'); if (nx) nx.click(); }
@@ -4475,7 +4555,7 @@
     const out = { value: null, groups: {} };
     for (const grp of GROUP_KEYS) out.groups[grp] = { n: 0, cnt: [0, 0, 0], exp: 0, exp3: 0, share: null, w: cfg.AWO.weight[grp] || 0 };
     for (const g of guests || []) {
-      if (g.extern) continue;
+      if (g.nonProfile) continue; // Shops/Clubs nie; externe und anonyme zählen mit (ohne Alter als Stufe 3)
       const grp = guestGroup(g);
       if (!grp) continue;
       const st = guestStage(g, grp, cfg);
@@ -4651,6 +4731,127 @@
   function updateEventBadges() {
     if (isRegistrationsPage()) updateRegAwo();
     for (const e of readAppointments()) eventCardBadges(e.a, e.id, true);
+    try { renderGenderShares(); } catch (e) { console.warn('[Alter-Filter] Geschlechterverteilung', e); }
+  }
+  // ---- Geschlechterverteilung anzeigen: Diagramm (Detailkarte „Meine Event-Anmeldungen“), sonst Textzeile ----
+  const GV_COL = { f: '#e53935', p: '#e53935', m: '#fb8c00' };
+  const GV_SYM = { f: '♀', p: '⚤', m: '♂' };
+  const gvPct = (gv) => { const n = gv.n || ((gv.m || 0) + (gv.f || 0) + (gv.p || 0)) || 1; return { f: Math.round((gv.f || 0) * 100 / n), p: Math.round((gv.p || 0) * 100 / n), m: Math.round((gv.m || 0) * 100 / n) }; };
+  function gvTextHtml(gv) {
+    const q = gvPct(gv);
+    return ['f', 'p', 'm'].map((k) => `<span style="color:${GV_COL[k]}">${GV_SYM[k]}</span> ${q[k]} %`).join(' · ');
+  }
+  // Blasen wie in der App: Fläche ∝ Anteil, überlappend, ♀ ⚤ rot, ♂ orange
+  function gvBubblesSvg(gv, W = 160) {
+    const q = gvPct(gv), keys = ['f', 'p', 'm'];
+    const mx = Math.max(q.f, q.p, q.m, 1), Rmax = W * 0.30;
+    const rs = keys.map((k) => Math.max(W * 0.075, Rmax * Math.sqrt(q[k] / mx)));
+    const xs = []; let x = 0;
+    rs.forEach((r, i) => { x = i ? x + rs[i - 1] + r - 0.28 * Math.min(r, rs[i - 1]) : r; xs.push(x); });
+    const sc = W / (xs[2] + rs[2]), H = Math.max(...rs) * 2 * sc;
+    let g = '';
+    keys.forEach((k, i) => {
+      const cx = xs[i] * sc, r = rs[i] * sc, cy = H / 2, fs = Math.max(9, Math.min(15, r * 0.42));
+      g += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="${GV_COL[k]}" fill-opacity=".82"/>` +
+        `<text x="${cx.toFixed(1)}" y="${(cy - fs * 0.15).toFixed(1)}" text-anchor="middle" font-size="${fs.toFixed(1)}" fill="#fff" font-family="system-ui,sans-serif">${GV_SYM[k]}</text>` +
+        `<text x="${cx.toFixed(1)}" y="${(cy + fs * 1.05).toFixed(1)}" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="bold" fill="#fff" font-family="system-ui,sans-serif">${q[k]}%</text>`;
+    });
+    return `<svg width="${W}" height="${H.toFixed(0)}" viewBox="0 0 ${W} ${H.toFixed(1)}" role="img" aria-label="Frauen ${q.f} %, Paare ${q.p} %, Männer ${q.m} %">${g}</svg>`;
+  }
+  const gvTitle = (gv) => `Anmeldungen: ${gv.f} Frauen, ${gv.p} Paare, ${gv.m} Männer (Stand ${fmtTs(gv.ts || 0)})`;
+  function gvSetText(el, gv) {
+    const h = gvTextHtml(gv);
+    if (el.__jafGv !== h) { el.__jafGv = h; el.innerHTML = h; el.title = gvTitle(gv); }
+  }
+  function renderGenderShares() {
+    if (IN_FRAME) return;
+    const m = getEvents();
+    const want = [];
+    const near = (el) => { const r = el.getBoundingClientRect(); return r.bottom > -innerHeight && r.top < innerHeight * 2; };
+    // Termine-Seite und Profil-Slider: Textzeile rechts neben dem Datum
+    for (const a of document.querySelectorAll('a.profile-wide-content-card[href*="/event/"]')) {
+      let id = ''; try { id = eventIdOf(new URL(a.getAttribute('href'), location.origin).pathname); } catch (e) { /* egal */ }
+      if (!id) continue;
+      const gv = m[id] && m[id].gv;
+      const loc = a.querySelector('.profile-wide-content-card__location');
+      const dateDiv = loc && loc.previousElementSibling;
+      let t = a.querySelector('.jaf-gv-txt');
+      if (gv && dateDiv) {
+        if (!t) { t = document.createElement('span'); t.className = 'jaf-gv-txt'; t.style.cssText = 'margin-left:14px;font-size:.85em;color:#9aa0a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'; dateDiv.appendChild(t); }
+        gvSetText(t, gv);
+      } else if (t) t.remove();
+      if (near(a)) want.push({ id, url: a.href });
+    }
+    // „Meine Event-Anmeldungen“: Detailkarte (Desktop) → Diagramm zwischen Logo und Club; Listenkarte (mobil) → Textzeile
+    for (const it of document.querySelectorAll('.card-list-ui-list-item.event-card-ui[data-element-id]')) {
+      const id = it.getAttribute('data-element-id');
+      const gv = m[id] && m[id].gv;
+      if (it.classList.contains('card-ui-detail-container')) {
+        const left = it.querySelector('.card-ui-detail-left');
+        const av = left && left.querySelector('.card-ui-detail-left-avatar');
+        let d = it.querySelector('.jaf-gv-diag');
+        if (gv && left && av) {
+          if (!d) {
+            d = document.createElement('div'); d.className = 'jaf-gv-diag';
+            d.style.cssText = 'flex:1 1 auto;display:flex;align-items:center;justify-content:center;min-height:0;padding:6px 0';
+            av.insertAdjacentElement('afterend', d);
+            left.style.display = 'flex'; left.style.flexDirection = 'column'; left.style.alignSelf = 'stretch';
+          }
+          const h = gvBubblesSvg(gv, 160);
+          if (d.__jafGv !== h) { d.__jafGv = h; d.innerHTML = h; d.title = gvTitle(gv); }
+        } else if (d) d.remove();
+      } else {
+        const lo = it.querySelector('.card-ui-information .line-one');
+        let t = it.querySelector('.jaf-gv-line');
+        if (gv && lo) {
+          if (!t) { t = document.createElement('div'); t.className = 'jaf-gv-line ellipsis'; t.style.cssText = 'font-size:.9em;color:#9aa0a6'; lo.insertAdjacentElement('afterend', t); }
+          gvSetText(t, gv);
+        } else if (t) t.remove();
+      }
+      const a = it.querySelector('a[href*="/event/"]');
+      if (a && near(it) && !want.some((w) => w.id === id)) want.push({ id, url: a.href });
+    }
+    gvPrefetch(want);
+  }
+  // ---- Vorab sammeln (Weg A): Party-Seite abrufen und die Reiter-Zahlen lesen; sonst Gästeliste über die Schnittstelle ----
+  // nur sichtbare/nahe Partys, nacheinander mit Pause, Ergebnis 6 h gültig, bei Fehlern aufhören
+  const GV_TTL = 6 * 3600e3;
+  const gvQ = { list: [], busy: false, fails: 0, stopUntil: 0, tried: new Map() };
+  function gvPrefetch(want) {
+    if (IN_FRAME || !want.length) return;
+    const m = getEvents(), now = Date.now();
+    for (const w of want) {
+      const gv = m[w.id] && m[w.id].gv;
+      if (gv && now - (gv.ts || 0) < GV_TTL) continue;
+      if (now - (gvQ.tried.get(w.id) || 0) < GV_TTL) continue;
+      if (!gvQ.list.some((x) => x.id === w.id)) gvQ.list.push(w);
+    }
+    gvRun();
+  }
+  async function gvRun() {
+    if (gvQ.busy) return;
+    gvQ.busy = true;
+    try {
+      while (gvQ.list.length) {
+        if (Date.now() < gvQ.stopUntil || scanActive() || document.hidden) break;
+        const w = gvQ.list.shift();
+        gvQ.tried.set(w.id, Date.now());
+        let c = null;
+        try {
+          const doc = await fetchDoc(w.url.split('#')[0]);
+          c = guestTabCounts(doc);
+          if (!c) {
+            const html = await apiGuests(w.id, 'alle');
+            if (html) c = genderCountsOf(htmlToItems(html).map(parseGuest));
+          }
+          gvQ.fails = 0;
+        } catch (e) {
+          if (++gvQ.fails >= 2) { gvQ.stopUntil = Date.now() + 30 * 60000; gvQ.list.length = 0; bgDiag(`Geschlechterverteilung: Abruf gestoppt (${e.message || e})`); break; }
+        }
+        if (c) { saveGenderShares(w.id, c, 'vorab'); try { renderGenderShares(); } catch (e) { /* egal */ } }
+        await sleep(rand(1500, 3000));
+      }
+    } finally { gvQ.busy = false; }
   }
   // Profilseiten: Slider „Dates & Events“ – eigenes Profil mit Platzhaltern, fremde nur gescannte Partys
   const isOwnProfile = () => isProfilePage() && idOf(location.pathname) === (document.body.getAttribute('data-session-user-id') || ownProfileId());
@@ -4661,6 +4862,7 @@
       try { id = eventIdOf(new URL(a.getAttribute('href'), location.origin).pathname); } catch (e) { /* egal */ }
       if (id) eventCardBadges(a, id, own);
     }
+    try { renderGenderShares(); } catch (e) { /* egal */ }
   }
   function insertEventOpaButton() {
     if (document.querySelector('.jaf-ev-opa-btn')) return true;
@@ -6107,18 +6309,27 @@
   // Gästeliste einer Party seitenweise (Karten als HTML); null = Seitenweg
   async function apiGuests(eventId, gender = 'alle', onProgress) {
     const out = [], seen = new Set();
+    let lastSig = '';
     for (let page = 1; page <= 300; page++) {
       const r = await apiTry('Gästeliste', () => joyPost('/event/guests_scroll_data', { event_id: Number(eventId), gender, page }));
       if (!r.ok) return page === 1 ? null : (out.length ? out : null);
       const el = (r.v && r.v.elements) || [];
       let add = 0;
+      // nur Einträge mit Profil-ID zusammenfassen – anonyme/externe Anmeldungen sehen sich zum Verwechseln ähnlich
+      // und werden alle übernommen; Ende, wenn eine Seite leer ist oder genau der vorigen gleicht
+      const sig = el.join('\u0001');
+      if (!el.length || sig === lastSig) break;
+      lastSig = sig;
+      let linked = 0, linkedNew = 0;
       for (const h of el) {
-        const k = (String(h).match(/\/(?:profile|my)\/(\d+)\./) || [])[1] || h.slice(0, 200);
-        if (seen.has(k)) continue;
-        seen.add(k); out.push(h); add++;
+        const k = (String(h).match(/\/(?:profile|my)\/(\d+)\./) || [])[1];
+        if (k) { linked++; if (seen.has(k)) continue; seen.add(k); linkedNew++; }
+        out.push(h); add++;
       }
       if (onProgress) onProgress(out.length);
-      if (!el.length || !add) break;
+      // Seite brachte nur schon bekannte Profile (Wiederholung) → Ende; ihre profillosen Einträge wieder entfernen
+      if (linked && !linkedNew) { out.splice(out.length - add, add); break; }
+      if (!add) break;
       await sleep(rand(250, 600));
     }
     return out;
@@ -7022,6 +7233,7 @@
         const guests = htmlToItems(data.html || []).map(parseGuest);
         // AWO-Faktor aus der vollständigen Gästeliste (Anmeldungen) – gilt bis zum nächsten Scan bzw. Einzelaufruf
         if (data.hasList) {
+          try { saveGenderShares(e.id, genderCountsOf(guests), 'Scan'); } catch (err) { /* egal */ }
           const awo = computeAwo(guests);
           if (awo.value != null) {
             const m = getEvents(); m[e.id] = Object.assign(m[e.id] || {}, { awo: Math.round(awo.value * 1000) / 10, awoTs: Date.now() }); gmSet(K_EVENTS, m);
@@ -9047,7 +9259,7 @@
     const el = document.createElement('div');
     el.className = 'jaf-sl' + (kind === 'w' ? ' w' : '');
     el.innerHTML = '<div class="tr"></div>';
-    const segs = (kind === 'vis' ? ['#43a047', '#ffb74d', '#e53935'] : kind === 'ign' ? ['rgba(127,127,127,.6)', '#e53935'] : ['#5c8dd6', '#e0a33c', '#b06ad6'])
+    const segs = (kind === 'vis' ? ['#43a047', '#ffb74d', '#e53935'] : kind === 'ign' ? ['rgba(127,127,127,.6)', '#e53935'] : ['#5c8dd6', '#b06ad6', '#e0a33c'])
       .map((c) => { const s = document.createElement('div'); s.className = 'seg'; s.style.background = c; el.appendChild(s); return s; });
     let v = vals.slice();
     const knobs = v.map((x, i) => {
