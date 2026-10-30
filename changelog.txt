@@ -1,6 +1,14 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.98 (30.10.2026)
+- Gedächtnis (Gesperrte, Ignorierliste, Konten, geprüfte Profile, Vorgemerkte, Profil-Gedächtnis) liegt verschlüsselt (AES-GCM) in einer unauffällig benannten Datenbank des Browsers auf joyclub.de – JOYclub sieht nur unlesbare Daten; Schlüssel im Tampermonkey-Speicher und als Kopie im Briefkasten
+- Umzug beim ersten Start automatisch; der Altbestand im Tampermonkey-Speicher wird nach 14 Tagen gelöscht, danach lädt jede Seite schneller
+- Rettungsanker: gepackte Kopie im Tampermonkey-Speicher (täglich geänderte Teile, wöchentlich alles); Rückfrage beim Start, wenn das Gedächtnis leer oder deutlich kleiner ist; Stand und Knöpfe unter „Sicherung“
+- Mehrere Tabs: Änderungen sofort im Schreib-Journal, gesammelt und abwechselnd in die Datenbank, gegenseitige Benachrichtigung; nach einem abgebrochenen Tab wird das Journal nachgetragen; Einträge, die ein anderer Tab gerade angelegt hat, werden nicht mehr versehentlich gelöscht
+- Neuinstallation: Schlüssel kommt aus dem Briefkasten, die Kontobindung erkennt den Besitzer aus der Datenbank
+- Schneller: geprüfte Profile und Konten werden einzeln gelesen und geschrieben statt als ganze Liste
+
 1.97 (30.10.2026)
 - Profildaten gesammelt über die Schnittstelle (getUserListByIdList, bis 50 je Abruf): Alter, Geschlecht und Online-Status ohne Profilaufruf
 - Kandidaten „auf dem Profil prüfen“ (Party-Scan, Suche, Gruppen, Besucher/Likes, Einstellungen anwenden): Nicht-Treffer ohne Aufruf übersprungen, Treffer direkt über die Schnittstelle notiert und ignoriert; Profil nur noch bei unklarem Typ

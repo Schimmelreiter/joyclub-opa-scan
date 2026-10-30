@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.97
+// @version      1.98
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -576,7 +576,387 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   const hasListen = typeof GM_addValueChangeListener === 'function';
   const BIG = {};
   const storeMigrated = (name) => (GM_getValue(K_STORE_V, []) || []).includes(name);
+  // ---------- ab 1.98: Gedächtnis verschlüsselt in der Datenbank des Browsers (IndexedDB auf www.joyclub.de) ----------
+  // Unauffälliger Name, Inhalt AES-GCM, Datensatz-Namen per HMAC. Je Liste 64 Blöcke (ein Datensatz je Block), im Speicher
+  // wie bisher als Liste. Schreiben: sofort ins Schreib-Journal (Tampermonkey), gesammelt in die Datenbank, Blöcke unter einer
+  // Browser-Sperre gelesen–gemischt–geschrieben (mehrere Tabs verlieren nichts), andere Tabs erfahren es über einen Kanal.
+  // Schlüssel im Tampermonkey-Speicher und als Kopie im Briefkasten (meta.joyclub_dbk). Rettungsanker: gepackte Blöcke im
+  // Tampermonkey-Speicher (täglich geänderte, wöchentlich alle). Altbestand im Tampermonkey-Speicher wird 14 Tage nach dem Umzug gelöscht.
+  const MEM_NB = 64;
+  const MEM_DB = 'keyval-cache', MEM_OS = 'kv', MEM_LOCK = 'kv-cache-w', MEM_BC = 'kv-cache';
+  const K_DBK = 'jaf_dbk', K_MEMDB = 'jaf_memdb', K_ANC = 'jaf_anc', WAL_PRE = 'jaf_wal|', ANC_PRE = 'jaf_anc|';
+  const MEM = { mode: (location.hostname === 'www.joyclub.de' && typeof indexedDB !== 'undefined' && window.crypto && crypto.subtle && navigator.locks) ? 'idb' : 'gm',
+    ready: false, gen: 1, db: null, aes: null, hk: null, rid: new Map(), ids: new Map(), pend: new Map(), timer: 0,
+    bc: null, owner: null, ownerRid: '', migRid: '', early: new Set(), err: '', after: [], inflight: new Map(), chain: Promise.resolve(), first: 0, snaps: new WeakMap() };
+  // erst nach dem Laden des Gedächtnisses ausführen
+  const memLater = (fn) => { if (MEM.mode !== 'idb' || MEM.ready) { try { fn(); } catch (e) { /* egal */ } } else MEM.after.push(fn); };
+  const memFnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return h >>> 0; };
+  const memBucket = (k) => memFnv(String(k)) % MEM_NB;
+  const memB64 = (buf) => { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+  const memUnB64 = (b) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+  function memSt(name) {
+    let st = BIG[name];
+    if (!st) st = BIG[name] = { loaded: true, idb: true, strs: new Map(), bk: Array.from({ length: MEM_NB }, () => new Set()), byId: null, born: new Map(), snap: 0 };
+    return st;
+  }
+  // ein Eintrag im Speicher setzen/löschen (ohne Schreiben)
+  function memPut(st, k, s) {
+    const n = memBucket(k);
+    if (s === undefined) { st.strs.delete(k); st.bk[n].delete(k); st.born.delete(k); if (st.byId) { const id = idOfKey(k); if (id && st.byId.get(id) === k) st.byId.delete(id); } return; }
+    if (!st.strs.has(k)) { st.bk[n].add(k); st.born.set(k, ++MEM.gen); if (st.byId) { const id = idOfKey(k); if (id) st.byId.set(id, k); } }
+    st.strs.set(k, s);
+  }
+  const idOfKey = (k) => (/^\d+$/.test(k) ? k : (String(k).match(/\/(?:profile|my)\/(\d+)\./) || [])[1] || '');
+  // lokale Änderung vormerken: Journal + Block als „zu schreiben“
+  // Journal-Eintrag: { __w, t: Tab, g: Zähler, v | d } – gelöscht wird er nur vom Tab, der ihn (zuletzt) geschrieben hat
+  function memDirty(name, k, v, wal = true) {
+    const bk = name + '|' + memBucket(k);
+    let m = MEM.pend.get(bk); if (!m) MEM.pend.set(bk, m = new Map());
+    let stamp = null;
+    if (wal) { stamp = { t: STORE_TAB, g: ++MEM.gen }; GM_setValue(WAL_PRE + name + '|' + k, v === undefined ? { __w: 1, t: stamp.t, g: stamp.g, d: 1 } : { __w: 1, t: stamp.t, g: stamp.g, v }); }
+    m.set(k, stamp);
+    memSchedule();
+  }
+  function memSchedule() {
+    if (!MEM.first) MEM.first = Date.now();
+    clearTimeout(MEM.timer);
+    const wait = Date.now() - MEM.first > 2000 ? 0 : 250; // bei Dauer-Schreiben spätestens nach 2 s
+    MEM.timer = setTimeout(() => { memFlush().catch(() => {}); }, wait);
+  }
+  async function memOpen() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open(MEM_DB, 1);
+      r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(MEM_OS)) r.result.createObjectStore(MEM_OS); };
+      r.onsuccess = () => { const db = r.result; db.onversionchange = () => { try { db.close(); } catch (e) { /* egal */ } }; res(db); };
+      r.onerror = () => rej(r.error); r.onblocked = () => rej(new Error('Datenbank blockiert'));
+    });
+  }
+  const memTx = (mode, fn) => new Promise((res, rej) => {
+    const tx = MEM.db.transaction(MEM_OS, mode); const os = tx.objectStore(MEM_OS); let out;
+    try { out = fn(os); } catch (e) { rej(e); return; }
+    tx.oncomplete = () => res(out && out.__r ? out.__r.result : out); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error('abgebrochen'));
+  });
+  async function memGetMany(ids) {
+    const out = new Map();
+    await memTx('readonly', (os) => { for (const id of ids) { const r = os.get(id); r.onsuccess = () => { if (r.result) out.set(id, r.result); }; } });
+    return out;
+  }
+  async function memAll() {
+    const out = new Map();
+    await memTx('readonly', (os) => { const r = os.openCursor(); r.onsuccess = () => { const c = r.result; if (c) { out.set(String(c.key), c.value); c.continue(); } }; });
+    return out;
+  }
+  async function memKeys(raw) {
+    const base = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveKey']);
+    const info = (t) => new TextEncoder().encode(t);
+    MEM.aes = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: info('kv-cache'), info: info('enc') }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    MEM.hk = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: info('kv-cache'), info: info('idx') }, base, { name: 'HMAC', hash: 'SHA-256', length: 256 }, false, ['sign']);
+    const hm = async (t) => memB64(await crypto.subtle.sign('HMAC', MEM.hk, info(t))).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]).slice(0, 24);
+    MEM.rid.clear(); MEM.ids.clear();
+    const all = []; for (const name of BIG_KEYS) for (let n = 0; n < MEM_NB; n++) all.push([name, n]);
+    const hs = await Promise.all(all.map(([name, n]) => hm(name + '|' + n)));
+    all.forEach(([name, n], i) => { MEM.rid.set(name + '|' + n, hs[i]); MEM.ids.set(hs[i], [name, n]); });
+    MEM.ownerRid = await hm('owner'); MEM.migRid = await hm('mig');
+  }
+  async function memEnc(str) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const d = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, MEM.aes, new TextEncoder().encode(str));
+    return { iv, d };
+  }
+  async function memDec(rec) { return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.iv }, MEM.aes, rec.d)); }
+  // Block aus der Datenbank in den Speicher übernehmen (lokal noch nicht geschriebene Einträge bleiben)
+  function memApplyBucket(name, n, obj) {
+    const bk = name + '|' + n, pend = MEM.pend.get(bk), fl = MEM.inflight.get(bk), st = memSt(name);
+    const mine = (k) => (pend && pend.has(k)) || (fl && fl.has(k));
+    let ch = false;
+    for (const k of [...st.bk[n]]) if (!(k in obj) && !mine(k)) { memPut(st, k, undefined); ch = true; }
+    for (const [k, v] of Object.entries(obj)) {
+      if (mine(k)) continue;
+      const s = JSON.stringify(v);
+      if (st.strs.get(k) !== s) { memPut(st, k, s); st.born.set(k, ++MEM.gen); ch = true; }
+    }
+    return ch;
+  }
+  async function memFlushOnce() {
+    if (OWNER_BLOCK || !MEM.pend.size || !MEM.ready && !MEM.migrating) return;
+    const pend = MEM.pend; MEM.pend = new Map(); MEM.first = 0;
+    // Werte zum Zeitpunkt der Übernahme festhalten; solange sie unterwegs sind, überschreibt kein fremder Block sie
+    const snap = new Map();
+    for (const [bk, keys] of pend) { const st = memSt(bk.split('|')[0]); const m = new Map(); for (const k of keys.keys()) m.set(k, st.strs.get(k)); snap.set(bk, m); MEM.inflight.set(bk, m); }
+    const done = [];
+    try {
+      await navigator.locks.request(MEM_LOCK, async () => {
+        const rids = [...pend.keys()].map((bk) => MEM.rid.get(bk));
+        const recs = await memGetMany(rids);
+        const outs = [], aside = [];
+        for (const [bk, vals] of snap) {
+          const [name, ns] = bk.split('|'); const rid = MEM.rid.get(bk);
+          let cur = {};
+          const r = recs.get(rid);
+          if (r) { try { cur = JSON.parse(await memDec(r)); } catch (e) { aside.push([rid + '~' + Date.now().toString(36), r]); cur = {}; } } // unlesbar: beiseitelegen
+          for (const [k, sv] of vals) { if (sv === undefined) delete cur[k]; else cur[k] = JSON.parse(sv); }
+          outs.push([rid, Object.keys(cur).length ? await memEnc(JSON.stringify(cur)) : null, name, Number(ns), cur]);
+          done.push(rid);
+        }
+        await memTx('readwrite', (os) => { for (const [id, rec] of aside) os.put(rec, id); for (const [rid, e] of outs) { if (e) os.put(e, rid); else os.delete(rid); } });
+        for (const [bk] of snap) MEM.inflight.delete(bk);
+        for (const [, , name, n, cur] of outs) memApplyBucket(name, n, cur);
+      });
+    } catch (e) {
+      for (const [bk] of snap) MEM.inflight.delete(bk);
+      // zurücklegen und später erneut versuchen (Journal bleibt erhalten)
+      for (const [bk, keys] of pend) { let m = MEM.pend.get(bk); if (!m) MEM.pend.set(bk, m = new Map()); for (const [k, g] of keys) if (!m.has(k)) m.set(k, g); }
+      MEM.err = e.message || String(e);
+      clearTimeout(MEM.timer); MEM.timer = setTimeout(() => { memFlush().catch(() => {}); }, 5000);
+      throw e;
+    }
+    for (const [bk, keys] of pend) {
+      const name = bk.split('|')[0];
+      for (const [k, stamp] of keys) {
+        if (!stamp) continue;
+        const wk = WAL_PRE + name + '|' + k, cur = GM_getValue(wk, null);
+        if (cur && cur.t === stamp.t && cur.g === stamp.g) GM_deleteValue(wk);
+      }
+    }
+    MEM.err = '';
+    try { if (MEM.bc && done.length) MEM.bc.postMessage({ t: 'u', ids: done, from: STORE_TAB }); } catch (e) { /* egal */ }
+  }
+  // alle Schreibvorgänge nacheinander (eine Kette je Tab)
+  function memFlush() {
+    if (MEM.mode !== 'idb') return Promise.resolve();
+    const run = MEM.chain.catch(() => {}).then(async () => { for (let i = 0; i < 5 && MEM.pend.size; i++) await memFlushOnce(); });
+    MEM.chain = run;
+    return run;
+  }
+  // andere Tabs: geänderte Blöcke neu lesen
+  async function memRemote(ids) {
+    const recs = await memGetMany(ids);
+    for (const id of ids) {
+      const w = MEM.ids.get(id); if (!w) continue;
+      const r = recs.get(id);
+      let obj = {};
+      if (r) { try { obj = JSON.parse(await memDec(r)); } catch (e) { continue; } }
+      memApplyBucket(w[0], w[1], obj);
+    }
+  }
+  // Altbestand aus dem Tampermonkey-Speicher (ein Wert je Mitglied ab 1.74, davor ein Wert je Liste)
+  function memLegacy(name) {
+    const out = new Map();
+    if (!storeMigrated(name)) {
+      const o = GM_getValue(name, null);
+      if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) out.set(k, v);
+    } else {
+      const pre = name + '|';
+      for (const k of GM_listValues()) if (k.startsWith(pre)) { const v = GM_getValue(k); if (v !== undefined) out.set(k.slice(pre.length), v); }
+    }
+    return out;
+  }
+  function memDeleteLegacy() {
+    for (const k of GM_listValues()) for (const name of BIG_KEYS) if (k === name || k === name + '#v' || k.startsWith(name + '|')) { GM_deleteValue(k); break; }
+  }
+  const memTotal = () => (MEM.mode === 'idb' ? BIG_KEYS.reduce((s, n) => s + (BIG[n] ? BIG[n].strs.size : 0), 0) : 0);
+  // Schlüssel aus dem Briefkasten (nach einer Neuinstallation)
+  async function memKeyFromBk() {
+    try { const r = await SH.call('get', { s: 'meta', k: 'joyclub_dbk' }, 20000); if (r && r.key && (!r.uid || !sessionId() || String(r.uid) === String(sessionId()))) return r.key; } catch (e) { /* nicht erreichbar */ }
+    return '';
+  }
+  async function memKeyToBk() {
+    const key = GM_getValue(K_DBK, '');
+    if (MEM.mode !== 'idb' || !key || GM_getValue('jaf_dbk_bk', '') === String(memFnv(key))) return;
+    await SH.call('put', { s: 'meta', v: { k: 'joyclub_dbk', at: Date.now(), uid: sessionId() || '', key } });
+    GM_setValue('jaf_dbk_bk', String(memFnv(key)));
+  }
+  async function memSetOwner(o) {
+    if (MEM.mode !== 'idb' || !MEM.ready || !o || !o.uid || OWNER_BLOCK) return;
+    if (MEM.owner && String(MEM.owner.uid) === String(o.uid) && MEM.owner.nick === (o.nick || '')) return;
+    MEM.owner = { uid: String(o.uid), nick: o.nick || '' };
+    const e = await memEnc(JSON.stringify(MEM.owner));
+    await memTx('readwrite', (os) => { os.put(e, MEM.ownerRid); });
+  }
+  // ---- Start: Schlüssel, Laden, Umzug, Journal, Rettung ----
+  async function memInit() {
+    if (MEM.mode !== 'idb' || MEM.ready) return true;
+    try {
+      MEM.db = await memOpen();
+      let recs = await memAll();
+      let key = GM_getValue(K_DBK, '');
+      if (!key && recs.size) {
+        key = await memKeyFromBk();
+        if (!key) {
+          if (IN_FRAME) return false;
+          const v = await askPopup({ title: opaT('Opa-Scan: Gedächtnis nicht lesbar'), warn: true, lines: [
+            'Das verschlüsselte Gedächtnis in diesem Browser ist da, aber der Schlüssel fehlt (Skript neu installiert und Briefkasten nicht erreichbar?).',
+            '„Später“ lässt das Skript auf dieser Seite aus und versucht es beim nächsten Seitenaufruf erneut.'],
+          buttons: [{ label: 'Später', value: 'later', focus: true }, { label: 'Neu beginnen (altes Gedächtnis verwerfen)', value: 'new' }] });
+          if (v !== 'new') { MEM.err = 'Schlüssel fehlt'; return false; }
+          await memTx('readwrite', (os) => { os.clear(); });
+          recs = new Map();
+        }
+        GM_setValue(K_DBK, key || '');
+      }
+      if (!key) { key = memB64(crypto.getRandomValues(new Uint8Array(32))); GM_setValue(K_DBK, key); }
+      await memKeys(memUnB64(key));
+      for (const name of BIG_KEYS) memSt(name);
+      let bad = 0, good = 0;
+      const plain = new Map(await Promise.all([...recs].filter(([id]) => id === MEM.ownerRid || id === MEM.migRid || MEM.ids.has(id)).map(async ([id, rec]) => { try { return [id, await memDec(rec)]; } catch (e) { return [id, null]; } })));
+      for (const [id, txt] of plain) {
+        if (txt == null) { bad++; continue; }
+        if (id === MEM.ownerRid) { try { MEM.owner = JSON.parse(txt); } catch (e) { bad++; } continue; }
+        if (id === MEM.migRid) continue;
+        const w = MEM.ids.get(id);
+        let obj;
+        try { obj = JSON.parse(txt); good++; } catch (e) { bad++; continue; }
+        const st = memSt(w[0]);
+        for (const [k, v] of Object.entries(obj)) { const s = JSON.stringify(v); st.strs.set(k, s); st.bk[w[1]].add(k); st.born.set(k, 0); }
+      }
+      if (bad && !good) throw new Error('Schlüssel passt nicht zum Gedächtnis');
+      // Umzug aus dem Tampermonkey-Speicher (einmalig, unter der Sperre, nur ein Tab; Merker auch in der Datenbank)
+      let mm = GM_getValue(K_MEMDB, null);
+      if (!mm || !mm.mig) {
+        await navigator.locks.request('kv-cache-m', async () => {
+          // immer den aktuellen Stand der Datenbank zugrunde legen (ein anderer Tab kann schon umgezogen haben)
+          const again = await memAll();
+          for (const [id, rec] of again) { const w = MEM.ids.get(id); if (!w) continue; try { memApplyBucket(w[0], w[1], JSON.parse(await memDec(rec))); } catch (e) { /* egal */ } }
+          if (again.has(MEM.migRid)) {
+            let info = {}; try { info = JSON.parse(await memDec(again.get(MEM.migRid))); } catch (e) { /* egal */ }
+            GM_setValue(K_MEMDB, { mig: info.mig || Date.now(), n: info.n || 0 });
+            return;
+          }
+          let n = 0;
+          for (const name of BIG_KEYS) {
+            const st = memSt(name);
+            for (const [k, v] of memLegacy(name)) { if (st.strs.has(k)) continue; memPut(st, k, JSON.stringify(v)); memDirty(name, k, v, false); n++; }
+          }
+          MEM.migrating = true;
+          try { await memFlush(); } finally { MEM.migrating = false; }
+          if (MEM.pend.size) throw new Error('Umzug ins Gedächtnis fehlgeschlagen');
+          const info = { mig: Date.now(), n };
+          const e = await memEnc(JSON.stringify(info));
+          await memTx('readwrite', (os) => { os.put(e, MEM.migRid); });
+          GM_setValue(K_MEMDB, info);
+          console.log(`[Alter-Filter] Gedächtnis umgezogen: ${n} Einträge`);
+        });
+        mm = GM_getValue(K_MEMDB, null) || {};
+      }
+      // Journal: noch nicht geschriebene Änderungen beendeter Tabs nachtragen (lebende Tabs halten ihre Sperre und schreiben selbst)
+      let live = new Set();
+      try { const q = await navigator.locks.query(); live = new Set((q.held || []).map((l) => l.name)); } catch (e) { /* egal */ }
+      navigator.locks.request('kv-cache-t-' + STORE_TAB, () => new Promise(() => {})).catch(() => {});
+      for (const wk of GM_listValues()) {
+        if (!wk.startsWith(WAL_PRE)) continue;
+        const rest = wk.slice(WAL_PRE.length), i = rest.indexOf('|'); if (i < 0) { GM_deleteValue(wk); continue; }
+        const name = rest.slice(0, i), k = rest.slice(i + 1);
+        if (!BIG_KEYS.includes(name)) { GM_deleteValue(wk); continue; }
+        const e = GM_getValue(wk);
+        if (!e || !e.__w) { GM_deleteValue(wk); continue; }
+        if (live.has('kv-cache-t-' + e.t)) continue;
+        const st = memSt(name);
+        memPut(st, k, e.d ? undefined : JSON.stringify(e.v));
+        const bk = name + '|' + memBucket(k); let m = MEM.pend.get(bk); if (!m) MEM.pend.set(bk, m = new Map());
+        m.set(k, { t: e.t, g: e.g });
+      }
+      MEM.ready = true;
+      for (const fn of MEM.after.splice(0)) { try { fn(); } catch (e) { /* egal */ } }
+      if (MEM.early.size) console.warn('[Alter-Filter] Listen vor dem Laden gelesen:', [...MEM.early].join(', '));
+      try { MEM.bc = new BroadcastChannel(MEM_BC); MEM.bc.onmessage = (ev) => { const m = ev.data; if (m && m.t === 'u' && m.from !== STORE_TAB && Array.isArray(m.ids)) memRemote(m.ids).catch(() => {}); }; } catch (e) { /* egal */ }
+      window.addEventListener('pagehide', () => { if (MEM.pend.size) memFlush().catch(() => {}); });
+      if (MEM.pend.size) memSchedule();
+      if (!IN_FRAME) {
+        // gelöscht? → Rettungsanker anbieten
+        const a = GM_getValue(K_ANC, null);
+        const total = memTotal();
+        if (a && a.total >= 20 && total < a.total * 0.5) {
+          const v = await askPopup({ title: opaT('Opa-Scan: Daten gelöscht?'), warn: true, lines: [
+            `Deine Daten scheinen gelöscht worden zu sein (${total.toLocaleString('de-DE')} statt ${a.total.toLocaleString('de-DE')} Einträge).`,
+            `Aus dem Rettungsanker vom ${fmtTs(a.ts)} wiederherstellen?`],
+          buttons: [{ label: 'Wiederherstellen', value: 'yes' }, { label: 'Nicht jetzt', value: 'no', focus: true }] });
+          if (v === 'yes') { const n = await memAnchorRestore(); flToast(`Rettungsanker: ${n.toLocaleString('de-DE')} Einträge wiederhergestellt`, 5000); }
+        }
+        // Altbestand 14 Tage nach dem Umzug löschen (nur mit aktuellem Rettungsanker)
+        if (mm && mm.mig && !mm.del && Date.now() - mm.mig > 14 * 864e5 && a && a.ts > mm.mig) { memDeleteLegacy(); GM_setValue(K_MEMDB, Object.assign({}, mm, { del: Date.now() })); }
+        setTimeout(() => memAnchorTick().catch(() => {}), 90000);
+        globalThis.setInterval(() => { if (!OWNER_BLOCK) memAnchorTick().catch(() => {}); }, 3600e3);
+      }
+      return true;
+    } catch (e) {
+      console.warn('[Alter-Filter] Gedächtnis', e);
+      MEM.err = e.message || String(e);
+      if (!IN_FRAME) flToast(`Opa-Scan: Gedächtnis nicht verfügbar (${MEM.err}) – Skript diesmal aus`, 8000);
+      return false;
+    }
+  }
+  // ---- Rettungsanker (gepackt im Tampermonkey-Speicher) ----
+  async function memGzip(str) {
+    const cs = new CompressionStream('gzip');
+    return memB64(await new Response(new Blob([str]).stream().pipeThrough(cs)).arrayBuffer());
+  }
+  async function memGunzip(b) {
+    const ds = new DecompressionStream('gzip');
+    return new Response(new Blob([memUnB64(b)]).stream().pipeThrough(ds)).text();
+  }
+  function memBucketJson(name, n) {
+    const st = memSt(name), parts = [];
+    for (const k of [...st.bk[n]].sort()) parts.push(JSON.stringify(k) + ':' + st.strs.get(k));
+    return '{' + parts.join(',') + '}';
+  }
+  async function memAnchor(full) {
+    if (MEM.mode !== 'idb' || !MEM.ready || OWNER_BLOCK) return null;
+    return navigator.locks.request('kv-cache-a', { ifAvailable: true }, async (lock) => {
+      if (!lock) return null;
+      const a = GM_getValue(K_ANC, null) || { h: {} };
+      a.h = a.h || {};
+      let size = 0, wrote = 0;
+      const n = {};
+      for (const name of BIG_KEYS) {
+        n[name] = memSt(name).strs.size;
+        for (let b = 0; b < MEM_NB; b++) {
+          const bk = name + '|' + b, s = memBucketJson(name, b), h = String(memFnv(s)) + ':' + s.length;
+          if (full || a.h[bk] !== h || (s.length > 2 && !GM_getValue(ANC_PRE + bk, ''))) {
+            if (s.length <= 2) GM_deleteValue(ANC_PRE + bk);
+            else { const z = await memGzip(s); GM_setValue(ANC_PRE + bk, z); }
+            a.h[bk] = h; wrote++;
+            if (wrote % 8 === 0) await sleep(30);
+          }
+          const z = s.length > 2 ? GM_getValue(ANC_PRE + bk, '') : '';
+          size += z ? z.length : 0;
+        }
+      }
+      a.n = n; a.total = Object.values(n).reduce((x, y) => x + y, 0); a.size = size; a.ts = Date.now(); if (full) a.full = a.ts;
+      GM_setValue(K_ANC, a);
+      return a;
+    });
+  }
+  async function memAnchorTick() {
+    if (IN_FRAME || MEM.mode !== 'idb' || !MEM.ready) return;
+    const a = GM_getValue(K_ANC, null);
+    if (a && Date.now() - a.ts < 864e5) return;
+    if (a && a.total >= 20 && memTotal() < a.total * 0.5) return; // nach einem Datenverlust den Anker nicht überschreiben (nur von Hand)
+    await memAnchor(!a || !a.full || Date.now() - a.full > 7 * 864e5);
+  }
+  // Rettungsanker → Gedächtnis (vorhandene Einträge bleiben)
+  async function memAnchorRestore() {
+    let n = 0;
+    for (const name of BIG_KEYS) {
+      const st = memSt(name);
+      for (let b = 0; b < MEM_NB; b++) {
+        const z = GM_getValue(ANC_PRE + name + '|' + b, '');
+        if (!z) continue;
+        let obj; try { obj = JSON.parse(await memGunzip(z)); } catch (e) { continue; }
+        for (const [k, v] of Object.entries(obj)) { if (st.strs.has(k)) continue; memPut(st, k, JSON.stringify(v)); memDirty(name, k, v, false); n++; }
+      }
+    }
+    await memFlush();
+    return n;
+  }
+  // Stand für den Abschnitt „Sicherung“
+  function memStatus() {
+    const a = GM_getValue(K_ANC, null), mm = GM_getValue(K_MEMDB, null) || {};
+    return { mode: MEM.mode, ready: MEM.ready, total: memTotal(), err: MEM.err, anc: a, mig: mm.mig || 0, del: mm.del || 0 };
+  }
+  // vor dem Laden (sollte nicht vorkommen): leere, nicht beschreibbare Liste
+  const memEarly = (name) => { MEM.early.add(name); return { loaded: true, idb: true, early: true, strs: new Map(), bk: Array.from({ length: MEM_NB }, () => new Set()), born: new Map(), snap: 0 }; };
   function bigLoad(name) {
+    if (MEM.mode === 'idb') return MEM.ready ? memSt(name) : memEarly(name);
     let st = BIG[name];
     if (st && st.loaded) return st;
     st = BIG[name] = st || { loaded: false, strs: new Map(), legacy: false };
@@ -604,15 +984,29 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   }
   function bigGet(name, d) {
     const st = bigLoad(name);
+    if (st.idb) st.snap = MEM.gen;
     if (!st.strs.size) return d === undefined || d === null ? (d === null ? null : {}) : d;
     const o = {};
     for (const [k, v] of st.strs) o[k] = JSON.parse(v);
+    if (st.idb) MEM.snaps.set(o, MEM.gen); // Stand dieses Objekts (für den Löschschutz in bigSet)
     return o;
   }
-  function bigSet(name, m) {
+  // replace = alles ersetzen (Wiederherstellen); sonst werden Einträge, die nach dem letzten Lesen dazukamen, nicht gelöscht
+  function bigSet(name, m, replace = false, wal = true) {
     const st = bigLoad(name);
     m = m || {};
     const changed = [];
+    if (st.idb) {
+      if (st.early) { console.warn('[Alter-Filter] Schreiben vor dem Laden verworfen:', name); return; }
+      for (const [k, v] of Object.entries(m)) {
+        if (v === undefined) continue;
+        const s2 = JSON.stringify(v);
+        if (st.strs.get(k) !== s2) { memPut(st, k, s2); memDirty(name, k, v, wal); }
+      }
+      const snap = MEM.snaps.has(m) ? MEM.snaps.get(m) : st.snap;
+      for (const k of [...st.strs.keys()]) if ((!(k in m) || m[k] === undefined) && (replace || (st.born.get(k) || 0) <= snap)) { memPut(st, k, undefined); memDirty(name, k, undefined, wal); }
+      return;
+    }
     if (st.legacy) {
       GM_setValue(name, m);
       st.strs.clear();
@@ -632,17 +1026,36 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   function bigGet1(name, key) { const v = bigLoad(name).strs.get(key); return v === undefined ? undefined : JSON.parse(v); }
   function bigSet1(name, key, v) {
     const st = bigLoad(name);
+    if (st.idb) {
+      if (st.early) { console.warn('[Alter-Filter] Schreiben vor dem Laden verworfen:', name); return; }
+      const s2 = v === undefined ? undefined : JSON.stringify(v);
+      if (st.strs.get(key) === s2) return;
+      memPut(st, key, s2); memDirty(name, key, v);
+      return;
+    }
     if (st.legacy) { const m = bigGet(name, {}); if (v === undefined) delete m[key]; else m[key] = v; bigSet(name, m); return; }
     const s2 = v === undefined ? undefined : JSON.stringify(v);
     if (st.strs.get(key) === s2) return;
     if (v === undefined) { GM_deleteValue(name + '|' + key); st.strs.delete(key); } else { GM_setValue(name + '|' + key, v); st.strs.set(key, s2); }
     GM_setValue(name + '#v', { ts: Date.now(), tab: STORE_TAB, keys: [key] });
   }
+  // Schlüssel zu einer Profil-ID (ohne die ganze Liste zu bauen)
+  function bigKeyById(name, id) {
+    id = String(id || ''); if (!id) return '';
+    const st = bigLoad(name);
+    if (st.idb && !st.early) {
+      if (!st.byId) { st.byId = new Map(); for (const k of st.strs.keys()) { const i = idOfKey(k); if (i) st.byId.set(i, k); } }
+      return st.byId.get(id) || '';
+    }
+    for (const k of st.strs.keys()) if (idOfKey(k) === id) return k;
+    return '';
+  }
+  const bigSize = (name) => bigLoad(name).strs.size;
   const gmGet = (k, d) => (BIG_KEYS.includes(k) ? bigGet(k, d) : GM_getValue(k, d));
   const gmSet = (k, v) => (BIG_KEYS.includes(k) ? bigSet(k, v) : GM_setValue(k, v));
   if (hasListen) GM_addValueChangeListener(K_STORE_V, (k, o, n, remote) => { if (remote) for (const x of Object.keys(BIG)) BIG[x].loaded = false; });
   // Umbau alter Einzelwerte → ein Wert je Mitglied; alte Daten bleiben, bis jeder Eintrag geprüft ist
-  function storeNeedsMigration() { return BIG_KEYS.some((n) => !storeMigrated(n) && GM_getValue(n, null)); }
+  function storeNeedsMigration() { return MEM.mode !== 'idb' && BIG_KEYS.some((n) => !storeMigrated(n) && GM_getValue(n, null)); }
   function migrateStores() {
     const res = { ok: [], failed: [] };
     for (const name of BIG_KEYS) {
@@ -712,7 +1125,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   const BG_FRAME = IN_FRAME && /^jaf-bg-/.test(window.name || '');
   if (IN_FRAME && !BG_FRAME) return;
   // im Hintergrund-Frame keine Dauer-Timer (Markieren, Wächter …)
-  const setInterval = BG_FRAME ? (() => 0) : (fn, ms, ...a) => globalThis.setInterval(() => { if (!OWNER_BLOCK) fn(...a); }, ms);
+  const setInterval = BG_FRAME ? (() => 0) : (fn, ms, ...a) => globalThis.setInterval(() => { if (!OWNER_BLOCK && (MEM.mode !== 'idb' || MEM.ready)) fn(...a); }, ms);
 
   // ===================== EINSTELLUNGEN =====================
   const CONFIG = {
@@ -2301,7 +2714,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     return out;
   }
   function saveIgnored(list) {
-    gmSet(K_IGNORED, list);
+    bigSet(K_IGNORED, list, true); // die Liste von JOYclub ist maßgeblich
     gmSet(K_IGNORED_TS, Date.now());
   }
   // Ignorierliste im Hintergrund abrufen (ohne die Seite zu verlassen)
@@ -2580,12 +2993,11 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   function recordAccounts(items) {
     if (!items || !items.length) return;
     const onlineUpdates = [], typeChanges = [];
-    const acc = getAccounts();
     const today = isoDay(new Date());
-    let changed = false;
+    // einzeln lesen und schreiben (nicht die ganze Kontenliste bauen)
     for (const it of items) {
       if (!it || !it.path || !it.ages || !it.ages.length) continue;
-      const old = acc[it.path];
+      const old = bigGet1(K_ACCOUNTS, it.path);
       const rec = old ? Object.assign({}, old) : { first: today };
       if (it.name) rec.name = it.name;
       if (it.type && isUnknownType(it.type)) noteType(it.type, it.name || it.path);
@@ -2612,20 +3024,14 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       if (it.cardOnline) rec.seenOnline = Date.now();
       // „Profil zuletzt aufgerufen“ (für das Mischen fremder Sicherungen); höchstens alle 10 min schreiben
       if (it.visited && Date.now() - (rec.visited || 0) > 10 * 60000) rec.visited = Date.now();
-      if (JSON.stringify(rec) !== JSON.stringify(old)) { acc[it.path] = rec; changed = true; }
+      if (JSON.stringify(rec) !== JSON.stringify(old)) bigSet1(K_ACCOUNTS, it.path, rec);
     }
-    if (changed) gmSet(K_ACCOUNTS, acc);
     if (typeChanges.length) typeChangeQueue(typeChanges);
     // „zuletzt online“ auch in den zutreffenden Listen (ignoriert / vorgemerkt) speichern
     if (onlineUpdates.length) {
-      const l = gmGet(K_LOG, {}), w = gmGet(K_WATCH, {});
-      let lc = false, wc = false;
       for (const [path, o] of onlineUpdates) {
-        if (l[path]) { l[path].online = o; lc = true; }
-        if (w[path]) { w[path].online = o; wc = true; }
+        for (const nm of [K_LOG, K_WATCH]) { const e = bigGet1(nm, path); if (e) bigSet1(nm, path, Object.assign({}, e, { online: o })); }
       }
-      if (lc) gmSet(K_LOG, l);
-      if (wc) gmSet(K_WATCH, w);
     }
   }
 
@@ -2761,7 +3167,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   // ---------- Sicherung aller Daten (JSON) ----------
   // Enthält Einstellungen, Protokoll (Gesperrte), Ignorierliste, alle Konten, Vorgemerkte, Whitelist, Gruppen, Gedächtnis usw.
   // Nicht enthalten: laufende Vorgänge/Sperren und die Fehlersuche-Listen.
-  const BACKUP_SKIP = /^(jaf_rpc[qra]_|jaf_bkv_|jaf_state|jaf_lock|jaf_gate|jaf_login_|jaf_vis_run|jaf_bg_job_|jaf_peek|jaf_opa$|jaf_evscan$|jaf_ms_resume|jaf_evscan_failures|jaf_ms_failures|jaf_ms_single_age_couples|jaf_failed)/;
+  const BACKUP_SKIP = /^(jaf_dbk|jaf_memdb|jaf_anc|jaf_wal|jaf_rpc[qra]_|jaf_bkv_|jaf_state|jaf_lock|jaf_gate|jaf_login_|jaf_vis_run|jaf_bg_job_|jaf_peek|jaf_opa$|jaf_evscan$|jaf_ms_resume|jaf_evscan_failures|jaf_ms_failures|jaf_ms_single_age_couples|jaf_failed)/;
   function fullBackup() {
     const data = {};
     for (const k of GM_listValues()) {
@@ -2826,9 +3232,13 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       if (fl) for (const [k, v] of Object.entries(fl)) if (/^jaf_fl/.test(k)) GM_setValue(k, v);
       for (const nme of BIG_KEYS) if (BIG[nme]) BIG[nme].loaded = false;
       if (!storeNeedsMigration()) { const l = GM_getValue(K_STORE_V, []) || []; GM_setValue(K_STORE_V, [...new Set(l.concat(BIG_KEYS))]); }
-      for (const [k, v] of Object.entries(b.data)) { if (BIG_KEYS.includes(k)) bigSet(k, v); else if (k !== K_STORE_V) GM_setValue(k, v); }
+      for (const [k, v] of Object.entries(b.data)) { if (BIG_KEYS.includes(k)) bigSet(k, v, true, false); else if (k !== K_STORE_V) GM_setValue(k, v); }
+      if (MEM.mode === 'idb') for (const nme of BIG_KEYS) if (!(nme in b.data)) bigSet(nme, {}, true, false);
       if (meNow) GM_setValue(K_OWNER, meNow); // Bindung an das angemeldete Konto bleibt
       for (const k of ['jaf_sh_fick', 'jaf_sh_ids', 'jaf_sh_tpl']) GM_deleteValue(k); // Abgleich mit der Ablage neu beginnen
+      if (MEM.mode === 'idb') {
+        try { await memFlush(); await memAnchor(true); } catch (e) { alert(`Schreiben ins Gedächtnis fehlgeschlagen: ${e.message || e}`); return; }
+      }
       alert('Sicherung wiederhergestellt. Die Seite wird neu geladen.');
       location.reload();
     });
@@ -4054,20 +4464,16 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   const getChecked = () => gmGet(K_CHECKED, {});
   function setChecked(id, info) {
     if (!id || !info || !info.type || !(info.ages || []).length) return;
-    const m = getChecked();
-    m[id] = { name: info.name || '', type: info.type, ages: info.ages, ts: Date.now() };
-    gmSet(K_CHECKED, m);
+    bigSet1(K_CHECKED, String(id), { name: info.name || '', type: info.type, ages: info.ages, ts: Date.now() });
   }
   // Entscheidung aus dem Cache: 'block' | 'ok' | null (unbekannt/zu alt/Geburtstag dazwischen)
   // Clubs, Shops usw.: JOYclub verlinkt sie in nachgeladenen Gästelisten als /my/<id> – sieht aus wie ein Profil, ist aber keins
   function setNonProfile(id, name, kind) {
     if (!id) return;
-    const m = getChecked();
-    m[id] = { name: name || '', nonProfile: kind || 'kein Mitgliederprofil', ts: Date.now() };
-    gmSet(K_CHECKED, m);
+    bigSet1(K_CHECKED, String(id), { name: name || '', nonProfile: kind || 'kein Mitgliederprofil', ts: Date.now() });
   }
   function cachedNonProfile(id) {
-    const e = id && getChecked()[id];
+    const e = id && bigGet1(K_CHECKED, String(id));
     return e && e.nonProfile && Date.now() - e.ts <= CHECK_MAX_AGE_MS ? e.nonProfile : '';
   }
   // Ziel einer (umgeleiteten) Seite: Club/Shop/… statt Mitgliederprofil? → Bezeichnung, sonst ''
@@ -4088,7 +4494,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     return '';
   }
   function cachedDecision(g, white, src = 'Party') {
-    const e = getChecked()[g.id];
+    const e = g.id && bigGet1(K_CHECKED, String(g.id));
     if (!e || e.nonProfile || !e.ages || Date.now() - e.ts > CHECK_MAX_AGE_MS) return null;
     const yrs = (Date.now() - e.ts) / (365.25 * 86400000);
     const lo = e.ages.map((a) => a + Math.floor(yrs)), hi = e.ages.map((a) => a + Math.ceil(yrs));
@@ -4194,7 +4600,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     if (cd && cd.r === 'ok') return { kind: 'skip', why: `geprüft: ${cd.type}, ${cd.ages.join('+')}` };
     if (cd && cd.r === 'block') return { kind: 'ignore', why: `geprüft: ${cd.type}, ${cd.ages.join('+')}`, verified: true,
       item: mk({ ages: cd.ages, type: cd.type, verify: true }) };
-    const k = ctx.acc[g.path] || Object.entries(ctx.acc).find(([p]) => idOf(p) === g.id)?.[1];
+    const k = ctx.acc[g.path] || ctx.acc[bigKeyById(K_ACCOUNTS, g.id)];
     if (k && k.type && (k.persons || []).length) {
       const maxAges = k.persons.map((r) => { const [y, mo, d] = r.lo.split('-').map(Number); const now = new Date(); let a = now.getFullYear() - y; if (now < new Date(now.getFullYear(), mo - 1, d)) a--; return a; });
       if (!shouldBlock({ name: g.name, path: g.path, type: k.type, ages: maxAges }, wl, src)) return { kind: 'skip', why: `bekannt: ${k.type}, höchstens ${maxAges.join('+')}` };
@@ -6050,6 +6456,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     let odd = 0;
     for (let i = 0; i < 50; i++) {
       await gateWaitStored();
+      if (MEM.pend.size) await memFlush().catch(() => {}); // der Frame liest das Gedächtnis aus der Datenbank
       try { return await bgFrame(url, name, onProgress, timeoutMs); } catch (e) {
         if (!e.gate) throw e;
         if (e.gate.type === 'odd' && ++odd >= 3) throw new Error(`Seite nicht lesbar („${e.gate.title || e.gate.text || '?'}“)`);
@@ -6168,7 +6575,10 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     });
   }
   // Nachricht an die Seite: mit Frame-Name (fn), Sichtbarkeit nur, wenn lesbar – darf nie selbst werfen
-  const bgPost = (m) => {
+  // erst das Gedächtnis schreiben (der Frame wird nach dem Ergebnis entfernt), Reihenfolge der Nachrichten bleibt
+  let bgPostQ = Promise.resolve();
+  const bgPost = (m) => { bgPostQ = bgPostQ.then(() => (MEM.pend.size ? memFlush().catch(() => {}) : null)).then(() => bgPostNow(m)); };
+  const bgPostNow = (m) => {
     let vis = null; try { vis = visibilityFromDoc(document); } catch (e) { /* egal */ }
     try { window.parent.postMessage(Object.assign({ jaf: 'bg', fn: window.name || '', vis }, m), location.origin); }
     catch (e) { try { window.parent.postMessage({ jaf: 'bg', fn: window.name || '', diag: `Senden fehlgeschlagen: ${e.message || e}` }, location.origin); } catch (e2) { /* egal */ } }
@@ -6346,7 +6756,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     const l = getIgnored();
     for (const p of Object.keys(l)) if (idOf(p) === String(id)) delete l[p];
     if (on) {
-      const p = Object.keys(getLog()).find((x) => idOf(x) === String(id)) || Object.keys(getAccounts()).find((x) => idOf(x) === String(id)) || `/profile/${id}.html`;
+      const p = bigKeyById(K_LOG, id) || bigKeyById(K_ACCOUNTS, id) || `/profile/${id}.html`;
       l[p] = { name: name || '', url: location.origin + p, id: String(id) };
     }
     saveIgnored(l);
@@ -6506,10 +6916,9 @@ fragment ImageUIDataFragment on ImageUIData {
   // bekannter Typ zu einem Mitglied: Gästeliste/Karte, sonst Gedächtnis
   function uiKnownType(id, path, type) {
     if (type && !/^Typ |\|/.test(type)) return type;
-    const acc = getAccounts();
-    const k = (path && acc[path]) || Object.entries(acc).find(([p]) => idOf(p) === String(id))?.[1];
+    const k = (path && bigGet1(K_ACCOUNTS, path)) || bigGet1(K_ACCOUNTS, bigKeyById(K_ACCOUNTS, id));
     if (k && k.type) return k.type;
-    const c = getChecked()[id];
+    const c = bigGet1(K_CHECKED, String(id));
     return (c && c.type) || '';
   }
   // Ergebnis der Schnittstelle übernehmen: Gedächtnis + Prüf-Cache; liefert { type, ages } oder { biz } oder null
@@ -6517,12 +6926,12 @@ fragment ImageUIDataFragment on ImageUIData {
     if (!v) return null;
     if (v.biz) { setNonProfile(v.id, v.name || name, 'Business-Profil'); return { biz: true }; }
     if (!v.ages.length) return null;
-    const p = path || Object.keys(getAccounts()).find((k) => idOf(k) === v.id) || '';
+    const p = path || bigKeyById(K_ACCOUNTS, v.id);
     const t = uiKnownType(v.id, p, type);
     const fits = uiTypeFits(t, v.gender);
     // Paar-Typ ohne zweites Alter: lieber das Profil ansehen
     if (fits && isCoupleType(t) && v.ages.length < 2) return null;
-    const acc = getAccounts()[p];
+    const acc = p ? bigGet1(K_ACCOUNTS, p) : null;
     const n = acc && acc.persons ? acc.persons.length : 0;
     if (p && (fits || !n || n === v.ages.length)) recordAccounts([{ path: p, name: v.name || name, ages: v.ages, type: fits ? t : '', cardOnline: v.online === 'ONLINE' }]);
     if (!fits) return null;
@@ -10053,6 +10462,25 @@ fragment ImageUIDataFragment on ImageUIData {
     row2(tb2, 'Gedächtnis sichern', 'Mitglieder-Wissen, Fickliste, Textvorlagen', txt('Zum Mischen auf einem anderen Konto oder Rechner', 'jaf-val'), jb('Sichern', () => downloadMemory()));
     row2(tb2, 'Wiederherstellen', 'Ersetzt alle Daten durch die Sicherung', txt('Eigene Sicherung', 'jaf-val'), jb('Datei wählen …', () => restoreBackup()));
     row2(tb2, 'Fremde Datensicherung importieren', 'Ergänzt das Wissen über andere Mitglieder', txt('Sicherung eines anderen Kontos', 'jaf-val'), jb('Datei wählen …', () => importForeignBackup()));
+    if (MEM.mode === 'idb') {
+      const ms = memStatus();
+      const nf = (n) => Number(n || 0).toLocaleString('de-DE');
+      const memTxt = ms.err && !ms.ready ? `nicht verfügbar: ${ms.err}` : `${nf(ms.total)} Einträge` +
+        (ms.mig ? ` · umgezogen am ${fmtTs(ms.mig).slice(0, 10)}` : '') +
+        (ms.mig && !ms.del ? ` · Altbestand wird ab ${fmtTs(ms.mig + 14 * 864e5).slice(0, 10)} gelöscht` : ms.del ? ' · Altbestand gelöscht' : '');
+      row2(tb2, 'Gedächtnis im Browser', 'Verschlüsselt, Schlüssel auch im Briefkasten', txt(memTxt, 'jaf-val'));
+      const a = ms.anc;
+      const ancTxt = txt(a ? `Stand ${fmtTs(a.ts)} · ${nf(a.total)} Einträge · ${a.size >= 1048576 ? (a.size / 1048576).toFixed(1).replace('.', ',') + ' MB' : Math.max(1, Math.round(a.size / 1024)) + ' KB'}` : 'noch keiner angelegt', 'jaf-val');
+      row2(tb2, 'Rettungsanker', 'Gepackte Kopie im Tampermonkey-Speicher', ancTxt,
+        jb('Aktualisieren', async () => { ancTxt.textContent = 'wird angelegt …'; try { await memAnchor(true); } catch (e) { /* egal */ } renderSettingsPage(); }),
+        jb('Wiederherstellen', async () => {
+          if (!a) { alert('Es gibt noch keinen Rettungsanker.'); return; }
+          if (!confirm(`Aus dem Rettungsanker vom ${fmtTs(a.ts)} wiederherstellen?\n\nFehlende Einträge werden ergänzt, vorhandene bleiben.`)) return;
+          ancTxt.textContent = 'wird wiederhergestellt …';
+          try { const n = await memAnchorRestore(); alert(`${nf(n)} Einträge wiederhergestellt.`); } catch (e) { alert(`Wiederherstellen fehlgeschlagen: ${e.message || e}`); }
+          renderSettingsPage();
+        }));
+    }
     // ---- Experten-Einstellungen ----
     const exp = document.createElement('div');
     exp.className = 'jaf-exp-toggle';
@@ -13575,7 +14003,7 @@ fragment ImageUIDataFragment on ImageUIData {
   }
 
   // im Hintergrund-Frame nur die Gästeliste laden – sonst nichts
-  if (BG_FRAME) { bgFrameDispatch(); return; }
+  if (BG_FRAME) { (async () => { if (await memInit()) bgFrameDispatch(); })(); return; }
 
   // Tampermonkey-Menü: nur noch Rekorder (der Export enthält auch alle Diagnose-Daten)
   try {
@@ -13645,10 +14073,10 @@ fragment ImageUIDataFragment on ImageUIData {
   })();
 
   // einmalig: Links der Whitelist-Mitglieder aus bereits bekannten Konten übernehmen
-  try {
+  memLater(() => {
     const wl = whiteList();
     for (const [path, r] of Object.entries(getAccounts())) if (r.name && wl.includes(norm(r.name))) learnWhiteUrl(r.name, path);
-  } catch (e) { /* egal */ }
+  });
 
   // =====================================================================
   // ---------- Textvorlagen (ClubMail › Optionen › Textvorlagen) ----------
@@ -14472,7 +14900,7 @@ fragment ImageUIDataFragment on ImageUIData {
     };
     if (document.body) show(); else document.addEventListener('DOMContentLoaded', show, { once: true });
   }
-  const hasOwnData = () => GM_listValues().some((k) => /^jaf_(settings|fl$|log|ignored|accounts|events)/.test(k));
+  const hasOwnData = () => memTotal() > 0 || GM_listValues().some((k) => /^jaf_(settings|fl$|log|ignored|accounts|events)/.test(k));
   async function ownerGate() {
     if (IN_FRAME) return !OWNER_BLOCK;
     const uid = sessionId();
@@ -14489,6 +14917,11 @@ fragment ImageUIDataFragment on ImageUIData {
       }
       ownerBlockHint(o);
       return false;
+    }
+    // Neuinstallation: das verschlüsselte Gedächtnis kennt seinen Besitzer
+    if (MEM.owner && MEM.owner.uid) {
+      if (String(MEM.owner.uid) === String(uid)) { bind(); return true; }
+      ownerBlockHint(MEM.owner); return false;
     }
     if (!hasOwnData()) { bind(); return true; }
     const refused = GM_getValue('jaf_owner_refused', {}) || {};
@@ -14753,7 +15186,7 @@ fragment ImageUIDataFragment on ImageUIData {
   }
 
   // ---- Einstellungs-Kopie (meta.joyclub_gm): bei jedem Speichern, sonst alle 6 Stunden ----
-  const SH_GM_SKIP = /\||^jaf_(fl|api_|rpc[qra]_|bk|sh_|lock|state|gate|login|vis_run|bg_job|peek|opa$|evscan|ms_|failed|accounts|log$|ignored|checked|watch|mem|pi_|store_v|mig|events|group_done|mj|done|other_types|gender_map|tpl$|owner)/;
+  const SH_GM_SKIP = /\||^jaf_(dbk|memdb|anc|wal|fl|api_|rpc[qra]_|bk|sh_|lock|state|gate|login|vis_run|bg_job|peek|opa$|evscan|ms_|failed|accounts|log$|ignored|checked|watch|mem|pi_|store_v|mig|events|group_done|mj|done|other_types|gender_map|tpl$|owner)/;
   async function shMirrorSettings(force) {
     if (!shOwnerOk) return;
     if (!force && Date.now() - (GM_getValue('jaf_sh_gm_at', 0) || 0) < 6 * 3600e3) return;
@@ -14908,6 +15341,7 @@ fragment ImageUIDataFragment on ImageUIData {
         if (shOwnerOk === null) { const remote = (await SH.call('all', { s: 'tpl' }, 20000)) || []; await shCheckOwner(remote); }
         if (!shOwnerOk) return;
         if (Date.now() - (GM_getValue('jaf_sh_ich_at', 0) || 0) > 864e5) { await shRegisterIch(); GM_setValue('jaf_sh_ich_at', Date.now()); }
+        try { await memKeyToBk(); } catch (e) { /* später */ }
         await shFickSync();
         await shMirrorSettings(false);
       } catch (e) { bkStat({ err: e.message || String(e) }); }
@@ -14931,9 +15365,12 @@ fragment ImageUIDataFragment on ImageUIData {
   // Start erst nach der Kontobindung (braucht die angemeldete Nutzer-ID der Seite)
   (async () => {
     if (document.readyState === 'loading') await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
+    // Gedächtnis laden (verschlüsselt, ab 1.98) – vorher läuft nichts, was es braucht
+    if (!(await memInit())) return;
     let ok = true;
     try { ok = await ownerGate(); } catch (e) { console.warn('[Alter-Filter] Kontobindung', e); }
     if (!ok) return;
+    try { const o = GM_getValue(K_OWNER, null); if (o && sessionId() && String(o.uid) === String(sessionId())) await memSetOwner(o); } catch (e) { /* egal */ }
     shStart();
     safeInit();
     let lastPath = location.pathname;

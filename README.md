@@ -686,6 +686,29 @@ Alle Sicherungen stehen im Abschnitt **Sicherung** der Seite „Opa-Schutz“:
 | Gedächtnis sichern | Wissen über andere Mitglieder (Typ, Geburtszeiträume, Sternzeichen, Online-Angaben, geprüfte Profile, Geschlechts-Zuordnung), dazu **Fickliste** und **Textvorlagen** (beide mit deinem Nick verschlüsselt) – zum Mischen auf einem anderen Konto oder Rechner |
 | Wiederherstellen | ersetzt nach Rückfrage alle Daten durch eine eigene Sicherung; nach einem Nick-Wechsel wird der damalige Nick abgefragt (oder ohne Fickliste wiederherstellen) |
 | Fremde Datensicherung importieren | mischt eine Sicherung oder ein Gedächtnis ein (siehe unten) |
+| Gedächtnis im Browser | Anzahl der Einträge, Datum des Umzugs und wann der Altbestand gelöscht wird (ab 1.98) |
+| Rettungsanker | Stand, Einträge und Größe; **Aktualisieren** legt ihn sofort komplett neu an, **Wiederherstellen** ergänzt fehlende Einträge daraus (vorhandene bleiben) |
+
+### Wo die Daten liegen (ab 1.98)
+
+| Was | Wo | Wer kann es lesen |
+|---|---|---|
+| Gedächtnis: Gesperrte, Ignorierliste, Konten, geprüfte Profile, Vorgemerkte, Profil-Gedächtnis | verschlüsselt (AES-GCM) in einer unauffällig benannten Datenbank des Browsers auf joyclub.de | nur das Skript; JOYclub sieht unlesbare Daten, die Datensatz-Namen sind verschlüsselte Prüfsummen |
+| Schlüssel dazu | Tampermonkey-Speicher und als Kopie im Briefkasten | nur das Skript |
+| Rettungsanker | gepackt im Tampermonkey-Speicher | nur das Skript |
+| Einstellungen, kleine Listen, Fickliste | Tampermonkey-Speicher (Einstellungen zusätzlich als Kopie im Briefkasten) | nur das Skript |
+
+- **Umzug:** beim ersten Start von 1.98 automatisch, ohne Rückfrage. Der Altbestand bleibt 14 Tage im Tampermonkey-Speicher und wird danach gelöscht (nur wenn ein Rettungsanker jünger als der Umzug ist). Danach lädt Tampermonkey bei jedem Seitenaufruf deutlich weniger.
+- **Rettungsanker:** einmal täglich die geänderten Blöcke, einmal wöchentlich alle; nur ein Tab arbeitet daran, in kleinen Schritten.
+- **Mehrere Tabs:** jede Änderung kommt sofort in ein Schreib-Journal (Tampermonkey) und gesammelt in die Datenbank; die Tabs wechseln sich beim Schreiben ab und erfahren gegenseitig, was sich geändert hat. Wird ein Tab mitten im Schreiben geschlossen, holt der nächste Start das Journal nach.
+
+| Was passiert | Was rettet |
+|---|---|
+| Website-Daten von joyclub.de gelöscht | Rettungsanker – das Skript fragt beim nächsten Start: *„Deine Daten scheinen gelöscht worden zu sein … Aus dem Rettungsanker vom TT.MM.JJJJ wiederherstellen?“* |
+| Skript oder Tampermonkey neu installiert | Datenbank des Browsers + Schlüssel aus dem Briefkasten + Einstellungs-Kopie; die Kontobindung erkennt den Besitzer aus der Datenbank |
+| beides zugleich | nur noch **Alle Daten sichern** (Datei) |
+
+Ist der Schlüssel weg und der Briefkasten nicht erreichbar, fragt das Skript: *Später* (diesmal aus, beim nächsten Aufruf erneut versuchen) oder *Neu beginnen* (altes Gedächtnis verwerfen).
 
 **Einmischen** (Abgleich über die Profil-ID; der zuletzt aufgerufene Stand gewinnt, bei Gleichstand der vollständigere, dann der eigene; Geburtszeiträume werden immer geschnitten):
 
@@ -733,7 +756,7 @@ Beim Ansehen von „Mögen mich“, „Profilbesuche“ und der ClubMail merkt s
 
 ## Technisches
 
-- **Speicher:** große Listen (Protokoll, Ignorierliste, Konten, Prüf-Cache, Vorgemerkte, Gedächtnis) liegen als ein Tampermonkey-Wert je Mitglied (`jaf_log|/profile/…`); geändert wird nur, was sich ändert, andere Tabs werden über `GM_addValueChangeListener` informiert. Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`; ab 1.76 `GM_xmlhttpRequest` mit `@connect image-user.feig-partner.de` (Profilbilder für das Profil-Archiv – Tampermonkey fragt einmal nach).
+- **Speicher (ab 1.98):** große Listen (`jaf_log`, `jaf_ignored`, `jaf_accounts`, `jaf_checked`, `jaf_watch`, `jaf_mem`) in IndexedDB `keyval-cache`/`kv` auf www.joyclub.de: je Liste 64 Blöcke, ein Datensatz je Block (AES-GCM 256, zufälliger IV; Schlüssel und Datensatz-Namen per HKDF/HMAC-SHA-256 aus `jaf_dbk`). Schreiben unter einer Web-Lock-Sperre (lesen, mischen, schreiben), Tabs über `BroadcastChannel`; Journal `jaf_wal|<liste>|<schlüssel>`, Rettungsanker `jaf_anc|<liste>|<block>` (gzip, base64) mit Stand in `jaf_anc`, Umzugsstand `jaf_memdb`, Schlüssel-Kopie im Briefkasten `meta.joyclub_dbk`. Einzelzugriffe (z. B. geprüfte Profile, Konten) lesen nur den einen Eintrag statt die ganze Liste zu bauen. Bis 1.97 lag jeder Eintrag als eigener Tampermonkey-Wert (`jaf_log|/profile/…`). Neue Berechtigungen: `GM_listValues`, `GM_deleteValue`, `GM_addValueChangeListener`; ab 1.76 `GM_xmlhttpRequest` mit `@connect image-user.feig-partner.de` (Profilbilder für das Profil-Archiv – Tampermonkey fragt einmal nach).
 - **Fickliste:** `jaf_fl` (Personen, mit `profiles` für andere Plattformen und `statusAt`), `jaf_fl_groups` (verknüpfte Profile), `jaf_fla_<id>` (Archiv-Stände), `jaf_fli_<id>` (Profilbilder als data:-URL).
 - **Orts-URLs:** ä→ae, ö→oe, ü→ue, ß→ss; Leerzeichen und Klammern → „_“ (z. B. „Mülheim (Ruhr)“ → `muelheim_ruhr`).
 - **Profilinfos:** `jaf_pi_<id>` (Nick, frühere Nicks, Typ, Alter, Bild), `jaf_pi_idx`, `jaf_pi_nick`; **API-Rekorder:** `jaf_api_rec`, `jaf_api_log`, `jaf_api_tl` (Zeitleiste), `jaf_api_fb` (Rückfälle); ab 1.83 `@run-at document-start` und `@grant unsafeWindow`.
