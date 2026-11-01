@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.98
+// @version      1.99
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -9958,18 +9958,21 @@ fragment ImageUIDataFragment on ImageUIData {
     '.jaf-tg i{position:relative;width:38px;height:22px;border-radius:11px;background:#7a7f84;display:inline-block;transition:background .15s}' +
     '.jaf-tg i:after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}' +
     '.jaf-tg.on i{background:#43a047}.jaf-tg.on i:after{left:19px}' +
-    '#c table.table_row_xs{width:100%}td.jaf-full{padding:0 0 6px!important}table.jaf-src{table-layout:fixed}table.jaf-src col.v{width:56%}' +
+    // alle Blöcke genau so breit wie die roten Überschriften: feste Tabellenbreite, Inhalte brechen um statt überzustehen
+    '#c table.table_row_xs{width:100%;table-layout:fixed}#c table.table_row_xs>tbody>tr>th.td_fh{width:33.3%;overflow-wrap:break-word}#c table.table_row_xs td.td_fc{overflow-wrap:break-word}' +
+    'td.jaf-full{padding:0!important}table.jaf-src{table-layout:fixed}table.jaf-src col.l{width:34.3%}table.jaf-src col.v{width:34%}' +
+    'table.jaf-src td.td_fh,table.jaf-src td.td_fc,table.jaf-src th.td_fh,table.jaf-src th.td_fc{width:auto;padding:6px 10px;line-height:normal}table.jaf-src .jaf-tg{white-space:normal}' +
     '.jaf-desc{display:block;color:#8a8f94;font-size:12px;margin-top:2px;font-weight:normal;white-space:normal}' +
     'table.jaf-src tr.jaf-more td{vertical-align:top;padding-top:12px;padding-bottom:8px;white-space:normal}table.jaf-src tr.jaf-cp td{padding:8px 6px}' +
     'div.jaf-nm{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}div.jaf-nm input{width:100%;box-sizing:border-box;min-width:0}' +
-    '.jaf-awo-grid{display:grid;grid-template-columns:90px repeat(3,150px);gap:6px 14px;align-items:center}.jaf-awo-h{color:#8a8f94;font-size:12px}.jaf-awo-c{display:flex;align-items:center;gap:6px;white-space:nowrap}' +
-    '.jaf-row2{display:flex;gap:10px;align-items:center;flex-wrap:nowrap;white-space:nowrap}.jaf-row2 .jaf-val{display:inline-block;width:230px;white-space:normal}' +
+    '.jaf-awo-grid{display:grid;grid-template-columns:auto repeat(3,minmax(0,1fr));gap:6px 8px;align-items:center}.jaf-awo-h{color:#8a8f94;font-size:12px}.jaf-awo-c{display:flex;align-items:center;gap:6px;white-space:nowrap}' +
+    '.jaf-row2{display:flex;gap:8px 10px;align-items:center;flex-wrap:wrap}.jaf-row2 .jaf-val{display:inline-block;flex:1 1 160px;min-width:0;white-space:normal}' +
     '.jaf-row2 .jaf-st{color:#8a8f94;font-size:12px;white-space:normal}.jaf-lim-hint{color:#ff8a8a;margin-left:8px}' +
     'table.jaf-src{width:100%;border-collapse:collapse}table.jaf-src th{font-weight:normal;opacity:.7;font-size:12px;text-align:left;padding:2px 6px}' +
     'table.jaf-src td{padding:4px 6px;border-top:1px solid rgba(127,127,127,.2);font-size:13px;white-space:nowrap;vertical-align:middle}' +
     'table.jaf-src tr.sw td{border-top:0}.jaf-who{display:inline-block;margin-left:6px;opacity:.6;font-size:11px}' +
     'table.jaf-nm{border-collapse:collapse}table.jaf-nm th{font-weight:normal;opacity:.7;font-size:12px;text-align:left;padding:0 6px}table.jaf-nm td{padding:2px 6px 2px 0;font-size:12px}' +
-    'table.jaf-nm input{width:120px;display:inline-block}.jaf-num{width:64px!important;display:inline-block!important}' +
+    'table.jaf-nm input{width:120px;display:inline-block}.jaf-num{width:64px!important;display:inline-block!important}.jaf-awo-c .jaf-num{width:54px!important}' +
     '.jaf-info{display:grid;grid-template-columns:auto auto;gap:4px 18px;background:rgba(127,127,127,.12);border-radius:8px;padding:10px 14px;margin:6px 0 4px;width:max-content;max-width:100%}' +
     '.jaf-info b{font-variant-numeric:tabular-nums}.jaf-cb{display:inline-flex;align-items:center;gap:6px;margin:2px 14px 2px 0;font-weight:normal;cursor:pointer}';
   function ensureSetCss() {
@@ -10104,7 +10107,7 @@ fragment ImageUIDataFragment on ImageUIData {
       // Eine Tabelle über die volle Breite mit festen Spalten – in allen Gruppen gleich breit (Regler pixelgenau gleich)
       const t = document.createElement('table');
       t.className = 'jaf-src';
-      t.innerHTML = '<colgroup><col style="width:150px"><col class="v"><col class="i"></colgroup>';
+      t.innerHTML = '<colgroup><col class="l"><col class="v"><col class="i"></colgroup>';
       const grey = (txt) => { const sp = document.createElement('span'); sp.className = 'jaf-desc'; sp.textContent = txt; return sp; };
       // Zeile mit Beschriftung (+ grauer Beschreibung) links und Inhalt unter beiden Regler-Spalten
       const mk = (label, desc, content, tip) => {
@@ -10238,6 +10241,8 @@ fragment ImageUIDataFragment on ImageUIData {
         types.appendChild(l);
       }
       mk('Profiltypen', '', types, 'Ein Typ gehört zu höchstens einer Gruppe; ein Haken hier entfernt ihn aus den anderen. Nicht zugeordnete Typen werden nicht bearbeitet.');
+      // graue Kästen wie in den übrigen Blöcken: Beschriftungsspalte dunkler, Inhalt heller (Farben von JOYclub)
+      for (const r of t.querySelectorAll('tr')) [...r.children].forEach((x, i) => x.classList.add(i ? 'td_fc' : 'td_fh'));
       const tr0 = document.createElement('tr');
       const td0 = document.createElement('td'); td0.colSpan = 2; td0.className = 'jaf-full';
       td0.appendChild(t); tr0.appendChild(td0); tb.appendChild(tr0);

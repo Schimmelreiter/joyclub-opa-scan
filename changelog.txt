@@ -1,6 +1,11 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+1.99 (01.11.2026)
+- Einstellungen: alle Blöcke genau so breit wie die roten Überschriften (Inhalte brechen um statt überzustehen), Beschriftungsspalte überall gleich breit
+- Gruppen (Männer, Frauen, Paare): graue Kästen wie in den übrigen Blöcken wieder da
+- AWO-Raster und Sicherungs-Zeilen passen in die Spaltenbreite
+
 1.98 (30.10.2026)
 - Gedächtnis (Gesperrte, Ignorierliste, Konten, geprüfte Profile, Vorgemerkte, Profil-Gedächtnis) liegt verschlüsselt (AES-GCM) in einer unauffällig benannten Datenbank des Browsers auf joyclub.de – JOYclub sieht nur unlesbare Daten; Schlüssel im Tampermonkey-Speicher und als Kopie im Briefkasten
 - Umzug beim ersten Start automatisch; der Altbestand im Tampermonkey-Speicher wird nach 14 Tagen gelöscht, danach lädt jede Seite schneller
