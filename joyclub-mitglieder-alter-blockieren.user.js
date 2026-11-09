@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      2.00
+// @version      2.01
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -30,8 +30,8 @@
 // ==/UserScript==
 
 const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirmung durch die Kontobindung
-// Frame-Name beim Seitenstart festhalten: die Event-Seite von JOYclub kann window.name später ändern (dann fänden
-// weder Frame noch Seite ihre Nachrichten)
+// Frame-Name beim Seitenstart festhalten: andere Skripte (das poppen-Skript hängt „;vaf:<Tab>“ an) ändern window.name,
+// dann fänden weder Frame noch Seite ihre Nachrichten
 const __jafWinName = (() => { try { return window.name || ''; } catch (e) { return ''; } })();
 (function () {
   'use strict';
@@ -1127,7 +1127,8 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
   // In Frames läuft das Skript nur als Hintergrund-Lader (unsichtbarer Frame für Gästelisten), sonst gar nicht.
   const IN_FRAME = window.top !== window;
   const BG_FRAME = IN_FRAME && /^jaf-bg-/.test(__jafWinName || window.name || '');
-  const FRAME_NAME = BG_FRAME ? (/^jaf-bg-/.test(__jafWinName) ? __jafWinName : window.name) : (window.name || '');
+  // andere Skripte hängen eigene Kennungen an den Fensternamen an (z. B. „jaf-bg-ev;vaf:…“ vom poppen-Skript) → nur unser Teil
+  const FRAME_NAME = (BG_FRAME ? (/^jaf-bg-/.test(__jafWinName) ? __jafWinName : window.name) : (window.name || '')).split(';')[0];
   if (IN_FRAME && !BG_FRAME) return;
   // im Hintergrund-Frame keine Dauer-Timer (Markieren, Wächter …)
   const setInterval = BG_FRAME ? (() => 0) : (fn, ms, ...a) => globalThis.setInterval(() => { if (!OWNER_BLOCK && (MEM.mode !== 'idb' || MEM.ready)) fn(...a); }, ms);
@@ -6625,7 +6626,7 @@ fragment MoneyFragment on Money {
     if (!g) {
       // Rückkehr aus dem Login-Fenster: Erfolg melden und Fenster schließen
       const tok = new URLSearchParams(location.search).get('jaf_login');
-      if (tok) { gmSet(K_LOGIN_RESULT, { token: tok, ok: true, ts: Date.now() }); if (window.name === 'jaf-login') setTimeout(() => window.close(), 500); }
+      if (tok) { gmSet(K_LOGIN_RESULT, { token: tok, ok: true, ts: Date.now() }); if (/^jaf-login(;|$)/.test(window.name || '')) setTimeout(() => window.close(), 500); }
       return plainSpecialPage(null);
     }
     if (g.type === 'odd') {
