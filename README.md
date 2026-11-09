@@ -344,7 +344,7 @@ Auf der eigenen Seite der Eventanmeldungen (rechts neben „Opa-Scan starten“)
 
   <img src="docs/partys-single.png" width="400" alt="Einzeln fragen">
 - Ergebnis jeder Anmeldung: „Du bist erfolgreich angemeldet!“ → angemeldet, „Du stehst auf der Warteliste.“ → Warteliste. Bietet eine Party den gewählten Typ nicht an (z. B. nur Paare) oder meldet JOYclub einen Fehler, wird sie übersprungen und am Ende mit Grund und Link aufgeführt.
-- Merken und Anmelden laufen über die Formulare der Event-Seite. Ab 2.00 laufen Stornieren und „Nicht mehr merken“ über JOYclubs Schnittstelle (`cancelOwnAttendanceToEvent`, `unbookmarkEvent`), der Status vorher und nachher über `getOwnEventRelation` (angemeldet, Warteliste, gemerkt) statt über die ganze Event-Seite. **Abmelden** (bei 5) fragt nach einer freiwilligen **Nachricht an den Veranstalter**, die mit der Abmeldung verschickt wird. Klappt die Schnittstelle nicht, klickt das Skript wie bisher im unsichtbaren Frame „Stornieren“ → „Anmeldung stornieren“ (dann ohne Nachricht).
+- Merken und Anmelden laufen über die Formulare der Event-Seite. Ab 2.00 laufen Stornieren und „Nicht mehr merken“ über JOYclubs Schnittstelle (`cancelOwnAttendanceToEvent`, `unbookmarkEvent`), der Status vorher und nachher weiter über die Event-Seite (`getOwnEventRelation` zeigt eine Abmeldung nicht an). **Abmelden** (bei 5) fragt nach einer freiwilligen **Nachricht an den Veranstalter**, die mit der Abmeldung verschickt wird. Klappt die Schnittstelle nicht, klickt das Skript wie bisher im unsichtbaren Frame „Stornieren“ → „Anmeldung stornieren“ (dann ohne Nachricht).
 
 ---
 

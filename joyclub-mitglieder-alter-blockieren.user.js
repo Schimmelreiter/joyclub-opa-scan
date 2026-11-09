@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      2.01
+// @version      2.02
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -5698,7 +5698,7 @@ fragment MoneyFragment on Money {
   }
 }`;
   const evGql = (operationName, query, variables) => api2('POST', '/graph/', { operationName, query, variables });
-  // eigener Stand zu einer Party: A angemeldet | W Warteliste | M gemerkt | N nichts; null = Schnittstelle nicht nutzbar
+  // eigener Stand laut Schnittstelle (A | W | M | N; null = nicht nutzbar) – Achtung: Abmeldungen erscheinen dort nicht, daher derzeit ungenutzt
   async function psRelSt(eid) {
     if (!eid) return null;
     const r = await apiTry('Party-Status', () => evGql('getOwnEventRelation', EV_Q_REL, { eventId: Number(eid) }));
@@ -5709,7 +5709,8 @@ fragment MoneyFragment on Money {
     return x.isOnGuestList ? 'A' : x.isOnWaitingList ? 'W' : x.isBookmarked ? 'M' : 'N';
   }
   const psEid = (ev) => { try { return eventIdOf(new URL(ev.url, location.origin).pathname) || String(ev.id || ''); } catch (e) { return String(ev.id || ''); } };
-  const psStNow = async (ev) => (await psRelSt(psEid(ev)).catch(() => null)) || (await psState(ev.url)).st;
+  // Status immer von der Event-Seite: getOwnEventRelation zeigt eine Abmeldung nicht an (isOnGuestList bleibt true, geprüft 09.11.2026)
+  const psStNow = async (ev) => (await psState(ev.url)).st;
   // merken (want=true) bzw. nicht mehr merken
   async function psBookmark(ev, want) {
     const doc = await fetchDoc(ev.url);

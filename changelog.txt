@@ -1,13 +1,16 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.02 (09.11.2026)
+- Abmelden mit Nachricht im echten Konto geprüft (Schnittstelle bestätigt die Abmeldung samt Nachricht, die Event-Seite zeigt danach „Anmelden“). Der Status vorher/nachher kommt wieder von der Event-Seite: getOwnEventRelation meldet nach einer Abmeldung weiter „auf der Gästeliste“
+
 2.01 (09.11.2026)
 - Ursache der abgebrochenen Party-Scans gefunden (im echten Browser geprüft): das poppen-Skript hängt an die Fensternamen der Hintergrund-Frames „;vaf:<Tab>“ an. Das Skript wertet jetzt nur den eigenen Teil des Namens aus (auch beim Login-Fenster)
 
 2.00 (09.11.2026)
 - Party-Scan: seit Ende Oktober brachen die Scans mit „Seite startet im Hintergrund nicht“ bzw. „Kein Fortschritt“ ab – der Fenstername der Frames wurde verändert (Ursache siehe 2.01), Frame und Seite fanden ihre Nachrichten nicht mehr. Jetzt wird die Event-Seite direkt abgerufen (ohne Frame) und die Gästeliste über die Schnittstelle geladen; der Frame bleibt Rückfall und merkt sich seinen Namen beim Start
 - Hintergrund-Frames melden sich sofort und nennen Probleme beim Laden des Gedächtnisses im Ablauf-Protokoll
-- Partys synchronisieren: Stornieren und „Nicht mehr merken“ über die Schnittstelle, Status über getOwnEventRelation statt über die ganze Event-Seite; „Abmelden“ fragt nach einer freiwilligen Nachricht an den Veranstalter
+- Partys synchronisieren: Stornieren und „Nicht mehr merken“ über die Schnittstelle, „Abmelden“ fragt nach einer freiwilligen Nachricht an den Veranstalter
 
 1.99 (01.11.2026)
 - Einstellungen: alle Blöcke genau so breit wie die roten Überschriften (Inhalte brechen um statt überzustehen), Beschriftungsspalte überall gleich breit
