@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      1.99
+// @version      2.00
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -30,6 +30,9 @@
 // ==/UserScript==
 
 const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirmung durch die Kontobindung
+// Frame-Name beim Seitenstart festhalten: die Event-Seite von JOYclub kann window.name später ändern (dann fänden
+// weder Frame noch Seite ihre Nachrichten)
+const __jafWinName = (() => { try { return window.name || ''; } catch (e) { return ''; } })();
 (function () {
   'use strict';
   // Kontobindung (ab 1.96): gehört der Speicher einem anderen Konto, schreibt das Skript nichts und läuft nicht
@@ -331,7 +334,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     return 'sonstige';
   }
   const apiCtx = { click: null, scroll: 0, load: Date.now() };
-  const apiFrameName = () => { try { return window.top === window ? '' : (/^jaf-/.test(window.name || '') ? 'Hintergrund-Frame des Skripts' : 'Frame'); } catch (e) { return 'Frame'; } };
+  const apiFrameName = () => { try { return window.top === window ? '' : (/^jaf-/.test(__jafWinName || window.name || '') ? 'Hintergrund-Frame des Skripts' : 'Frame'); } catch (e) { return 'Frame'; } };
   function apiTrigger(now) {
     if (apiCtx.click && now - apiCtx.click.ts < 3000) return `Klick: ${apiCtx.click.label}`;
     if (now - apiCtx.scroll < 2000) return 'beim Scrollen';
@@ -777,8 +780,8 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   async function memInit() {
     if (MEM.mode !== 'idb' || MEM.ready) return true;
     try {
-      MEM.db = await memOpen();
-      let recs = await memAll();
+      MEM.step = 'Datenbank öffnen'; MEM.db = await memOpen();
+      MEM.step = 'lesen'; let recs = await memAll();
       let key = GM_getValue(K_DBK, '');
       if (!key && recs.size) {
         key = await memKeyFromBk();
@@ -795,7 +798,8 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
         GM_setValue(K_DBK, key || '');
       }
       if (!key) { key = memB64(crypto.getRandomValues(new Uint8Array(32))); GM_setValue(K_DBK, key); }
-      await memKeys(memUnB64(key));
+      MEM.step = 'Schlüssel'; await memKeys(memUnB64(key));
+      MEM.step = 'entschlüsseln';
       for (const name of BIG_KEYS) memSt(name);
       let bad = 0, good = 0;
       const plain = new Map(await Promise.all([...recs].filter(([id]) => id === MEM.ownerRid || id === MEM.migRid || MEM.ids.has(id)).map(async ([id, rec]) => { try { return [id, await memDec(rec)]; } catch (e) { return [id, null]; } })));
@@ -811,7 +815,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       }
       if (bad && !good) throw new Error('Schlüssel passt nicht zum Gedächtnis');
       // Umzug aus dem Tampermonkey-Speicher (einmalig, unter der Sperre, nur ein Tab; Merker auch in der Datenbank)
-      let mm = GM_getValue(K_MEMDB, null);
+      MEM.step = 'Umzug'; let mm = GM_getValue(K_MEMDB, null);
       if (!mm || !mm.mig) {
         await navigator.locks.request('kv-cache-m', async () => {
           // immer den aktuellen Stand der Datenbank zugrunde legen (ein anderer Tab kann schon umgezogen haben)
@@ -839,7 +843,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
         mm = GM_getValue(K_MEMDB, null) || {};
       }
       // Journal: noch nicht geschriebene Änderungen beendeter Tabs nachtragen (lebende Tabs halten ihre Sperre und schreiben selbst)
-      let live = new Set();
+      MEM.step = 'Journal'; let live = new Set();
       try { const q = await navigator.locks.query(); live = new Set((q.held || []).map((l) => l.name)); } catch (e) { /* egal */ }
       navigator.locks.request('kv-cache-t-' + STORE_TAB, () => new Promise(() => {})).catch(() => {});
       for (const wk of GM_listValues()) {
@@ -855,7 +859,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
         const bk = name + '|' + memBucket(k); let m = MEM.pend.get(bk); if (!m) MEM.pend.set(bk, m = new Map());
         m.set(k, { t: e.t, g: e.g });
       }
-      MEM.ready = true;
+      MEM.step = 'fertig'; MEM.ready = true;
       for (const fn of MEM.after.splice(0)) { try { fn(); } catch (e) { /* egal */ } }
       if (MEM.early.size) console.warn('[Alter-Filter] Listen vor dem Laden gelesen:', [...MEM.early].join(', '));
       try { MEM.bc = new BroadcastChannel(MEM_BC); MEM.bc.onmessage = (ev) => { const m = ev.data; if (m && m.t === 'u' && m.from !== STORE_TAB && Array.isArray(m.ids)) memRemote(m.ids).catch(() => {}); }; } catch (e) { /* egal */ }
@@ -1122,7 +1126,8 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   }
   // In Frames läuft das Skript nur als Hintergrund-Lader (unsichtbarer Frame für Gästelisten), sonst gar nicht.
   const IN_FRAME = window.top !== window;
-  const BG_FRAME = IN_FRAME && /^jaf-bg-/.test(window.name || '');
+  const BG_FRAME = IN_FRAME && /^jaf-bg-/.test(__jafWinName || window.name || '');
+  const FRAME_NAME = BG_FRAME ? (/^jaf-bg-/.test(__jafWinName) ? __jafWinName : window.name) : (window.name || '');
   if (IN_FRAME && !BG_FRAME) return;
   // im Hintergrund-Frame keine Dauer-Timer (Markieren, Wächter …)
   const setInterval = BG_FRAME ? (() => 0) : (fn, ms, ...a) => globalThis.setInterval(() => { if (!OWNER_BLOCK && (MEM.mode !== 'idb' || MEM.ready)) fn(...a); }, ms);
@@ -4238,23 +4243,25 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
       const m = (sc.textContent || '').match(/"startDate"\s*:\s*"([^"]+)"/);
       if (m) { start = m[1]; break; }
     }
-    return { id: eventIdOf(location.pathname), name, start, date: start ? fmtDay(Date.parse(start)) : '' };
+    let id = eventIdOf(location.pathname);
+    if (doc !== document) { const can = doc.querySelector('link[rel="canonical"]'); try { id = eventIdOf(new URL(can.getAttribute('href'), location.origin).pathname) || id; } catch (e) { /* egal */ } }
+    return { id, name, start, date: start ? fmtDay(Date.parse(start)) : '' };
   }
 
   // Veranstalter einer Party: Eigentümer der Event-Seite (body[data-my-user-id]), der Link unter „Veranstalter:“
   // (/club/<id> bzw. /party/<id>) und „präsentiert von …“-Links im Text (/party/<id>). Die ID ist die Konto-ID.
-  function eventOrganizers() {
+  function eventOrganizers(doc = document) {
     const out = new Map();
     const add = (id, name, url) => { if (id && !out.has(String(id))) out.set(String(id), { id: String(id), name: (name || '').trim() || `Veranstalter ${id}`, url: url || '' }); };
     const accId = (href) => (String(href || '').match(/\/(?:club|party|profile|my)\/(\d+)\./) || [])[1];
-    document.querySelectorAll('.event_organizer a[href]').forEach((a) => add(accId(a.getAttribute('href')), a.textContent, a.href));
-    document.querySelectorAll('.event_description a[href*="/party/"]').forEach((a) => {
+    doc.querySelectorAll('.event_organizer a[href]').forEach((a) => add(accId(a.getAttribute('href')), a.textContent, a.href));
+    doc.querySelectorAll('.event_description a[href*="/party/"]').forEach((a) => {
       const href = a.getAttribute('href') || '';
       if (/\/party\/(veranstaltungen|homepage)\//.test(href)) return; // Unterseiten, kein eigenes Konto
       add(accId(href), a.textContent.replace(/^@/, ''), a.href);
     });
-    const owner = document.body.getAttribute('data-my-user-id');
-    if (owner) { const o = [...out.values()].find((x) => x.id === owner); if (!o) add(owner, (document.querySelector('.event_organizer a') || {}).textContent, ''); }
+    const owner = doc.body.getAttribute('data-my-user-id');
+    if (owner) { const o = [...out.values()].find((x) => x.id === owner); if (!o) add(owner, (doc.querySelector('.event_organizer a') || {}).textContent, ''); }
     return [...out.values()];
   }
 
@@ -4833,7 +4840,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   }
   // läuft IM Frame
   async function bgFrameMain() {
-    const gender = (window.name || '').slice('jaf-bg-'.length);
+    const gender = (FRAME_NAME || '').slice('jaf-bg-'.length);
     const post = (m) => window.parent.postMessage(Object.assign({ jaf: 'guests', gender }, m), location.origin);
     try {
       await waitFor(() => document.querySelector('#guest_list'), 30000);
@@ -5598,6 +5605,110 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     return new DOMParser().parseFromString(html, 'text/html');
   }
   const psState = async (url) => parseEvState(await fetchDoc(url));
+  // ---- Partys über die Schnittstelle (Abfragetexte wörtlich wie in der JOYclub-Seite) ----
+  const EV_Q_REL = `query getOwnEventRelation($eventId: Int!) {
+  eventAttendeeAdministration {
+    getOwnEventRelation(eventId: $eventId) {
+      __typename
+      ... on OwnEventRelation {
+        eventId
+        actorId
+        registrationNumber
+        attendingGender
+        ticketId
+        price {
+          ... on Money {
+            ...MoneyFragment
+          }
+        }
+        isMarkAsPaid
+        isOrganiser
+        isBookmarked
+        isInvited
+        isOnWaitingList
+        isOnGuestList
+        isPresent
+        canBookmark
+        checkinPath
+        settings {
+          __typename
+          ... on EventSettings {
+            requiresPrintedConfirmation
+          }
+          ... on EventNotFound {
+            id
+            message
+          }
+        }
+      }
+      ... on EventNotFound {
+        id
+        message
+      }
+      ... on EventRelationNotFound {
+        eventId
+        actorId
+      }
+      ... on EventBadUser {
+        message
+      }
+      ... on EventDomainError {
+        message
+      }
+    }
+  }
+}
+
+fragment MoneyFragment on Money {
+  amount
+  currency
+  factor
+}`;
+  const EV_Q_CANCEL = `mutation cancelOwnAttendanceToEvent($input: CancelOwnAttendanceInput!) {
+  eventAttendeeAdministration {
+    cancelOwnAttendance(input: $input) {
+      __typename
+      ... on CancelledEventTicket {
+        ticketId
+        ticketNumber
+        eventId
+        guestId
+        message
+      }
+      ... on CancelOwnAttendanceError {
+        message
+      }
+    }
+  }
+}`;
+  const EV_Q_UNBM = `mutation unbookmarkEvent($eventId: Int!) {
+  eventAttendeeAdministration {
+    unbookmarkEvent(eventId: $eventId) {
+      ... on UnbookmarkEventSuccess {
+        __typename
+        eventId
+      }
+      ... on CannotUnbookmarkError {
+        __typename
+        eventId
+        message
+      }
+    }
+  }
+}`;
+  const evGql = (operationName, query, variables) => api2('POST', '/graph/', { operationName, query, variables });
+  // eigener Stand zu einer Party: A angemeldet | W Warteliste | M gemerkt | N nichts; null = Schnittstelle nicht nutzbar
+  async function psRelSt(eid) {
+    if (!eid) return null;
+    const r = await apiTry('Party-Status', () => evGql('getOwnEventRelation', EV_Q_REL, { eventId: Number(eid) }));
+    const x = r.ok && r.v && r.v.data && r.v.data.eventAttendeeAdministration && r.v.data.eventAttendeeAdministration.getOwnEventRelation;
+    if (!x) return null;
+    if (x.__typename === 'EventRelationNotFound') return 'N';
+    if (x.__typename !== 'OwnEventRelation') return null;
+    return x.isOnGuestList ? 'A' : x.isOnWaitingList ? 'W' : x.isBookmarked ? 'M' : 'N';
+  }
+  const psEid = (ev) => { try { return eventIdOf(new URL(ev.url, location.origin).pathname) || String(ev.id || ''); } catch (e) { return String(ev.id || ''); } };
+  const psStNow = async (ev) => (await psRelSt(psEid(ev)).catch(() => null)) || (await psState(ev.url)).st;
   // merken (want=true) bzw. nicht mehr merken
   async function psBookmark(ev, want) {
     const doc = await fetchDoc(ev.url);
@@ -5608,10 +5719,16 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
     const form = doc.getElementById('f_bookmark_event');
     if (!form) return { r: 'fail', msg: 'Merken-Formular nicht gefunden' };
     if (CONFIG.DRY_RUN) return { r: 'ok', msg: 'Testmodus' };
-    await postForm(form);
+    let viaApi = false;
+    if (!want) {
+      const r = await apiTry('Nicht mehr merken', () => evGql('unbookmarkEvent', EV_Q_UNBM, { eventId: Number(psEid(ev)) }));
+      const x = r.ok && r.v && r.v.data && r.v.data.eventAttendeeAdministration && r.v.data.eventAttendeeAdministration.unbookmarkEvent;
+      viaApi = !!(x && x.__typename === 'UnbookmarkEventSuccess');
+    }
+    if (!viaApi) await postForm(form);
     await sleep(800);
-    const s2 = await psState(ev.url);
-    return (want ? s2.st === 'M' : s2.st === 'N') ? { r: 'ok', msg: want ? 'gemerkt' : 'nicht mehr gemerkt' } : { r: 'fail', msg: `Status danach: ${s2.st}` };
+    const st2 = await psStNow(ev);
+    return (want ? st2 === 'M' : st2 === 'N') ? { r: 'ok', msg: want ? 'gemerkt' : 'nicht mehr gemerkt' } : { r: 'fail', msg: `Status danach: ${st2}` };
   }
   // anmelden als g ('m'|'w'|'p'); Ergebnis r: ok (A/W) | skip | fail
   async function psRegister(ev, g) {
@@ -5636,17 +5753,30 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   }
   // stornieren: echte Buttons im Hintergrund-Frame („Stornieren“ → „Anmeldung stornieren“)
   const K_EVST = 'jaf_evst_job';
-  async function psStorno(ev) {
-    const s = await psState(ev.url);
-    if (s.st !== 'A' && s.st !== 'W') return { r: 'skip', msg: 'nicht angemeldet' };
+  // stornieren (message: Nachricht an den Veranstalter, freiwillig) – über die Schnittstelle, sonst mit den echten Buttons im Frame
+  async function psStorno(ev, message = '') {
+    const st0 = await psStNow(ev);
+    if (st0 !== 'A' && st0 !== 'W') return { r: 'skip', msg: 'nicht angemeldet' };
     if (CONFIG.DRY_RUN) return { r: 'ok', msg: 'Testmodus' };
+    const eid = psEid(ev);
+    if (eid) {
+      const r = await apiTry('Abmelden', () => evGql('cancelOwnAttendanceToEvent', EV_Q_CANCEL, { input: { eventId: Number(eid), message: String(message || '') } }));
+      const x = r.ok && r.v && r.v.data && r.v.data.eventAttendeeAdministration && r.v.data.eventAttendeeAdministration.cancelOwnAttendance;
+      if (x && x.__typename === 'CancelledEventTicket') {
+        await sleep(600);
+        const st2 = await psStNow(ev);
+        if (st2 === 'N' || st2 === 'M') return { r: 'ok', msg: message ? 'storniert (mit Nachricht)' : 'storniert' };
+      }
+      if (x && x.__typename === 'CancelOwnAttendanceError' && x.message && !message) return { r: 'fail', msg: `Stornieren fehlgeschlagen – ${x.message}` };
+      if (message) return { r: 'fail', msg: `Stornieren fehlgeschlagen${x && x.message ? ' – ' + x.message : ''}` }; // Nachricht geht nur über die Schnittstelle
+    }
     gmSet(K_EVST, { url: ev.url, phase: 'start', ts: Date.now() });
     let data;
     try { data = await bgFrameG(ev.url, 'jaf-bg-evst-' + Date.now().toString(36), null, 90000); } catch (e) { if (e.fatal) throw e; data = { error: e.message }; }
     finally { gmSet(K_EVST, null); }
     await sleep(600);
-    const s2 = await psState(ev.url);
-    if (s2.st === 'N' || s2.st === 'M') return { r: 'ok', msg: 'storniert' };
+    const s2st = await psStNow(ev);
+    if (s2st === 'N' || s2st === 'M') return { r: 'ok', msg: 'storniert' };
     return { r: 'fail', msg: `Stornieren fehlgeschlagen${data && data.error ? ' – ' + data.error : ''}` };
   }
   // IM Frame: Anmeldung stornieren
@@ -5895,7 +6025,11 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
         const btns = [];
         if (s.st === 'N') btns.push({ label: 'Merken', fn: () => act(() => psBookmark(ev, true), 'gemerkt') });
         if (s.st === 'M') btns.push({ label: 'Nicht mehr merken', fn: () => act(() => psBookmark(ev, false), 'nicht mehr gemerkt') });
-        if (s.st === 'A' || s.st === 'W') btns.push({ label: 'Abmelden', fn: () => act(() => psStorno(ev), 'storniert') });
+        if (s.st === 'A' || s.st === 'W') btns.push({ label: 'Abmelden', fn: async () => {
+          const msg = await flPrompt('Abmelden', [`${ev.name || 'Party'}`, 'Nachricht an den Veranstalter (freiwillig):'], '', 'Abmelden');
+          if (msg === null) return;
+          act(() => psStorno(ev, msg), 'storniert');
+        } });
         else if (s.st !== '?') btns.push({ label: `Anmelden als ${PS_GENDER[g]}`, fn: () => act(() => psRegister(ev, g), 'angemeldet') });
         btns.push({ label: last ? 'Schließen' : 'Überspringen', fn: () => resolve(true), focus: true });
         bgButtons(btns);
@@ -6577,14 +6711,34 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   // Nachricht an die Seite: mit Frame-Name (fn), Sichtbarkeit nur, wenn lesbar – darf nie selbst werfen
   // erst das Gedächtnis schreiben (der Frame wird nach dem Ergebnis entfernt), Reihenfolge der Nachrichten bleibt
   let bgPostQ = Promise.resolve();
-  const bgPost = (m) => { bgPostQ = bgPostQ.then(() => (MEM.pend.size ? memFlush().catch(() => {}) : null)).then(() => bgPostNow(m)); };
+  const bgPost = (m) => { bgPostQ = bgPostQ.then(() => (MEM.pend.size ? Promise.race([memFlush().catch(() => {}), sleep(3000)]) : null)).then(() => bgPostNow(m)); };
   const bgPostNow = (m) => {
     let vis = null; try { vis = visibilityFromDoc(document); } catch (e) { /* egal */ }
-    try { window.parent.postMessage(Object.assign({ jaf: 'bg', fn: window.name || '', vis }, m), location.origin); }
-    catch (e) { try { window.parent.postMessage({ jaf: 'bg', fn: window.name || '', diag: `Senden fehlgeschlagen: ${e.message || e}` }, location.origin); } catch (e2) { /* egal */ } }
+    try { window.parent.postMessage(Object.assign({ jaf: 'bg', fn: FRAME_NAME, vis }, m), location.origin); }
+    catch (e) { try { window.parent.postMessage({ jaf: 'bg', fn: FRAME_NAME, diag: `Senden fehlgeschlagen: ${e.message || e}` }, location.origin); } catch (e2) { /* egal */ } }
   };
 
   // IM Frame: Event-Seite auslesen (Party-Infos, VIP-Links, Veranstalter, komplette Gästeliste „Alle“)
+  // Party ohne Hintergrund-Frame: Event-Seite abrufen (Infos, VIPs, Veranstalter) + Gästeliste über die Schnittstelle.
+  // null = geht so nicht (dann wie bisher über den Frame)
+  async function evDirect(url, onProgress) {
+    const r = await jfetch(url);
+    if (!r.ok || !r.doc) return null;
+    const doc = r.doc;
+    let eid = ''; try { eid = eventIdOf(new URL(r.url || url).pathname); } catch (e) { /* egal */ }
+    if (!eid || !doc.querySelector('h1')) return null;
+    const html = await apiGuests(eid, 'alle', onProgress);
+    if (!html) return null;
+    const info = eventInfo(doc); info.id = eid;
+    const vips = [];
+    doc.querySelectorAll('.event_description a[href*="/profile/"]').forEach((a) => {
+      const path = cleanPath(new URL(a.getAttribute('href'), location.origin).pathname);
+      if (!CONFIG.PROFILE_PATH_RE.test(path)) return;
+      const id = a.getAttribute('data-miniprofil-id') || idOf(path);
+      if (!vips.some((v) => v.id === id)) vips.push({ id, name: a.textContent.trim(), url: location.origin + path, path });
+    });
+    return { info, vips, orgs: eventOrganizers(doc), html, hasList: true, direct: true };
+  }
   async function bgEventFrame() {
     try {
       bgPost({ diag: 'Event-Seite geladen' });
@@ -6629,7 +6783,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
 
   // IM Frame: ein Profil bearbeiten (Notiz-Auftrag, prüfen, Notiz schreiben, ignorieren). Auftrag kommt aus GM-Speicher.
   async function bgActFrame() {
-    const key = 'jaf_bg_job_' + (window.name || '').slice('jaf-bg-act-'.length);
+    const key = 'jaf_bg_job_' + (FRAME_NAME || '').slice('jaf-bg-act-'.length);
     const job = gmGet(key, null);
     if (!job) { bgPost({ error: 'kein Auftrag' }); return; }
     const cur = job.item;
@@ -6680,7 +6834,7 @@ const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirm
   }
 
   async function bgFrameDispatch() {
-    const n = window.name || '';
+    const n = FRAME_NAME || '';
     const gate = pageGate(document);
     if (gate) { bgPost({ diag: `Sonderseite erkannt: ${gate.type} („${(gate.title || gate.text || document.title || '').slice(0, 80)}“)` }); bgPost({ gate, url: location.href }); return; }
     if (n === 'jaf-bg-ev') return bgEventFrame();
@@ -7899,9 +8053,11 @@ fragment ImageUIDataFragment on ImageUIData {
         const frac0 = ei / events.length, fracN = 1 / events.length;
         bgUi(head, 'Lade Event-Seite und Gästeliste …', frac0, stats());
         bgDiag(`${head}: lade Event-Seite und Gästeliste`);
-        let data;
+        let data = null;
         try {
-          data = await bgFrameG(e.url, 'jaf-bg-ev', (n) => bgUi(null, `Lade Gästeliste … ${n} Anmeldungen`, null, null), 240000);
+          try { data = await evDirect(e.url, (n) => bgUi(null, `Lade Gästeliste … ${n} Anmeldungen`, null, null)); } catch (err) { if (err.fatal) throw err; data = null; }
+          if (data) bgDiag(`${e.name}: direkt geladen (${data.html.length} Anmeldungen, ohne Hintergrund-Frame)`);
+          else data = await bgFrameG(e.url, 'jaf-bg-ev', (n) => bgUi(null, `Lade Gästeliste … ${n} Anmeldungen`, null, null), 240000);
           firstFrameOk = true;
         } catch (err) {
           if (err.fatal || bgScan.stop) { bgScan.stop = true; bgScan.stopMsg = bgScan.stopMsg || (err.fatal ? err.message : ''); break; }
@@ -9089,7 +9245,7 @@ fragment ImageUIDataFragment on ImageUIData {
   // IM Frame: Liste nachladen, bis das Datum vor dem letzten vollständigen Scan liegt bzw. die Obergrenze erreicht ist
   async function mjFrame() {
     try {
-      const parts = (window.name || '').split('-'); // jaf-bg-mj-<src>-<YYYYMMDD|0>-<max>-<rnd>
+      const parts = (FRAME_NAME || '').split('-'); // jaf-bg-mj-<src>-<YYYYMMDD|0>-<max>-<rnd>
       const stopDay = parts[4] && parts[4] !== '0' ? `${parts[4].slice(0, 4)}-${parts[4].slice(4, 6)}-${parts[4].slice(6, 8)}` : '';
       const max = +parts[5] || CONFIG.MYJOY_FIRST_MAX;
       const ok = await waitFor(() => (readMyJoyCards().length || document.querySelector('section.my-joy-visits-view, .cm-conversation-list') ? true : null), 30000);
@@ -14008,7 +14164,19 @@ fragment ImageUIDataFragment on ImageUIData {
   }
 
   // im Hintergrund-Frame nur die Gästeliste laden – sonst nichts
-  if (BG_FRAME) { (async () => { if (await memInit()) bgFrameDispatch(); })(); return; }
+  if (BG_FRAME) {
+    (async () => {
+      bgPostNow({ diag: 'Skript im Frame gestartet' });
+      const t0 = Date.now();
+      const slow = setTimeout(() => bgPostNow({ diag: `Gedächtnis lädt seit 15 s (${MEM.step || '?'})` }), 15000);
+      let ok = false;
+      try { ok = await memInit(); } finally { clearTimeout(slow); }
+      if (!ok) { bgPostNow({ diag: `Gedächtnis nicht verfügbar: ${MEM.err || '?'} (${MEM.step || '?'})` }); bgPostNow({ error: `Gedächtnis nicht verfügbar: ${MEM.err || '?'}` }); return; }
+      if (Date.now() - t0 > 3000) bgPostNow({ diag: `Gedächtnis geladen nach ${Math.round((Date.now() - t0) / 1000)} s` });
+      bgFrameDispatch();
+    })();
+    return;
+  }
 
   // Tampermonkey-Menü: nur noch Rekorder (der Export enthält auch alle Diagnose-Daten)
   try {
