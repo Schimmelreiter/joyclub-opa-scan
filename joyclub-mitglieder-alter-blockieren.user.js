@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      2.02
+// @version      2.03
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -5175,7 +5175,7 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
   // ---- Appointments-Seite (eigene Party-Anmeldungen) ----
   const isAppointmentsPage = () => CONFIG.APPOINTMENTS_RE.test(location.pathname);
   function ownProfileId() {
-    const a = document.querySelector('.navigation_user_box a[href*="/profile/"]');
+    const a = navUserLink(document);
     return idOf(a && a.getAttribute('href')) || document.body.getAttribute('data-session-user-id') || '';
   }
   const isOwnAppointments = () => {
@@ -5549,8 +5549,7 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
     GM_setValue(K_OWN_ACCS, m);
   }
   function ownAccount() {
-    const a = document.querySelector('.navigation_user_box a.user_link');
-    const name = a ? ((a.childNodes[0] && a.childNodes[0].nodeValue) || a.textContent).trim() : '';
+    const name = navUserNick(document);
     return { id: document.body.getAttribute('data-session-user-id') || ownProfileId(), name };
   }
   const todayStart = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
@@ -6472,7 +6471,7 @@ fragment MoneyFragment on Money {
     const b = doc && doc.body;
     if (!b && !html) return null;
     if (b && (b.getAttribute('data-session-user-id') || '').trim()) return null;
-    if (doc.querySelector('.navigation_user_box')) return null;
+    if (doc.querySelector('.navigation_user_box') || navUserInfo(doc)) return null;
     // Gast-Seite („Erst einloggen, dann loslegen – Fehler 401“) bzw. abgemeldet
     if ((b && b.classList.contains('guest')) || doc.querySelector('li.login_link, .login_link[data-linkmsq]') ||
       /\/webauth\/login\//.test(html) || (doc.querySelector('.error_page_container') && /401|einloggen/i.test(doc.body ? doc.body.textContent : ''))) return { type: 'login' };
@@ -7581,11 +7580,34 @@ fragment ImageUIDataFragment on ImageUIData {
   // =====================================================================
   const K_VIS_RUN = 'jaf_vis_run'; // { mode: 'invisible'|'visible', prev, ts } – wie die laufenden Vorgänge gestartet wurden
   let lastVis = { v: null, ts: 0 };
-  function visibilityFromDoc(doc = document) {
-    const box = doc && doc.querySelector && doc.querySelector('.navigation_user_box');
+  // ---- eigener Benutzer in der Kopfzeile: neue Navigation (ab 11/2026: Menü hinter dem Profilfoto) und alte .navigation_user_box ----
+  function navUserInfo(doc = document) { return doc.querySelector('#navigation_user_profile_menu .profile_menu_user_info') || doc.querySelector('.profile_menu_user_info'); }
+  function navUserLink(doc = document) {
+    const ui = navUserInfo(doc);
+    return (ui && ui.querySelector('a[href*="/profile/"]')) || doc.querySelector('.navigation_user_box a.user_link') || doc.querySelector('.navigation_user_box a[href*="/profile/"]');
+  }
+  function navUserNick(doc = document) {
+    const t1 = doc.querySelector('.navigation_user_profile_toggle .navigation_user_profile_name');
+    if (t1 && t1.textContent.trim()) return t1.textContent.trim();
+    const ui = navUserInfo(doc), it = ui && ui.querySelector('.item_text');
+    if (it) { const tn = [...it.childNodes].filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join('').trim(); if (tn) return tn; }
+    const a = doc.querySelector('.navigation_user_box a.user_link');
+    return a ? String(a.childNodes[0] && a.childNodes[0].nodeType === 3 ? a.childNodes[0].nodeValue : a.textContent).trim() : '';
+  }
+  // Text der Sichtbarkeit („Für Freunde sichtbar“ …); '' = sichtbar; null = Kopfzeile nicht gefunden
+  function navUserVisText(doc = document) {
+    const ui = navUserInfo(doc);
+    if (ui) { const sp = ui.querySelector('span.clg, .smallfont, .minifont'); return sp ? sp.textContent : ''; }
+    const box = doc.querySelector('.navigation_user_box');
     if (!box) return null;
     const sp = box.querySelector('a.user_link span.clg, a.user_link .minifont');
-    const t = norm(sp ? sp.textContent : '');
+    return sp ? sp.textContent : '';
+  }
+  function visibilityFromDoc(doc = document) {
+    if (!doc || !doc.querySelector) return null;
+    const raw = navUserVisText(doc);
+    if (raw === null) return null;
+    const t = norm(raw);
     if (!t) return 1;
     if (/freunde|friends/.test(t)) return 5;
     if (/unsichtbar|invisible/.test(t)) return 3;
@@ -13779,9 +13801,7 @@ fragment ImageUIDataFragment on ImageUIData {
 
   // ---- Verschlüsselung der Fickliste in der Datensicherung (Schlüssel: eigener Nick) ----
   function ownNick() {
-    const a = document.querySelector('.navigation_user_box a.user_link');
-    const t = a ? (a.childNodes[0] && a.childNodes[0].nodeType === 3 ? a.childNodes[0].nodeValue : a.textContent) : '';
-    return String(t || '').trim() || GM_getValue('jaf_own_nick', '');
+    return navUserNick(document) || GM_getValue('jaf_own_nick', '');
   }
   const b64 = (buf) => { let s = ''; const u = new Uint8Array(buf); for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -14030,7 +14050,7 @@ fragment ImageUIDataFragment on ImageUIData {
     flEditNav();
     if (flOverviewPage() && !document.querySelector('.jaf-fl-page') && document.getElementById('c')) flRenderOverview();
     // eigener Profilpfad (Träger der Fickliste-Ansichten)
-    const ub = document.querySelector('.navigation_user_box a[href*="/profile/"]');
+    const ub = navUserLink(document);
     if (ub) { const op = new URL(ub.href, location.origin).pathname; if (op !== GM_getValue('jaf_own_path', '')) GM_setValue('jaf_own_path', op); }
     // alte Adressen der externen Seiten → Ansicht auf dem eigenen Profil
     if (flExternPage() && flOwnPath()) { location.replace(flCarrierUrl('x-' + flExternSlug(), flArchivParam(), /[?&]flnav=1/.test(location.search) || flNavOn('x-' + flExternSlug()))); return; }
