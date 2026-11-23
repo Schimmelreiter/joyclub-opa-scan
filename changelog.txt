@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.04 (23.11.2026)
+- ClubMail, Profilbesucher, „Mögen mich“: Abzeichen mit „?“ (Alter unbekannt oder Geburtstag im Zeitraum) holen das Alter gesammelt über die Schnittstelle nach (bis 50 je Abruf, kein Profilaufruf) und färben sich danach richtig ein
+
 2.03 (18.11.2026)
 - Neue JOYclub-Navigation (Profil und Einstellungen hinter dem Profilfoto): eigener Nick, Profil-Link und Sichtbarkeit („Für Freunde sichtbar“ / „Unsichtbar eingeloggt“) werden aus dem neuen Profilmenü gelesen, die alte Kopfzeile bleibt als Rückfall; im echten Konto geprüft (Seite und im Hintergrund abgerufene Seiten)
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      2.03
+// @version      2.04
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -9181,6 +9181,7 @@ fragment ImageUIDataFragment on ImageUIData {
       try { recordAccounts(cards.filter((c) => c.path && c.ages.length)); noteSighting(cards.filter((c) => c.path && c.day), pg.src); } catch (e) { /* egal */ }
       try { piNote(cards.filter((c) => c.path && c.gender).map((c) => ({ id: c.id || idOf(c.path), name: c.name, type: c.type, ages: c.ages, el: c.card })), pg.src === 'Likes'); } catch (e) { /* egal */ }
     }
+    mjFillAges(cards);
     for (const c of cards) {
       if (!c.gender || !c.path) continue; // Clubs, Veranstalter usw. bleiben ungefärbt
       const g = Object.assign({}, c);
@@ -9218,6 +9219,20 @@ fragment ImageUIDataFragment on ImageUIData {
         }, true);
       }
     }
+  }
+  // fehlendes Alter (Abzeichen „?“) gesammelt über die Schnittstelle nachholen – kein Profilaufruf; je Mitglied einmal je Seitenaufruf
+  const mjAgeAsked = new Set();
+  let mjAgeBusy = false;
+  function mjFillAges(cards) {
+    if (mjAgeBusy) return;
+    const todo = cards.filter((c) => c.path && c.gender && !c.ages.length && c.id && !mjAgeAsked.has(c.id)).slice(0, 50);
+    if (!todo.length) return;
+    todo.forEach((c) => mjAgeAsked.add(c.id));
+    mjAgeBusy = true;
+    apiPrime(todo.map((c) => ({ id: c.id, path: c.path, type: c.type, name: c.name })))
+      .then((m) => { if (m && m.size) for (const c of todo) if (c.card) c.card.__jafSig = ''; })
+      .catch(() => {})
+      .finally(() => { mjAgeBusy = false; });
   }
   function insertMyJoyButton() {
     const pg = myJoyPage();

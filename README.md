@@ -200,6 +200,7 @@ Alter, Geschlecht und Online-Status vieler Mitglieder holt das Skript in **einer
 | Einstellungen anwenden: „Unklare Mitglieder erneut prüfen“ und neue Sperren | ein Profilaufruf je Mitglied | gesammelt, Aufruf nur für den Rest |
 | Ignorierliste abgleichen mit Profilnotizen | ein Profilaufruf je Eintrag | Notiz und Alter über die Schnittstelle |
 | Fickliste: Nick zu einer Profil-ID | Profilaufruf | Schnittstelle |
+| Abzeichen in ClubMail, Profilbesuchern und „Mögen mich“ ohne bekanntes Alter („?“) | blieb „?“ | ab 2.04 Alter gesammelt nachgeholt |
 
 Den feinen Profiltyp (Transfrau, Männer-Paar …) liefert die Schnittstelle nicht, nur Frau/Mann/Paar. Das Skript nimmt den Typ aus der Gästeliste, der Karte oder dem Gedächtnis; passt er nicht zum Geschlecht (z. B. Typwechsel) oder fehlt bei einem Paar das zweite Alter, wird das Profil wie bisher aufgerufen. Business-Profile (Clubs, Shops) erkennt die Schnittstelle direkt.
 
