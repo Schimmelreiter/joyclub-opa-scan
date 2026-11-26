@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.08
+// @version      2.09
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -14947,7 +14947,7 @@ fragment ImageUIDataFragment on ImageUIData {
     if (!list.length) wrap.appendChild(flEl('div', 'opacity:.75', 'Keine kommenden Termine'));
     for (const t of list) {
       const full = tplTerminLabel(t);
-      const b = btn(full.length > 60 ? full.slice(0, 58) + '…' : full, () => tplInsert(ov, tplTerminText(t)), full);
+      const b = btn(full.length > 40 ? full.slice(0, 39).trimEnd() + '…' : full, () => tplInsert(ov, tplTerminText(t)), full);
       wrap.appendChild(b);
     }
     if (list.length) wrap.appendChild(btn('Alle übernehmen', () => tplSetText(ov, list.map(tplTerminText).join('\n\n'))));
@@ -15033,7 +15033,7 @@ fragment ImageUIDataFragment on ImageUIData {
   const K_BK_RETRY = 'jaf_bk_retry';     // Vorlagen, die wegen eines Schnittstellenfehlers später erneut versucht werden       // { start, ok, ls, sent, recv, err }
   const BK_MAX_BYTES = 1024 * 1024;
   const bkHash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + ':' + s.length; };
-  const bkStat = (patch) => { const s = Object.assign({}, GM_getValue(K_BK_STAT, {}) || {}, patch); GM_setValue(K_BK_STAT, s); return s; };
+  const bkStat = (patch) => { const s = Object.assign({}, GM_getValue(K_BK_STAT, {}) || {}, patch, patch && patch.err ? { errAt: Date.now() } : {}); GM_setValue(K_BK_STAT, s); return s; };
   function bkEnqueue(kind, data, opt = {}) {
     const acked = +GM_getValue(K_BK_ACK, 0) || 0;
     let seq = +GM_getValue(K_BK_SEQ, 0) || 0;
@@ -15163,7 +15163,7 @@ fragment ImageUIDataFragment on ImageUIData {
     if (!SH.alive()) return Date.now() - st.start < 20000 ? 'Wird geprüft …' : 'Briefkasten blockiert – vermutlich durch die Sicherheitsrichtlinie der Seite, einen Werbeblocker oder gesperrte Drittanbieter-Daten. Export/Import per Hand geht weiter.';
     const last = Math.max(st.recv || 0, st.sent || 0);
     return 'Gemeinsame Ablage aktiv' + (peer && peer.version ? ` · poppen-Skript ${peer.version}` : '') + (last ? ` · letzter Abgleich ${fmtTs(last)}` : '') +
-      (st.err ? ` · zuletzt Fehler: ${st.err}` : '');
+      (st.err && (st.errAt || 0) > last ? ` · Fehler um ${fmtTs(st.errAt)}: ${st.err}` : '');
   }
   // ---------- Kontobindung (ab 1.96, wie poppen 2.34): der Tampermonkey-Speicher gehört EINEM JOYclub-Konto ----------
   // jaf_owner = { uid, nick, seit, handover? }. Anderes Konto angemeldet → Skript komplett aus (kein Schreiben, keine Scans,

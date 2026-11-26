@@ -1,6 +1,10 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.09 (26.11.2026)
+- Abgleich mit poppen.de: Ein Fehler wird nur noch angezeigt, wenn er nach dem letzten erfolgreichen Abgleich auftrat, mit Uhrzeit (bisher blieb der letzte Fehler für immer stehen)
+- Textvorlagen, Termine: Die Termin-Knöpfe werden nicht mehr links abgeschnitten (kürzere Beschriftung, der volle Text steht im Tooltip)
+
 2.08 (26.11.2026)
 - Behoben: Nach dem ersten Abgleich über die Brücke (2.06) tauchten Textvorlagen doppelt auf JOYclub auf. Unter poppen.de lagen Kopien der JOYclub-Vorlagen mit eigener Kennung, aber mit Verweis auf dieselbe JOYclub-Vorlage; das Skript hielt sie für neue Vorlagen einer anderen Plattform und legte sie auf JOYclub an. Jetzt bekommt ein solcher Eintrag eine Löschmarke, wenn er auf eine JOYclub-Vorlage verweist, die schon ihren Eintrag hat, oder einer vorhandenen in Name und Text gleicht. Verweist er auf eine Vorlage dieses Kontos, die es auf JOYclub nicht mehr gibt, gilt sie als dort gelöscht (bisher wurde sie neu angelegt)
 
