@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.10
+// @version      2.11
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -12033,7 +12033,42 @@ fragment ImageUIDataFragment on ImageUIData {
     if (pf === 'joyclub' && /^\d+$/.test(String(pr.uid || ''))) out.push('joyclub:' + pr.uid);
     if (pr.url) { const k = flLinkKey(pr.url); if (k) out.push(k); }
     if (!pr.url && pr.name && ['telegram', 'whatsapp', 'threema', 'signal'].includes(pf)) { const n = flNormProfile(pf, pr.name); if (n) out.push(n.key); }
+    // 2.11: gelöschtes Profil ohne ID und Link – am Nick auf der Plattform wiedererkennen (Nicks sind je Plattform eindeutig)
+    if (pr.dead && !pr.url && (pr.uid == null || pr.uid === '')) { const k = flDeadKey(pf, pr.name || pr.nick); if (k) out.push(k); }
     return [...new Set(out)];
+  }
+  function flDeadKey(pf, name) { return pf && name ? `dead:${pf}:${norm(name)}` : ''; }
+  // Schlüssel einer lokalen Person ohne erreichbares Profil (gelöschtes JOYclub-Profil oder gelöschtes Hauptprofil anderswo)
+  function flExtKey(q) {
+    if (!q || !flIsExt(q.id)) return '';
+    if (q.wasJoy) return flDeadKey('joyclub', q.nick);
+    if (q.main && q.main.dead && !q.main.url && (q.main.uid == null || q.main.uid === '')) return flDeadKey(q.main.pf || 'other', q.main.nick || q.nick);
+    return '';
+  }
+  // 2.11: Personen mit gelöschtem Profil, die der Abgleich bis 2.10 mehrfach angelegt hat, zu einer zusammenführen
+  // (gleiches Treffen nur einmal, Bild bleibt) → Liste der entfernten lokalen IDs
+  function flDedupeExt() {
+    const groups = new Map();
+    for (const q of Object.values(getFl())) { const k = flExtKey(q); if (k) { if (!groups.has(k)) groups.set(k, []); groups.get(k).push(q); } }
+    const gone = [];
+    const mkey = (m) => [m.date || '', m.time || '', norm(m.where || ''), norm(m.club || '')].join('|');
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      list.sort((a, b) => (Number(!!b.img) - Number(!!a.img)) || ((a.created || 0) - (b.created || 0)));
+      const intoId = list[0].id;
+      for (const a0 of list.slice(1)) {
+        const b = flGet(intoId), a = flGet(a0.id);
+        if (!a || !b) continue;
+        const have = new Set((b.meets || []).map(mkey));
+        a.meets = (a.meets || []).filter((m) => !have.has(mkey(m)));
+        if (!b.img && a.img) b.img = a.img;
+        b.__keepStatusAt = true; flPut(b);
+        a.__keepStatusAt = true; flPut(a);
+        flMergePersons(a.id, intoId);
+        gone.push(a.id);
+      }
+    }
+    return gone;
   }
   const flProfName = (x) => x.name || x.nick || (x.url ? decodeURIComponent(String(x.url).replace(/^https?:\/\/(www\.)?/i, '').replace(/[?#].*$/, '').replace(/\/+$/, '').split('/').pop() || x.url) : '');
   // Hauptprofil einer Person (für Austausch und Links)
@@ -12352,11 +12387,17 @@ fragment ImageUIDataFragment on ImageUIData {
   // lokaler Index: Schlüssel → Eintrags-ID
   function flLocalIndex() {
     const idx = new Map();
+    let shIds = {};
+    try { shIds = GM_getValue('jaf_sh_ids', {}) || {}; } catch (e) { /* egal */ }
     const put = (k, id) => { if (k && !idx.has(k)) idx.set(k, id); };
     for (const q of Object.values(getFl())) {
       if (!flIsExt(q.id)) put('joyclub:' + q.id, q.id);
       if (q.main) flProfKeys(q.main).forEach((k) => put(k, q.id));
       if (q.xid) put('xid:' + q.xid, q.id);
+      // 2.11: auch die Kennung, unter der diese Person schon in der gemeinsamen Ablage steht, und gelöschte Profile
+      if (shIds[q.id]) put('xid:' + shIds[q.id], q.id);
+      put('xid:' + q.id, q.id);
+      put(flExtKey(q), q.id);
       for (const pr of q.profiles || []) flProfKeys(pr).forEach((k) => put(k, q.id));
     }
     return idx;
@@ -15316,6 +15357,9 @@ fragment ImageUIDataFragment on ImageUIData {
       const all = (await SH.call('all', { s: 'fick' }, 20000)) || [];
       const byId = new Map(all.map((r) => [r.id, r]));
       const st = GM_getValue(K_SH_FICK, {}) || {}, ids = GM_getValue(K_SH_IDS, {}) || {};
+      // 2.11: Doppel von Personen mit gelöschtem Profil zusammenführen (ihre alten Einträge in der Ablage bekommen unten Löschmarken)
+      for (const gid of flDedupeExt()) delete ids[gid];
+      GM_setValue(K_SH_IDS, ids);
       // 1. Neues aus der Ablage übernehmen (wie ein Import; Rückfragen werden vorgemerkt)
       const fresh = all.filter((r) => r && r.id && !(st[r.id] && st[r.id].rev === r.rev));
       const live = fresh.filter((r) => !r.deleted);
@@ -15342,7 +15386,19 @@ fragment ImageUIDataFragment on ImageUIData {
         if (!r || r.deleted) continue;
         let lid = null;
         try { lid = flXKeys(flRebaseX(r)).map((k) => idx.get(k)).find(Boolean); } catch (e) { lid = null; }
-        if (lid) { const p = flPrimaryId(lid); if (!ids[p]) ids[p] = r.id; }
+        if (!lid) lid = idx.get('xid:' + r.id) || null;
+        if (lid) {
+          const p = flPrimaryId(lid);
+          if (!ids[p]) ids[p] = r.id;
+          else if (ids[p] !== r.id && flIsExt(p) && !(st[r.id] && st[r.id].deleted)) {
+            // 2.11: weiterer Eintrag derselben Person mit gelöschtem Profil (Doppel aus früheren Abgleichen) → Löschmarke
+            let keys = [];
+            try { keys = flXKeys(flRebaseX(r)); } catch (e) { keys = []; }
+            if (keys.length && keys.every((k) => k.startsWith('dead:'))) {
+              try { const res = await SH.call('del', { s: 'fick', k: r.id, expect: r.rev || 0, by: shBy() }); if (res && res.ok) st[r.id] = { rev: res.rev, h: null, deleted: true }; } catch (e) { /* später */ }
+            }
+          }
+        }
       }
       // 3. Eigene Änderungen schreiben (Versionsprüfung; bei Konflikt beim nächsten Durchlauf zusammenführen)
       const seen = new Set();
