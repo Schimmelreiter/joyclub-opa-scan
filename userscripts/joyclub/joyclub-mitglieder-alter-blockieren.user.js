@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.07
+// @version      2.08
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -15380,9 +15380,12 @@ fragment ImageUIDataFragment on ImageUIData {
       const put = (v, expect) => SH.call('put', { s: 'tpl', v: Object.assign({}, v, { owner }), expect, by: shBy() });
       const toTrash = (r, why) => { if (r && !r.deleted) s.trash.push({ uid: r.id, name: r.name, text: r.text || '', deletedAt: Date.now(), by: r.updatedBy || null, why }); };
       const n0 = list.length;
+      const noteIds = new Set(list.map((n) => String(n.id)));
+      const noteHashes = new Set();
       for (const n of list) {
         const m = s.meta[String(n.id)];
         const hS = shTplHash(n.name, n.text);
+        noteHashes.add(hS);
         const r = findRemote(n, m);
         if (r) used.add(r.id);
         const sid = r ? r.id : 'j:' + n.id;
@@ -15428,6 +15431,15 @@ fragment ImageUIDataFragment on ImageUIData {
         if (r.deleted) { if (k && !k.deleted) st[r.id] = Object.assign({}, k, { rev: r.rev, deleted: true }); continue; }
         if (k && k.note && k.h && !k.deleted) { // war verknüpft → auf JOYclub gelöscht: Löschmarke (JOYclub gewinnt)
           if (shTplHash(r.name, r.text) !== k.h) toTrash(r, 'auf JOYclub gelöscht');
+          try { const res = await SH.call('del', { s: 'tpl', k: r.id, expect: r.rev || 0, by: shBy() }); if (res && res.ok) st[r.id] = { rev: res.rev, h: null, deleted: true }; } catch (e) { /* später */ }
+          continue;
+        }
+        // 2.08: Doppel (z. B. nach dem ersten Abgleich über die Brücke): verweist auf eine JOYclub-Vorlage, die schon ihren
+        // Eintrag hat, oder gleicht einer vorhandenen in Name und Text → Löschmarke statt neuer Vorlage auf JOYclub.
+        // Verweist er auf eine Vorlage dieses Kontos, die es auf JOYclub nicht mehr gibt → dort gelöscht (JOYclub gewinnt).
+        const lk = r.pfIds && r.pfIds.joyclub != null ? String(r.pfIds.joyclub) : '';
+        const dupOf = (lk && noteIds.has(lk)) ? 'verknüpft' : noteHashes.has(shTplHash(r.name, r.text)) ? 'gleich' : (lk && (!r.owner || r.owner === owner)) ? 'weg' : '';
+        if (dupOf) {
           try { const res = await SH.call('del', { s: 'tpl', k: r.id, expect: r.rev || 0, by: shBy() }); if (res && res.ok) st[r.id] = { rev: res.rev, h: null, deleted: true }; } catch (e) { /* später */ }
           continue;
         }
