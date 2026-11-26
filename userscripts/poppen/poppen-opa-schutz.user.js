@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         Poppen.de – Besucher nach Alter ignorieren
+// @name:de      Swinger Companion – Poppen Edition
+// @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.45
-// @description  Opa-Schutz für poppen.de: erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
+// @version      2.46
+// @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
 // @updateURL    https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/poppen/poppen-opa-schutz.user.js
@@ -30,7 +32,7 @@
 
 (function () {
   'use strict';
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.45';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.46';
   const REPO_URL = 'https://github.com/Schimmelreiter/swinger-companion';
   const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) || window;
   // Eingebaute Funktionen gleich beim Start festhalten (das Skript läuft in der Seitenwelt; spätere Veränderungen
@@ -6791,7 +6793,7 @@
       const sh = await termShared(true);
       let force = false;
       if (sh && sh.name && sh.name !== h.name) {
-        const v = await ask('Termin-Datei wechseln?', `<p>Für alle Opa-Scan-Skripte ist <b>${esc(sh.name)}</b> eingetragen${sh.by && sh.by.pf ? ` (zuletzt gelesen von ${sh.by.pf === 'joyclub' ? 'JOYclub' : esc(sh.by.pf)})` : ''}.</p><p>Termin-Datei für alle Skripte auf <b>${esc(h.name)}</b> wechseln?</p>`,
+        const v = await ask('Termin-Datei wechseln?', `<p>Für alle Skripte des Swinger Companion ist <b>${esc(sh.name)}</b> eingetragen${sh.by && sh.by.pf ? ` (zuletzt gelesen von ${sh.by.pf === 'joyclub' ? 'JOYclub' : esc(sh.by.pf)})` : ''}.</p><p>Termin-Datei für alle Skripte auf <b>${esc(h.name)}</b> wechseln?</p>`,
           [{ label: 'Für alle wechseln', value: true, primary: true }, { label: 'Abbrechen', value: false, cancel: true, focus: true }]);
         if (!v) return null;
         force = true;

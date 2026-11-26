@@ -1,6 +1,9 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.46 (26.11.2026)
+- Neuer Name: Tampermonkey zeigt das Skript als „Swinger Companion – Poppen Edition“. Die interne Kennung bleibt gleich, alle Daten und Updates bleiben erhalten. Der Opa-Schutz behält als Funktion seinen Namen
+
 2.45 (26.11.2026)
 - Die Einstellungen zeigen die tatsächlich installierte Version (bisher fest „2.43“); Versionsnummer und „Anleitung“ führen zu Changelog und Anleitung dieses Skripts
 - Abgleich mit dem JOYclub-Skript: Chrome trennt den Speicher des Briefkastens nach besuchter Seite, deshalb kam die gemeinsame Fickliste nie an. Ab JOYclub-Skript 2.06 übernimmt dieses die Brücke zwischen beiden Seiten; am poppen-Skript ändert sich dafür nichts

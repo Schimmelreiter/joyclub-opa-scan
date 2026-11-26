@@ -6,7 +6,7 @@ Ein Tampermonkey-Userscript für [poppen.de](https://www.poppen.de). Es findet M
 
 Das Gegenstück für JOYclub: [JOYclub-Skript](../joyclub/README.md). Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 2.45 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 2.46 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 

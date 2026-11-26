@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
+// @name:de      Swinger Companion – JOYclub Edition
+// @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.06
-// @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
+// @version      2.07
+// @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
 // @match        https://www.poppen.de/*
@@ -14288,8 +14290,8 @@ fragment ImageUIDataFragment on ImageUIData {
 
   // Tampermonkey-Menü: nur noch Rekorder (der Export enthält auch alle Diagnose-Daten)
   try {
-    GM_registerMenuCommand('Alter-Filter: Rekorder exportieren', () => { apiRecDownload(); });
-    GM_registerMenuCommand('Alter-Filter: Rekorder leeren', () => { if (confirm('Alle Rekorder-Daten löschen (auch Fehlschläge und Typen-Info)?')) apiRecClear(); });
+    GM_registerMenuCommand('Swinger Companion: Rekorder exportieren', () => { apiRecDownload(); });
+    GM_registerMenuCommand('Swinger Companion: Rekorder leeren', () => { if (confirm('Alle Rekorder-Daten löschen (auch Fehlschläge und Typen-Info)?')) apiRecClear(); });
   } catch (e) { /* ältere Tampermonkey-Version */ }
 
   // Sperre erneuern, solange dieser Tab arbeitet; sonst freigeben
@@ -15192,7 +15194,7 @@ fragment ImageUIDataFragment on ImageUIData {
     if (o && String(o.uid) === String(uid)) { if (nick && o.nick !== nick) GM_setValue(K_OWNER, Object.assign({}, o, { nick })); return true; }
     if (o) {
       if (o.handover && Date.now() - o.handover < OWNER_HANDOVER_MS) {
-        const v = await askPopup({ title: opaT('Opa-Scan: Daten übernehmen?'), lines: [`Die Opa-Scan-Daten in diesem Browser-Profil gehören zu ${o.nick || 'einem anderen Konto'} und wurden zur Übergabe freigegeben.`, `Sollen sie ab jetzt zu ${nick || 'diesem Konto'} gehören?`],
+        const v = await askPopup({ title: 'Swinger Companion: Daten übernehmen?', lines: [`Die Daten des Swinger Companion in diesem Browser-Profil gehören zu ${o.nick || 'einem anderen Konto'} und wurden zur Übergabe freigegeben.`, `Sollen sie ab jetzt zu ${nick || 'diesem Konto'} gehören?`],
           buttons: [{ label: 'Übernehmen', value: 'yes', focus: true }, { label: 'Nicht übernehmen', value: 'no' }] });
         if (v === 'yes') { GM_setValue(K_OWNER, { uid: String(uid), nick, seit: Date.now(), prev: { uid: o.uid, nick: o.nick } }); GM_setValue('jaf_sh_tpl', {}); GM_setValue('jaf_sh_fick', {}); GM_setValue('jaf_sh_ids', {}); return true; }
       }
@@ -15207,7 +15209,7 @@ fragment ImageUIDataFragment on ImageUIData {
     if (!hasOwnData()) { bind(); return true; }
     const refused = GM_getValue('jaf_owner_refused', {}) || {};
     if (refused[uid]) { ownerBlockHint({ nick: '' }); return false; }
-    const v = await askPopup({ title: opaT('Opa-Scan: Daten zuordnen'), lines: [`Gehören die vorhandenen Opa-Scan-Daten zu ${nick || 'diesem Konto'}?`, 'Nur dieses Konto kann sie dann in diesem Browser-Profil nutzen. Ein Wechsel geht später unter Experten › Kontobindung.'],
+    const v = await askPopup({ title: 'Swinger Companion: Daten zuordnen', lines: [`Gehören die vorhandenen Daten des Swinger Companion zu ${nick || 'diesem Konto'}?`, 'Nur dieses Konto kann sie dann in diesem Browser-Profil nutzen. Ein Wechsel geht später unter Experten › Kontobindung.'],
       buttons: [{ label: 'Ja', value: 'yes', focus: true }, { label: 'Nein', value: 'no' }] });
     if (v === 'yes') { bind(); return true; }
     if (v === 'no') { refused[uid] = Date.now(); GM_setValue('jaf_owner_refused', refused); ownerBlockHint({ nick: '' }); return false; }

@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.07 (26.11.2026)
+- Neuer Name: Tampermonkey zeigt das Skript als „Swinger Companion – JOYclub Edition“. Die interne Kennung bleibt gleich, alle Daten und Updates bleiben erhalten. Wo das ganze Skript gemeint ist, heißt es jetzt „Swinger Companion“; der Opa-Scan behält als Funktion seinen Namen
+
 2.06 (26.11.2026)
 - Behoben: Fickliste, Textvorlagen und Termin-Datei kamen nie zwischen JOYclub und poppen.de an. Chrome trennt seit Version 115 den Speicher eingebetteter Seiten nach der besuchten Seite; der Briefkasten hatte unter joyclub.de und unter poppen.de je eine eigene Ablage. Das Skript hält jetzt eine Kopie der gemeinsamen Ablagen im Tampermonkey-Speicher (nicht getrennt) und gleicht den Briefkasten auf beiden Seiten damit ab, je Eintrag gewinnt der neuere Stand. Dafür muss das JOYclub-Skript installiert sein; poppen.de-Seiten werden beim nächsten Besuch abgeglichen, offene Tabs sofort
 - Versionsnummer und „Anleitung“ in den Einstellungen führen wieder zu Changelog und Anleitung dieses Skripts
