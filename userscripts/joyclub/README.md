@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
 
-Stand: Version 2.05 – Änderungen siehe [changelog.txt](changelog.txt). Teil von [Swinger Companion](../../README.md).
+Stand: Version 2.06 – Änderungen siehe [changelog.txt](changelog.txt). Teil von [Swinger Companion](../../README.md).
 
 ---
 
@@ -587,6 +587,8 @@ Unter poppen.de schlägt die Verwaltung importierte poppen-Einträge vor; ein Kl
 ### Automatischer Abgleich (gemeinsame Ablage)
 
 Ist auch das Skript für poppen.de installiert, nutzen beide **dieselbe Fickliste und dieselben Textvorlagen** – ohne Export/Import. Sie liegen genau einmal in der gemeinsamen Ablage `opa-gemeinsam` (Browser-Datenbank der unsichtbar eingebetteten, leeren Seite `https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html`). Die Seiten von JOYclub und poppen.de kommen an diese Ablage nicht heran; die Daten verlassen den Browser nie. Das Format ist in [FORMAT.md](https://github.com/Schimmelreiter/poppen-opa-scan/blob/main/FORMAT.md) festgelegt (für alle Skripte gleich).
+
+> **Abgleich zwischen den Seiten (ab 2.06):** Chrome trennt den Speicher eingebetteter Seiten nach der besuchten Seite. Der Briefkasten hat deshalb unter joyclub.de und unter poppen.de je eine eigene Ablage. Das JOYclub-Skript gleicht beide über eine Kopie im Tampermonkey-Speicher ab (je Eintrag gewinnt der neuere Stand). Damit der Abgleich klappt, muss das JOYclub-Skript installiert sein; offene Tabs bekommen Änderungen sofort, andere beim nächsten Seitenaufruf.
 
 - **Fickliste:** Änderungen werden sofort geschrieben, mit Versionszähler – ändern zwei Skripte gleichzeitig, wird zusammengeführt statt überschrieben. Personen behalten ihre gemeinsame Kennung (`j:<Profil-ID>` für JOYclub-Profile), gelöscht wird per Löschmarke; unbekannte Felder anderer Skripte bleiben erhalten.
 - **Textvorlagen:** Maßgeblich sind die Vorlagen auf JOYclub. Geänderte, neue und gelöschte Vorlagen anderer Plattformen (z. B. aus dem Editor des poppen-Skripts) überträgt das Skript auf JOYclub; haben beide Seiten dieselbe Vorlage verschieden geändert, gewinnt JOYclub und die andere Fassung kommt in den Papierkorb.

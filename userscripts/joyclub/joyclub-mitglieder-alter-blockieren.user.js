@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      2.05
+// @version      2.06
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -121,7 +121,7 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
       rq.onerror = () => { dbp = null; reject(rq.error); };
     }));
     const rp = (rq) => new Promise((res, rej) => { rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
-    let bc = null; try { bc = new BroadcastChannel('opa-gemeinsam'); bc.onmessage = (e) => { const m = e.data || {}; if (m.store) GM_setValue('jaf_bkv_' + m.store, Date.now()); }; } catch (e) { /* egal */ }
+    let bc = null; try { bc = new BroadcastChannel('opa-gemeinsam'); bc.onmessage = (e) => { const m = e.data || {}; if (m.store) { GM_setValue('jaf_bkv_' + m.store, Date.now()); bridgeSoon(); } }; } catch (e) { /* egal */ }
     const notify = (store) => { GM_setValue('jaf_bkv_' + store, Date.now()); try { if (bc) bc.postMessage({ store, at: Date.now(), by: 'joyclub' }); } catch (e) { /* egal */ } };
     const VERSIONED = new Set(['fick', 'tpl']);
     const defBy = () => ({ pf: 'joyclub', ver: SH_VERSION });
@@ -149,7 +149,7 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
             } else if (o === 'del') { st.delete(key); out = { ok: true }; } else { st.put(a.v); out = { ok: true }; }
           };
           if (key === undefined || key === null) { const r = st.put(a.v); r.onsuccess = () => { out = { ok: true, id: r.result }; }; } else { const g = st.get(key); g.onsuccess = () => doWrite(g.result); }
-          t.oncomplete = () => { if (out && out.ok && store !== 'meta') notify(store); res(out); };
+          t.oncomplete = () => { if (out && out.ok && store !== 'meta') notify(store); if (out && out.ok) bridgeSoon(); res(out); };
           t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
         });
       }
@@ -159,6 +159,76 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
     (async () => { // Formatversion festhalten (nur erhöhen, nie senken)
       try { const d = await sdb(); const cur = await rp(d.transaction('meta').objectStore('meta').get('schema')); if (!cur || cur.schema < SHARED_SCHEMA) await rp(d.transaction('meta', 'readwrite').objectStore('meta').put({ k: 'schema', schema: SHARED_SCHEMA, minRead: Math.max(1, (cur && cur.minRead) || 1) })); } catch (e) { /* egal */ }
     })();
+    // ---------- Brücke zwischen den Seiten (ab 2.06) ----------
+    // Chrome trennt den Speicher eingebetteter Seiten nach der besuchten Seite (Storage Partitioning): Der Briefkasten
+    // unter joyclub.de hat eine andere IndexedDB als unter poppen.de. Dieses Skript läuft in beiden (auf poppen.de bettet
+    // es den Briefkasten passiv ein) und hält eine Kopie der gemeinsamen Ablagen im eigenen Tampermonkey-Speicher, der
+    // nicht getrennt ist. Jeder Rahmen gleicht seine IndexedDB mit dieser Kopie ab; je Eintrag gewinnt der neuere Stand.
+    const BRIDGE_STORES = ['fick', 'tpl', 'ich', 'meta'];
+    const bmKey = (s) => 'jaf_bkm_' + s;
+    const stable = (v) => (v === null || typeof v !== 'object') ? JSON.stringify(v) : Array.isArray(v) ? '[' + v.map(stable).join(',') + ']'
+      : '{' + Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
+    const bare = (v) => { if (!v || typeof v !== 'object') return v; const o = Object.assign({}, v); delete o.rev; return o; };
+    const sameEntry = (a, b) => stable(bare(a)) === stable(bare(b));
+    const tOf = (v) => Number((v && (v.updatedAt || v.at || v.updated || v.statusAt)) || 0);
+    // Gewinner zweier Stände desselben Eintrags (a = IndexedDB, b = Kopie); bei gleicher Zeit fest nach Inhalt, damit
+    // alle Rahmen gleich entscheiden und nichts hin und her pendelt
+    function bridgePick(store, a, b) {
+      if (!a) return b; if (!b) return a;
+      if (store === 'meta' && a.k === 'schema') return Number(b.schema || 0) > Number(a.schema || 0) ? b : a;
+      const ta = tOf(a), tb = tOf(b);
+      if (ta !== tb) return tb > ta ? b : a;
+      return stable(bare(b)) > stable(bare(a)) ? b : a;
+    }
+    function bridgeWrite(d, store, list) {
+      const kp = SHARED_STORES[store].keyPath, versioned = VERSIONED.has(store);
+      return new Promise((res, rej) => {
+        const t = d.transaction(store, 'readwrite'); const st = t.objectStore(store); let n = 0;
+        for (const v of list) {
+          const g = st.get(v[kp]);
+          g.onsuccess = () => {
+            const cur = g.result;
+            if (cur && (sameEntry(cur, v) || bridgePick(store, cur, v) === cur)) return; // inzwischen gleich oder neuer
+            const w = Object.assign({}, v);
+            if (versioned) w.rev = ((cur && cur.rev) || 0) + 1; // offene Schreiber merken den Wechsel (expect) und mischen
+            st.put(w); n++;
+          };
+        }
+        t.oncomplete = () => res(n); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+      });
+    }
+    let bridgeBusy = false, bridgeAgain = false, bridgeTimer = 0;
+    async function bridge() {
+      if (bridgeBusy) { bridgeAgain = true; return; }
+      bridgeBusy = true;
+      try {
+        do {
+          bridgeAgain = false;
+          const d = await sdb();
+          for (const store of BRIDGE_STORES) {
+            const kp = SHARED_STORES[store].keyPath;
+            const local = new Map();
+            for (const v of await rp(d.transaction(store).objectStore(store).getAll())) local.set(String(v[kp]), v);
+            const mir = Object.assign({}, GM_getValue(bmKey(store), {}) || {});
+            const toIdb = []; let mirChanged = false;
+            for (const key of new Set([...local.keys(), ...Object.keys(mir)])) {
+              const a = local.get(key), b = mir[key];
+              if (a && b && sameEntry(a, b)) continue;
+              if (bridgePick(store, a, b) === a) { mir[key] = bare(a); mirChanged = true; } else toIdb.push(b);
+            }
+            const n = toIdb.length ? await bridgeWrite(d, store, toIdb) : 0;
+            if (mirChanged) GM_setValue(bmKey(store), mir);
+            if (n && store !== 'meta') notify(store);
+          }
+        } while (bridgeAgain);
+        GM_setValue('jaf_bkm_at', Date.now());
+      } catch (e) { console.warn('[Alter-Filter] Briefkasten-Brücke', e); }
+      finally { bridgeBusy = false; }
+    }
+    function bridgeSoon() { clearTimeout(bridgeTimer); bridgeTimer = setTimeout(bridge, 400); }
+    for (const store of BRIDGE_STORES) { try { GM_addValueChangeListener(bmKey(store), (n, o, v, remote) => { if (remote) bridgeSoon(); }); } catch (e) { /* egal */ } }
+    setTimeout(bridge, 300);
+    setInterval(bridge, 60000);
     if (!parentTab) return;
     const qk = 'jaf_rpcq_' + parentTab, rk = 'jaf_rpcr_' + parentTab, ak = 'jaf_rpca_' + parentTab;
     const doneIds = new Set();
@@ -10537,11 +10607,11 @@ fragment ImageUIDataFragment on ImageUIData {
     {
       const ver = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '';
       const lk = (href, text, st) => { const a = document.createElement('a'); a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = text; a.style.cssText = st; return a; };
-      if (ver) h1.appendChild(lk(`${REPO_URL}/blob/main/changelog.txt`, ver, 'font-size:13px;font-weight:normal;color:#8a8f94;margin-left:10px;vertical-align:middle;text-decoration:none'));
+      if (ver) h1.appendChild(lk(`${REPO_URL}/blob/main/userscripts/joyclub/changelog.txt`, ver, 'font-size:13px;font-weight:normal;color:#8a8f94;margin-left:10px;vertical-align:middle;text-decoration:none'));
       const links = document.createElement('span');
       links.className = 'jaf-head-links';
       links.style.cssText = 'font-size:13px;font-weight:normal;margin-left:14px;vertical-align:middle;display:inline-flex;gap:14px';
-      links.appendChild(lk(`${REPO_URL}#readme`, 'Anleitung', 'color:#4a9eff'));
+      links.appendChild(lk(`${REPO_URL}/tree/main/userscripts/joyclub#readme`, 'Anleitung', 'color:#4a9eff'));
       links.appendChild(lk(`${REPO_URL}/issues`, 'Fehler melden', 'color:#4a9eff'));
       h1.appendChild(links);
     }

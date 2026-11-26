@@ -6,7 +6,7 @@ Ein Tampermonkey-Userscript für [poppen.de](https://www.poppen.de). Es findet M
 
 Das Gegenstück für JOYclub: [JOYclub-Skript](../joyclub/README.md). Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 2.44 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 2.45 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -303,6 +303,8 @@ Schneidet die Abfragen der Seite an `/v2-api/` mit (nur neue Muster, je zwei Bei
 ## Abgleich mit JOYclub (gemeinsame Ablage)
 
 Das Skript teilt Fickliste, Textvorlagen und Termin-Datei mit dem [JOYclub-Skript](../joyclub/README.md) (ab 1.96) über eine gemeinsame Ablage, ohne Export/Import von Hand.
+
+> **Abgleich zwischen den Seiten (ab 2.06):** Chrome trennt den Speicher eingebetteter Seiten nach der besuchten Seite. Der Briefkasten hat deshalb unter joyclub.de und unter poppen.de je eine eigene Ablage. Das JOYclub-Skript gleicht beide über eine Kopie im Tampermonkey-Speicher ab (je Eintrag gewinnt der neuere Stand). Damit der Abgleich klappt, muss das JOYclub-Skript installiert sein; offene Tabs bekommen Änderungen sofort, andere beim nächsten Seitenaufruf.
 
 - Beide Skripte betten eine leere, neutrale Seite (GitHub Pages, `opa-gemeinsam`) unsichtbar ein und lesen und schreiben deren lokalen Speicher. Der Seiten-Code von poppen.de und JOYclub kommt nicht heran. Das Format steht in [FORMAT.md](../../docs/FORMAT.md).
 - Jeder Eintrag ist versioniert; gleichzeitiges Schreiben wird gemischt oder landet im Papierkorb (Textvorlagen 30 Tage).

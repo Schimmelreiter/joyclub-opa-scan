@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Poppen.de – Besucher nach Alter ignorieren
 // @namespace    local.visitor-age-filter
-// @version      2.44
+// @version      2.45
 // @description  Opa-Schutz für poppen.de: erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -30,7 +30,7 @@
 
 (function () {
   'use strict';
-  const VERSION = '2.43';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.45';
   const REPO_URL = 'https://github.com/Schimmelreiter/swinger-companion';
   const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) || window;
   // Eingebaute Funktionen gleich beim Start festhalten (das Skript läuft in der Seitenwelt; spätere Veränderungen
@@ -3924,7 +3924,7 @@
     settingsDirty = false;
     el.id = 'vaf-set';
     const W1 = word();
-    el.innerHTML = `<h2 style="margin-top:4px">${esc(W1)}-Schutz <a class="vaf-ver" href="${REPO_URL}/blob/main/changelog.txt" target="_blank" rel="noopener" title="Was ist neu? (Changelog)">${esc(VERSION)}</a><a class="vaf-hlink" href="${REPO_URL}#readme" target="_blank" rel="noopener">Anleitung</a><a class="vaf-hlink" href="${REPO_URL}/issues" target="_blank" rel="noopener">Fehler melden</a></h2><div class="vaf-info"><div>Derzeit blockiert: <span id="vaf-cur-n">…</span></div><div>Mit neuen Einstellungen: <b id="vaf-after-n">…</b></div></div><div id="vaf-set-body"></div>`;
+    el.innerHTML = `<h2 style="margin-top:4px">${esc(W1)}-Schutz <a class="vaf-ver" href="${REPO_URL}/blob/main/userscripts/poppen/changelog.txt" target="_blank" rel="noopener" title="Was ist neu? (Changelog)">${esc(VERSION)}</a><a class="vaf-hlink" href="${REPO_URL}/tree/main/userscripts/poppen#readme" target="_blank" rel="noopener">Anleitung</a><a class="vaf-hlink" href="${REPO_URL}/issues" target="_blank" rel="noopener">Fehler melden</a></h2><div class="vaf-info"><div>Derzeit blockiert: <span id="vaf-cur-n">…</span></div><div>Mit neuen Einstellungen: <b id="vaf-after-n">…</b></div></div><div id="vaf-set-body"></div>`;
     const body = el.querySelector('#vaf-set-body');
     const touch = () => { settingsDirty = true; projectLater(); };
     const lab = (text, path) => `<span data-path="${path}">${text}</span>`;

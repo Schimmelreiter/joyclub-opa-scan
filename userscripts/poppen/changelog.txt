@@ -1,6 +1,10 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.45 (26.11.2026)
+- Die Einstellungen zeigen die tatsächlich installierte Version (bisher fest „2.43“); Versionsnummer und „Anleitung“ führen zu Changelog und Anleitung dieses Skripts
+- Abgleich mit dem JOYclub-Skript: Chrome trennt den Speicher des Briefkastens nach besuchter Seite, deshalb kam die gemeinsame Fickliste nie an. Ab JOYclub-Skript 2.06 übernimmt dieses die Brücke zwischen beiden Seiten; am poppen-Skript ändert sich dafür nichts
+
 2.44 (26.11.2026)
 - Umzug: Das Skript liegt jetzt im Repo swinger-companion unter userscripts/poppen/ (gemeinsam mit dem JOYclub-Skript). Update-Adresse, Anleitung und „Fehler melden“ zeigen dorthin
 - Gemeinsame Ablage unter der festen Adresse schimmelreiter.github.io/briefkasten.html. Die alte Adresse bleibt erreichbar; die Daten bleiben unverändert erhalten (gleicher Ursprung)

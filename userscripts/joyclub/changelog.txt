@@ -1,6 +1,10 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.06 (26.11.2026)
+- Behoben: Fickliste, Textvorlagen und Termin-Datei kamen nie zwischen JOYclub und poppen.de an. Chrome trennt seit Version 115 den Speicher eingebetteter Seiten nach der besuchten Seite; der Briefkasten hatte unter joyclub.de und unter poppen.de je eine eigene Ablage. Das Skript hält jetzt eine Kopie der gemeinsamen Ablagen im Tampermonkey-Speicher (nicht getrennt) und gleicht den Briefkasten auf beiden Seiten damit ab, je Eintrag gewinnt der neuere Stand. Dafür muss das JOYclub-Skript installiert sein; poppen.de-Seiten werden beim nächsten Besuch abgeglichen, offene Tabs sofort
+- Versionsnummer und „Anleitung“ in den Einstellungen führen wieder zu Changelog und Anleitung dieses Skripts
+
 2.05 (26.11.2026)
 - Umzug: Das Repo heißt jetzt swinger-companion, das Skript liegt unter userscripts/joyclub/. Update-Adresse, Anleitung und „Fehler melden“ zeigen dorthin
 - Gemeinsame Ablage unter der festen Adresse schimmelreiter.github.io/briefkasten.html. Die alte Adresse bleibt erreichbar; die Daten bleiben unverändert erhalten (gleicher Ursprung)
