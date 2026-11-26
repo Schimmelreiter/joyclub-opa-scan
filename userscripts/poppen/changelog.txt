@@ -1,0 +1,306 @@
+Changelog – poppen.de Opa-Scan (Userscript)
+Neueste Version oben.
+
+2.43 (09.11.2026)
+- Behoben: Das Skript hängte seine Tab-Kennung („;vaf:…“) an den Namen jedes Fensters, auch an fremde Frames auf joyclub.de. Dadurch erkannte das JOYclub-Skript seine Hintergrund-Frames nicht mehr, und Party-Scans brachen seit etwa 28.10. ab (JOYclub-Skript ab 2.01 robust dagegen). Die Kennung liegt jetzt im sessionStorage; Fensternamen fasst das Skript nicht mehr an, alte Reste entfernt es einmalig nur im eigenen obersten Fenster
+- Das Skript läuft nicht mehr auf joyclub.de (dort hatte es seit 2.38 nichts mehr zu tun). Die gemeinsame Ablage bleibt unverändert
+
+2.42 (01.11.2026)
+- Opa-Scan, Statistik: Neue Zeile „Schon auf der Warteliste“. Treffer, die schon auf der Warteliste standen, fehlten bisher; jetzt ergeben Neu + Schon auf der Warteliste + Schon blockiert die Zahl „Über der Grenze“. Bei Events heißt die Zeile „Nicht eingereiht (nur einfärben)“. Mitglieder mit unbekanntem Alter erscheinen als „Unklar“
+- Opa-Scan: Die Zahlen laufen während des Scans mit (etwa jede Sekunde). Bisher standen sie bis zum Ende einer Quelle auf 0, bei der langen Mitgliedersuche also sehr lange
+- Opa-Scan: doppelte Überschrift „Mitgliedersuche – Mitgliedersuche: …“ behoben
+- XXL-Suche, Statistik: Plus-Size gefunden, bereits vermessen, neu vermessen und neue Mitglieder je Figur-Stufe (mit den eigenen Bezeichnungen), nur bei eingeschaltetem „Moppel-Liebhaber“
+
+2.41 (01.11.2026)
+- Opa-Scan: Ist „Benutzer ist Moppel-Liebhaber“ aus, wird die XXL-Suche nicht mehr angeboten und läuft auch nicht, selbst wenn sie früher angehakt war. Die Auswahl bleibt gespeichert und gilt wieder, sobald der Schalter an ist
+- Einstellungen, Karte „Moppel-Liebhaber“: Bei ausgeschaltetem Schalter sind die Einstellungen darunter ausgeblendet
+
+2.40 (01.11.2026)
+- XXL-Seite: Treffer ohne Bild zeigen poppens Platzhalter wie im Profil (Mann/Frau/Paar) statt des Anfangsbuchstabens. Für Mitglieder, die nie ein Bild hatten, fragt das Skript keine neue Bildadresse mehr ab
+- poppens Zufalls-Platzhalter (random_avatar) gelten nicht mehr als echtes Bild, etwa beim Filter „Mit Bildern“
+- Einstellungen: Kopfzeile „Mit neuen Einstellungen:“ statt „Nach Anwenden der neuen Einstellungen:“, damit der Fortschritt beim Einlesen nicht umbricht
+
+2.39 (30.10.2026)
+- Einstellungen, Karten Männer/Frauen/Paare: Einstellungen, die gerade nichts bewirken, werden ausgeblendet. Nur bei „Visuelle Einstufung“: „Grenzen altern mit mir“, Regler „Visuell“, Bezeichnungen. Nur bei „Ignorieren aktiv“: „Grenze altert mit mir“, Regler „Ignorieren ab“. Bei einem von beiden: Profiltypen, Paar-Regel, Getrenntes Alter, Sugar Daddy/Mom, „Werte der ersten Zeile übernehmen“. Leere Zeilen fallen weg; die Spalten behalten ihre Breite, auch wenn nur ein Schalter an ist
+
+2.38 (30.10.2026)
+- Smileys in Kommentaren und Gruppen-Beiträgen: Kürzel (poppen wie „:D“, „;)“ und JOYclub wie „*kuss*“) werden beim Absenden in Unicode-Smileys umgewandelt, weil poppen sie dort nur als Text zeigt. Nur ganze Kürzel; Uhrzeiten („12:30“) und Links bleiben unverändert
+- Fickliste: Personen, bei denen das JOYclub-Skript (ab 1.96) sein Profil zum Hauptprofil gemacht hat, werden über das poppen-Profil unter „Auch auf …“ gefunden. Das Skript baut solche Einträge nicht mehr zur poppen-Person um (vorher hätten sich beide Skripte hin und her umgebaut)
+- Alter Briefkasten-Austausch mit dem JOYclub-Skript abgeschaltet; beide Skripte nutzen nur noch die gemeinsame Ablage
+- Blockierliste einlesen: nur beim ersten Mal, nach einer Formatänderung und monatlich vollständig; sonst täglich bzw. nach einem Update nur die neuesten Einträge, bis bekannte kommen. Entfernte Einträge erkennt das Skript über die Nummernliste. Fortschritt in den Einstellungen („Blockierliste wird eingelesen: n von x (… %)“, danach „… verarbeitet“). „Reparieren“ gleicht zusätzlich alle Notizen ab, auch von Hand geänderte und die von Hand Blockierter
+- Einstellungen: Kopfzeile „Derzeit blockiert: n (Blockierliste + Warteliste) / Höchstzahl“. „Gemeinsame Grenzen“ steht oben in den Experten-Einstellungen; Debug, Testlauf, Obergrenze und Höchstzahl stehen am Ende. Entfallen sind die Zeilen Pause zwischen Sperren, Messung gültig, Schonfrist (feste Werte: 1–3 s, 90/30 Tage, 30 Tage), ID-Auflösung, Abgleich mit JOYclub und der AWO-Hinweis. „Gedächtnis“ heißt jetzt „Wissen über andere Mitglieder, Fickliste & Textvorlagen“
+- Anmeldung: Die Seite wartet bis zu 20 Sekunden auf die vom Browser gespeicherten Anmeldedaten. Nach der Anmeldung lädt die Seite neu, statt den Hinweis „Nicht eingeloggt“ stehen zu lassen
+- XXL-Seite: Ist ein Radius gesetzt, fallen Mitglieder ohne bekannte Entfernung heraus (mit Hinweis, wie viele). Profilbilder kommen aus der gespeicherten Kopie; fehlt sie, wird das Bild kopiert. Bei abgelaufener oder fehlender Bildadresse holt das Skript gedrosselt eine neue (ohne Profilbesuch), sichtbare Karten zuerst
+- Gedächtnis: Fakecheck-Stand und Single-Status aus Vorschauen (Feed, Kommentare, Likes) werden gemerkt; der XXL-Filter „Beziehungsstatus“ nutzt beides
+- Behoben: Auf /search-Seiten fehlten die Opa-Schutz-Einträge im Profilmenü. Die Figur-Plaketten wurden bei jeder Änderung der Seite neu geschrieben und hielten so die Menü-Ergänzung ab
+
+2.37 (30.10.2026)
+- Kontobindung der gemeinsamen Ablage jetzt auch für die Fickliste: Steht in den Textvorlagen ein `owner`, der nicht zu den eigenen „Ich“-Profilen gehört, schreibt das Skript weder Fickliste noch Textvorlagen (auch nicht beim Import, Umzug oder aus dem Rettungsanker) und meldet „Die gemeinsame Ablage gehört einem anderen Konto“
+
+2.36 (30.10.2026)
+- Termin-Datei für alle Skripte gemeinsam: Stand (Name, Änderungsdatum, roher Text mit allen vier Angaben) im Briefkasten; eine neuere Datei gewinnt, eine Datei mit anderem Namen nur nach Rückfrage „für alle wechseln?“; ohne eigene Datei oder ohne Leseerlaubnis gilt der Stand aus dem Briefkasten
+- Messenger: Klick auf einen Termin hängt ihn an den vorhandenen Text an (eigene Zeile, ohne Return) und sendet die Nachricht; kommt sie nicht durch, erscheint „Nicht gesendet“
+- Gruppen-Newsfeed: Rahmen je Beitrag in der Farbe des Verfassers, Einstufung (und ggf. Figur-Stufe) hinter dem Nick, Kommentierende mit Einstufung; Verfasser und Kommentierende kommen ins Gedächtnis (nicht der Gruppenbesitzer)
+- Events: vorerst nur einfärben – keine Warteliste und keine Veranstalter-Whitelist mehr
+- AWO-Faktor der Events (gemeinsame Formel mit dem JOYclub-Skript) mit neuer Einstellungskarte „AWO-Faktor“ (Anwesenheitsquoten, Gewichtung Männer/Frauen/Paare); Plaketten in der Event-Suche: Datum der letzten vollständigen Prüfung und AWO-Faktor
+- Kopf-Symbol: Klick öffnet immer die Einstellungen (Wartelisten-Fenster entfällt); läuft ein Scan, erscheint danach dort das „Scan läuft“-Fenster
+
+2.35 (30.10.2026)
+- Behoben: Die gewählte Termin-Datei (5 Termine im Messenger) wurde seit 2.32 nach jedem Neuladen vergessen. Der Datei-Griff des Browsers lässt sich nicht in der verschlüsselten Datenbank ablegen; er liegt jetzt in einer eigenen kleinen Datenbank (nur der Griff, kein Inhalt). Liegt der alte Griff noch im unverschlüsselten Altbestand, wird er von dort übernommen
+
+2.34 (28.10.2026)
+- WICHTIG: Profilangaben (user/info) zählen bei poppen als Profilbesuch. Die Vermessung für Figur/XXL läuft deshalb ganz ohne Profilaufruf über die Suchfilter Größe/Gewicht (genaue Größe × Gewichtsbänder an den BMI-Stufen, bis etwa 1 BMI-Punkt; grob 2 Suchabfragen je Person). Die Vermessung sichtbarer Suchtreffer über user/info entfällt; Gruppenregeln fragen Profile nur noch unsichtbar ab (still unsichtbar schalten, danach zurück)
+- XXL-Seite: poppens eigene Suche wird dort unterdrückt (keine echte Suche, gespeicherte Suchfilter bleiben); Filter ersetzen poppens Suchfilter in der linken Leiste, im poppen-Design (Klapplisten, Schieberegler für Alter, Radius, Größe 130–220, Gewicht 0–300, Kästchen); neuer Filter Beziehungsstatus; Ergebnisse über die volle Breite; Menüpunkt hervorgehoben statt „Popsters“; neue Messungen aus einem Scan in einem anderen Tab erscheinen von selbst; die XXL-Seite blockiert Hintergrund-Suchen nicht mehr
+- Moppel-Liebhaber: Suchradius als Schieberegler im poppen-Design
+- Behoben: Figur-Klappliste der Suche wieder abgeschnitten (Höhe wird jetzt bei jedem Neuzeichnen nachgezogen)
+- Events: Veranstalter automatisch auf der Whitelist (bis 30 Tage nach Event-Ende), „Gehe“/„Vielleicht“ werden gekennzeichnet und im Opa-Scan als Quelle „Partygäste (Events)“ geprüft (alle Events weltweit); Knopf „Als Treffen in die Fickliste …“ auf jeder Event-Seite
+- Textvorlagen nach dem gemeinsamen Regelwerk mit dem JOYclub-Skript: Ablage in JOYclub-Schreibweise (einmalige Umstellung), neue IDs x:…, pfIds/owner bleiben erhalten, gleichzeitiges Schreiben (unverändert → schreiben, Ergänzungen → zusammenführen, sonst gewinnt die gespeicherte Fassung, die andere in den Papierkorb), Gedächtnis-Import Fall A/B/C mit Schalter „Auch Textvorlagen migrieren“ und Bericht, base/hash in der Sicherungsdatei
+- Kontobindung: Daten gehören genau einem poppen-Konto; bei anderem Konto bleibt das Skript komplett aus (roter Hinweis); bewusste Übergabe in den Experten-Einstellungen; „Wiederherstellen“ lehnt fremde Sicherungen ab
+- ID-Auflösung: leere Antworten von poppen gelten als „Profil nicht mehr erreichbar“ (vermutlich gesperrt), neue Versuche nach 1, 7 und 30 Tagen; Rekorder-Export mit allen ungelösten IDs samt Grund und Herkunft
+- Tampermonkey: @sandbox raw (keine Warnung mehr bei abgeschalteter JavaScript-Sandbox; Verhalten unverändert); Verschlüsselungs- und Datenbank-Funktionen werden beim Start festgehalten
+
+2.33 (28.10.2026)
+- Textvorlagen: „zuletzt geändert von“ einheitlich als { pf, ver, acc } wie in der Fickliste (älteres { platform, account } wird weiter gelesen)
+- FORMAT.md ergänzt (Rückfragen aus dem JOYclub-Chat): IDs j:<JOYclub-Profil-ID>, feste Plattform-Codes, vollständige Feldlisten der Fickliste samt veralteter Felder, genaue Fallliste für den Import einer fremden Fickliste
+
+2.32 (28.10.2026)
+- Mitglieder-Gedächtnis, Warteliste, Bilder und Profil-Archiv liegen jetzt verschlüsselt (AES-GCM) in einer unauffällig benannten Datenbank – poppen.de sieht nur unlesbare Daten. Schlüssel im Tampermonkey-Speicher und als Kopie im Briefkasten. Der Altbestand wird beim ersten Start umgezogen und nach 14 Tagen gelöscht
+- Fickliste und Textvorlagen liegen als EIN gemeinsamer Bestand im Briefkasten (für alle Skripte); Schreiben mit Versionszähler, gleichzeitige Änderungen werden zusammengeführt statt überschrieben; Löschmarken statt Löschen; Formatdefinition in FORMAT.md. Der bisherige Abgleich mit dem JOYclub-Skript läuft weiter, bis es umgestellt ist
+- „Ich“-Liste im Briefkasten: jedes Skript trägt sein eigenes Profil ein
+- Rettungsanker: gepackte Kopie von Gedächtnis, Warteliste, Archiv und Fickliste im Tampermonkey-Speicher (übersteht „Website-Daten löschen“); Rückfrage beim Start, wenn das Gedächtnis leer oder deutlich kleiner ist; Stand und Knöpfe im Abschnitt „Sicherung“
+- Einstellungen und kleine Listen zusätzlich im Briefkasten gespiegelt; nach einer Neuinstallation wird die Übernahme angeboten
+- Gedächtnis-Import: fremde Fickliste – übernommen wird nur, wo man selbst „der Fick“ ist (erkannt über alle eigenen Profile, auch den JOYclub-Account); Dialoge je nach eigenem und fremdem Status (Will ich / Gefickt / Nein, danke! / Nie wieder!) mit zukünftigen Terminen aus der Vorlage „Termine“, Treffen mit Schaltern, Vorschau beim Zusammenführen am selben Ort, roter Hinweis bei Widerspruch; eigene Sicherung (selbes Profil) gleicht Fickliste und Vorlagen ab
+
+2.31 (28.10.2026)
+- XXL-Suche als letzte Quelle im Opa-Scan (Standard nach „Moppel-Liebhaber“): je Profiltyp ab 18 aufsteigend bis unter die Ignorier-Grenze, im eingestellten Radius (75 km virtuell), Figur „Plus-size“; jeder Treffer wird vermessen und samt BMI, Figur-Angabe, Entfernung und Anmeldedatum im Gedächtnis gespeichert; Anschreibbar-Prüfung für passende Treffer
+- Neuer Menüpunkt unter „Entdecken“ (nach „Popsters“): benannt nach der höchsten Stufe (Standard „XXL“), Symbol Frau oder Mann je nach eigener Suche
+- XXL-Seite wie die Mitgliedersuche, aus dem Gedächtnis ab „Plus-Size“: alle sinnvollen Filter inkl. Figur, „auch unklarer BMI“ und „nur anschreibbare“; Sortierung Entfernung, BMI (Standard), Alter, letzter Login, Anmeldedatum
+- Paare: „Paar (Frau)“ / „Paar (Mann)“ getrennt; angezeigt wird ein Wert nach eigenem Profiltyp und eigener Orientierung; gleichgeschlechtliche Paare folgen dem Haken ihres Geschlechts (höherer Wert)
+- Profilangaben je Person (auch Paare): Größe, Gewicht, BMI, Figur, Rauchen, Sexualität, Sternzeichen, Sucht nach, Verifizierung
+- Badge „Plus-Size“ (Stufe 0) nur noch bei entsprechender Profilangabe
+
+2.30 (28.10.2026)
+- Profil-Menü: Schalter heißt nur noch „Opa-Schutz“ bzw. „Oma-Schutz“; Symbol Opa/Oma im Kreis – aus als Umriss, an gefüllt mit Schrägstrich (statt des Augen-Symbols von „Unsichtbar“)
+- Oma-Symbol (wie im JOYclub-Skript) überall, wo die Bezeichnung „Oma“ lautet: Kopfleiste, Profil-Menü, Einstellungen
+- Einstellungen: Versionsnummer verlinkt den Changelog, daneben „Anleitung“ (README) und „Fehler melden“ (Issues)
+- Neuer Abschnitt „Sicherung“ (immer offen, vor den Experten-Einstellungen): Alle Daten sichern/wiederherstellen, Gedächtnis exportieren/importieren
+- Neuer Abschnitt „Moppel-Liebhaber“: Schalter „Benutzer ist Moppel-Liebhaber“ (Standard aus), Regler BMI 25–60 mit drei Grenzen und farbigen Stufen (Plus-Size · Kurvig · Üppig · XXL), Bezeichnungen in Ein- und Mehrzahl, Suchradius, Profiltypen. Alle Figur-Funktionen (Umbenennung, Zusatzoptionen, Badges, Vermessung) greifen nur noch bei eingeschaltetem Schalter
+- Mitgliedersuche: Zusatzoptionen im Figur-Filter nach den eigenen Stufen (suchen „Plus-size“ und blenden nur aus, wer nach berechnetem BMI darunter liegt; Unbekannte bleiben), Badges in Stufenfarbe, neue Sortierung „BMI“ zwischen „Entfernung“ und „Alter“ – umsortiert wird nur noch bei „BMI“
+- poppens „Kurvig“ heißt bei eingeschaltetem Schalter „Mollig“; „Plus-size“ bleibt
+- „Anschreibbar“: das Skript merkt sich je eigenem Profil, ob ein Mitglied Nachrichten filtert („Du kannst nur einen Sticker senden“) – passiv bei jedem „Nachricht senden“ und gedrosselt im Hintergrund für Mitglieder ab „Plus-Size“ ohne Ignorier-Kriterien; neues Feld „Anschreibbar“ im Regel-Editor der Beitrittsanfragen
+- Sternzeichen engt den Geburtszeitraum nicht mehr ein (auf poppen frei wählbar, kann falsch sein)
+- Gedächtnis-Export enthält jetzt auch Fickliste (verschlüsselt) und Textvorlagen sowie Anmeldedatum und Entfernung; „Anschreibbar“ nur beim Import ins selbe Profil
+- Gedächtnis-Import mit neuer Mischregel: zuletzt aufgerufenes Profil gewinnt, dann der vollständigere, dann der eigene Eintrag; Geburtszeiträume werden immer geschnitten, Sternzeichen und Größe/Gewicht ergänzt
+- Rekorder: sammelt alle Entfernungen der Suchseite (Stufen des Radius-Reglers)
+
+2.29 (28.10.2026)
+- Einstellungen: neue Zeile „Global“ (übernimmt anfangs die Werte von „Interaktionen“) und Experten-Schalter „Gemeinsame Grenzen für alle Quellen“ (Standard an, direkt unter „Rangfolge der Quellen“). An: eine Regler-Zeile über die volle Breite, die Quellen-Beschriftungen und „Werte der ersten Zeile …“ entfallen; bei getrenntem Alter je eine Zeile für Frau und Mann. Aus: Grenzen wie bisher je Quelle
+- Neue Schalter „Grenzen altern mit mir“ (visuelle Einstufung) und „Grenze altert mit mir“ (Ignorieren) je Gruppe: am eigenen Geburtstag (sonst, sobald das höhere eigene Alter bemerkt wird) steigen die Grenzen um ein Jahr. Dadurch wird nie jemand entsperrt – entsperrt wird nur, wen eine von Hand nach oben geschobene Grenze freigibt
+- Alle Schieberegler 18–99; 99 ist ein offenes Ende (schließt auch 100-Jährige ein). Die Mitgliedersuche prüft jetzt auch 99-Jährige; „Alter unklar (99)“ ist überall entfernt
+- Layout: Beschriftung „Schalter“ und die Kopfzeilen „Quelle …“ entfernt; Bezeichnungen (Beschreibung „Oben Einzahl, unten Mehrzahl“, gleichmäßig breitere Felder), Profiltypen, Paar-Regel und Getrenntes Alter beginnen genau unter dem Visuell-Regler bzw. dem Schalter „Visuelle Einstufung“ und rücken bei gemeinsamen Grenzen mit nach vorn
+- Versionsnummer rechts neben dem Titel „Opa-Schutz“; „Warteliste“ steht direkt rechts neben „Derzeit blockiert“
+- Experten-Einstellung „Gruppenanfragen: Gruppen“ entfernt
+- Mitgliedersuche: Hintergrund-Suchen pausieren, solange die Suchseite in irgendeinem Tab offen ist, und laufen erst 5 Minuten nach dem Verlassen weiter (Fortschritt bleibt). Die eigene Suche wird gemerkt, beim Laden der Suchseite wiederhergestellt und nach jedem Hintergrundlauf auf dem Server zurückgeschrieben
+- Figur-Badges ohne Suche: Größe und Gewicht kommen aus den Profilangaben jeder sichtbaren Trefferkarte (gedrosselt, im Gedächtnis gemerkt)
+- Regel-Editor: jede Verknüpfung gilt nur noch für ihr eigenes Glied (vorher wechselten alle derselben Ebene mit); UND bindet stärker als ODER, Kästen = UND-Strecken, Hauptgruppen = ODER-Abschnitte der obersten Ebene
+- Regel-Editor: verneinte Operatoren entfallen („ist nicht“, „enthält keine von“, „enthält nicht“, „ist ungleich“, „hat Angabe“) – das erledigt „… NICHT“; bestehende Regeln werden beim Öffnen gleichwertig umgestellt. Ethnische Zugehörigkeit: „keine Angabe“ ist ein Wert-Chip wie die übrigen
+- Regel-Editor: Pfeile je Glied ⇐ ⇑ ⇓ ⇒ und ↑ ↓ (aus der Gruppe heraus, in die Gruppe darüber/darunter, in eine neue Gruppe, verschieben – jeweils mit Verknüpfung)
+- Beitrittsanfragen: die Notiz wird jetzt VOR dem Annehmen/Ablehnen geschrieben (vorher fehlte sie)
+- Beitrittsanfragen im Hintergrund: Glocke „… möchte deiner Gruppe … beitreten“ bzw. offene Anfragen verwalteter Gruppen mit Regeln lösen die Bearbeitung aus (höchstens alle 15 Minuten je Gruppe); bereits Bearbeitete werden wieder so entschieden
+- Neuer Menüpunkt „Bearbeitete Beitrittsanfragen“ unter „Beitrittsanfragen“: alle Entscheidungen mit Papierkorb (abgelehnt → aus der Liste samt Ablehnungs-Notiz; angenommen → Notiz „Entfernt aus "<Gruppe>" am …“, dann aus der Gruppe entfernen)
+- Original-Knöpfe „Akzeptieren“/„Ablehnen“: schreiben zuerst die Notiz („Angenommen|Abgelehnt in "<Gruppe>" [wegen …] am …“, eigener Text im Notizfeld wird zur Begründung) und merken die Entscheidung
+- Von poppen gesperrte Profile („Blockiertes Profil“) und Profile in Echtheitsprüfung („Popster verifizieren“) werden erkannt, mit Datum gemerkt, bei neuen Einträgen ans Ende der Warteliste gestellt und in Listen mit Vermerk angezeigt; der Vermerk verschwindet, sobald das Profil wieder sichtbar ist
+- ID-Auflösung (Mitglieds-ID → Nickname) mit eingebautem Selbsttest an bekannten Profilen (inkl. Prüfung, dass kein leerer Chat entsteht); ergänzt Platzhalter bei „Blockierende Popsters“, „Besonders böse Popsters“, im Gedächtnis und auf der Warteliste. Ergebnis des Selbsttests steht im Rekorder-Export
+- API-Rekorder: Kennungen (msg_id, uid, group_id …) werden nicht mehr als Telefonnummer geschwärzt
+
+2.28 (27.10.2026)
+- Regel-Editor jetzt auch auf der Bearbeiten-Seite der Gruppe (/groups/<id>/edit), direkt über „Lokale Gruppe“; dort sicher im poppen-Formular (keine versehentlichen Absende-Klicks, Enter schickt nichts ab)
+- Experten-Einstellungen aufgeräumt: „Typ annehmen“, „Typ ablehnen“, „Ohne Typ/Bild & nur Deutsch ablehnen“ und „Fotos in der Prüfung“ entfallen – das erledigt der Regel-Editor
+- Fotos: manuelle Prüfung zeigt fest den Avatar plus bis zu 5 weitere Bilder; für die reine Regelprüfung reicht 1 Bild (bei echtem Avatar gar keins), mehr nur, wenn eine Regel „Fotos (Anzahl)“ nutzt
+- Alte, nicht mehr genutzte Profilprüfung (unsichtbares Profilfenster, Typ-Zuordnung über i18n) entfernt; der alte Ethnie-Cache wird freigegeben
+
+2.27 (27.10.2026)
+- Regel-Editor: Verknüpfungen „UND“, „ODER“, „UND NICHT“, „ODER NICHT“; der erste Ausdruck einer Ebene lässt sich per „nicht“ bzw. „Gruppe verneinen“ verneinen
+- Neue Operatoren: „keine Angabe“ / „hat Angabe“ für alle Profilfelder (zählt nur, was im Profil wirklich eingetragen ist; der Such-Wert „egal“ gilt nie als Angabe), „enthält keine von“ bei Auswahlfeldern, „enthält nicht“ bei Sprachen
+- Sprachen: „enthält“ (Mehrfachauswahl, alle gelisteten, darf mehr) und „nur“ (Einfachauswahl, keine andere Sprache); „ist genau“ entfällt
+- Ja/Nein-Felder (Brille, Raucher, Tattoo, Piercing, Handicap, Beschnitten): nur noch „ist“ – verneint wird über den anderen Wert
+- Oberste Ebene neuer Regeln ist per Default „ODER“ verknüpft, verschachtelte Gruppen „UND“; eine neue Hauptgruppe übernimmt einmalig die Begründung der Gruppe davor
+- Darstellung: jede Regelgruppe in einem Kasten (rechts offen), gleich weit eingerückt; die oberste Ebene selbst ohne Linie
+
+2.26 (27.10.2026)
+- „Freunde“ im Entdecken-Menü ist nicht mehr dauerhaft hervorgehoben (gilt für alle Menüs)
+- Einstellungen: Schalter „Visuelle Einstufung“ und „Ignorieren aktiv“ stehen über ihren Reglern; Knopf „Werte der ersten Zeile für alle Quellen übernehmen“ einzeilig
+- Erfassung neuer Profil-Codes ignoriert leere Einträge (kein falscher Auto-Export mehr)
+
+2.25 (27.10.2026)
+- Regel-Editor: neue/unbekannte Profil-Codes werden nebenbei bei jedem geladenen Profil erfasst und als „unbestätigt“ vorgemerkt (falls poppen mal einen Wert anhängt); reine Leer-/Egal-Codes werden ignoriert
+- Ein einziger Auto-Export (poppen-werte-neu-…json) 45 s nach der letzten Neuerung bzw. beim Verstecken des Tabs, nur wenn wirklich etwas Neues dazukam – unabhängig vom Recorder
+- Die komplette Werte-Tabelle (Code → Text, Quelle, i18n-Schlüssel) liegt jetzt in jedem Recorder-Export bei
+
+2.24 (27.10.2026)
+- Gruppenanfragen: Begründung je Hauptgruppe im Regel-Editor; bei Annahme/Ablehnung wird eine Notiz geschrieben: „Angenommen|Abgelehnt in "<Gruppe>" [wegen <Begründung>] am TT.MM.JJJJ“
+- Eine vorhandene Ignorier-/Whitelist-Notiz bleibt erhalten (per „ / “ angehängt); ein altes Entscheidungs-Segment wird ersetzt. Im Testlauf wird nichts geschrieben
+
+2.23 (27.10.2026)
+- Werte der Enum-Felder werden zur Laufzeit aus poppens eigener i18n in die aktuelle Sprache aufgelöst (einmal pro 14 Tage gecacht); die feste deutsche Tabelle dient nur noch als Offline-Fallback
+- Dadurch immer poppen-exakte Bezeichnungen, folgt der UI-Sprache und aktualisiert sich bei poppen-Änderungen von selbst
+
+2.22 (27.10.2026)
+- Werte-Tabelle vollständig aus dem echten poppen-Trait-Katalog: alle Codes je Feld (u. a. Haarfarbe „Grau“, Bart „Schnauzer“, Oberweite bis „J“, Herkunft komplett 1–13)
+- Korrektur der Ja/Nein-Felder (Brille/Raucher/Tattoo/Piercing/Handicap): 1 = Ja, 0 = Nein (die 2 ist nur der Such-Wert „egal“)
+
+2.21 (27.10.2026)
+- Regel-Editor: Werte-Auswahl als poppen-artige Pills statt Dropdown; „ist eine von“ mehrfach wählbar (ODER-verknüpft); nur geratene Werte mit ⚠
+- Feld-Auswahl nach Herkunft gruppiert (nicht anklickbare Trenner), innerhalb alphabetisch: „Über mich“, „Steht auf“, „Sucht nach“, „Status & Listen“; neue Kriterien „Steht auf“ (aboutMe.interested) und „Sucht nach“ (aboutMe.lookingFor)
+- Feld „Typ“ heißt jetzt „Ethnische Zugehörigkeit“
+
+2.9 (25.10.2026)
+- Opa-Scan: Gruppen-Scan in zwei Scans geteilt – „Gruppen (Whitelist)“ und „Gruppen (Blacklist)“; je Scan ein Haken „bei Alle“ (Whitelist an, Blacklist aus, Auswahl wird gemerkt)
+- Gruppen (Whitelist): Besitzer und Moderatoren aller eigenen Gruppen kommen auf die Whitelist (vom Opa-Schutz Blockierte werden entsperrt)
+- Mitglieder verwalteter Gruppen nur noch auf der Whitelist, wenn du die Gruppe allein leitest (als Moderator nie, als Besitzer ohne weitere Moderatoren; Zweitprofile zählen nicht); sonst werden die Einträge sofort entfernt und die Mitglieder nach den Regeln geprüft
+
+2.17 (26.10.2026)
+- Gruppenanfragen: Regel-Baukasten je Gruppe auf /groups/<id>/requests („Nach Regeln akzeptierte Geschlechter“, unter der poppen-eigenen Automatik). Je Geschlecht ein Block (kaskadierende Chips), darin zwei UND/ODER-Bäume „annehmen, wenn …“ und „ablehnen, wenn …“ (ein Baum darf leer bleiben)
+- Bedingungen aus den Profilangaben (user/info): Alter, Größe, Gewicht, Penislänge/-dicke, Typ, Figur, Sexualität, Haar-/Augenfarbe, Bart, Körper-/Intimbehaarung, Körbchengröße, Beschnitten, Brille, Raucher, Tätowierungen, Piercings, Sternzeichen, Herkunft, Sprachen – dazu „verifiziert“ und „hat Fotos“; Klartext über i18n. Bei Paaren zählt eine Bedingung, wenn sie auf eine Person zutrifft
+- „Übernehmen“ prüft auf Konflikte (lässt sich jemand denken, der beide Bäume erfüllt): dann gesperrt, Anzeige der überlappenden Bedingung und eines konkreten Beispiels. Gibt es offene Anfragen, erscheint vorher eine Vorschau („Übernehmen und anwenden“ / „Abbrechen“)
+- „Regeln übernehmen aus …“ füllt die Editoren mit dem Regelsatz einer anderen Gruppe
+- Auf der Einzel-Prüfseite steht unter jeder Anfrage eine Zeile mit den tatsächlichen Werten der in den Regeln benutzten Felder
+- Warteliste-Anzeige: Knopf „Im Hintergrund weiterlaufen“ statt „Anhalten“ (das Blockieren läuft ohnehin im Hintergrund weiter)
+
+2.16 (26.10.2026)
+- Opa-/Oma-Scan: Start-Popup einspaltig (Teilscans untereinander mit Häkchen, wie im JOYclub-Skript); nach „Scan starten“ läuft der Scan im Hintergrund weiter, das Popup lässt sich schließen
+- Kopf-Symbol zeigt ein Aktivitäts-Abzeichen: Lupe (Scan läuft, Vorrang) bzw. Radierer (Warteliste wird abgearbeitet), Kurzstatus im Maus-Over; Klick öffnet dynamisch die Scan-Anzeige, die Blockier-Anzeige oder den Scan-Dialog (Einstellungen weiterhin über das Profil-Menü)
+- Wird der Tab geschlossen, führt ein anderer Tab den Scan nach einer Minute fort (wie schon beim Blockieren)
+- Profilbesucher werden über die Schnittstelle profile/visitors gelesen statt durch Durchscrollen der Seite – dadurch hängt kein Teilscan mehr an einer sichtbaren Seite
+
+2.15 (26.10.2026)
+- Abschnitt „Meine Freunde“ auf /my/profile über „Popsters in der Nähe“ (bis zu 8 Freunde, Überschrift verlinkt die Freundesliste /friends/1)
+- Menü „Entdecken“: neuer Eintrag „Freunde“ (→ /friends/1) vor „Sparks“, auf jeder Seite
+
+2.14 (25.10.2026)
+- Eigene Ansicht „Blockierende Popsters“ unter /setting/privacy/home (Aufruf über #blockierer, nicht änderbar): Liste im Stil der Gruppen-Mitgliederseite, ohne Mülleimer; bekannte Mitglieder mit Bild, Name (Link zum Profil) und „Geschlecht · Alter · Ort“, sonst Platzhalter mit der ID
+- Menüeintrag „Blockierende Popsters“ (Beschreibung „Popsters, die mich ignorieren“) auf der Datenschutz-Seite direkt über „Wer kann was sehen“
+- Das Feld „Besonders böse Popsters“ ist aus den Experten-Einstellungen entfernt; die Liste wird weiterhin automatisch aus der Blockierer-Liste befüllt
+
+2.13 (25.10.2026)
+- „Besonders böse Popsters“: die Zuordnung ID→Nickname liegt zusätzlich dauerhaft im Tampermonkey-Speicher und überlebt so das Löschen der poppen.de-Browserdaten; das Profilgedächtnis dient nur als Rückfallebene, wenn der Tampermonkey-Speicher noch keine Zuordnung hat
+- Umgekehrter Abgleich: nach jedem Scan „Gruppen (Whitelist)“ und einmal täglich werden geänderte Nicknames (gleiche ID) aus dem Gedächtnis in den Tampermonkey-Speicher nachgeführt
+- Entfernt wird weiterhin anhand der dauerhaften ID-Liste, unabhängig von einer Nick-Änderung
+
+2.12 (25.10.2026)
+- „Besonders böse Popsters“: beim automatischen Befüllen werden die User-IDs zu Nicknames aufgelöst (soweit im Gedächtnis bekannt) und alphabetisch sortiert angezeigt; unbekannte bleiben als ID
+
+2.11 (25.10.2026)
+- „Besonders böse Popsters“ werden alle 30 Minuten automatisch aus der Liste der mich blockierenden Popsters (ignore/be-ignored/uid/list) befüllt; der bisherige Inhalt der Liste wird dabei ersetzt
+- Zusammen mit 2.10 heißt das: wer mich blockiert, wird beim Scan „Gruppen (Whitelist)“ (und im täglichen Hintergrundlauf) aus meinen verwalteten Gruppen entfernt
+
+2.10 (25.10.2026)
+- Experten-Einstellungen: neues Feld „Besonders böse Popsters“ (User-IDs oder Nicknames, je Zeile einer)
+- Scan „Gruppen (Whitelist)“ entfernt diese Popsters aus allen verwalteten Gruppen: vorher ein Vermerk am Mitglied („Ignorant (Gruppe) blockiert am … um …“), dann Entfernen aus der Gruppe (group/attendee/note, group/attendee/kick)
+- Verwaltete Gruppen werden über die unverschleierte Verwaltungsliste gelesen (group/attendee/manage/list) statt über die normale Mitgliederliste
+- Behebt einen Fehler aus 2.9: die Moderatorenliste wurde falsch per GET statt POST abgerufen; dadurch konnte der Scan „Gruppen (Whitelist)“ bei einer allein geführten Gruppe die Whitelist-Einträge der Mitglieder entfernen. Ein Scan nach dem Update stellt sie wieder her
+
+2.8 (25.10.2026)
+- Gruppenanfragen: die Regeln (Gruppen-Muster, Annehmen-/Ablehnen-Liste, Zusatzregel, Fotozahl) stehen nicht mehr im Quelltext, sondern nur in den eigenen gespeicherten Einstellungen (Experten-Einstellungen → Gruppenanfragen); ohne Gruppen-Muster ist die automatische Annahme/Ablehnung aus
+
+2.7 (25.10.2026)
+- Automatischer Abgleich von Fickliste und Textvorlagen mit dem JOYclub-Skript über einen unsichtbaren „Briefkasten“ (leere GitHub-Pages-Seite); auf joyclub.de läuft das Skript nur passiv
+- Dreiwege-Abgleich je Feld über einen gemerkten Stand, Papierkorb (30 Tage) für gelöschte Textvorlagen, Smiley-Übersetzung beim Abgleich; Status in den Experten-Einstellungen
+- Behebt einen Fehler, durch den die eigenen API-Aufrufe im Zusammenspiel mit der neuen Seiten-Beschränkung nicht erreichbar waren (nur in der Entwicklung, nie veröffentlicht)
+
+2.6 (25.10.2026)
+- Messenger: Textvorlagen (bis 100, je bis 8000 Zeichen) – Knopf links neben der Eingabezeile zeigt die Namen und fügt ein; Verwalten über ⋮ → „Textvorlagen“ (Liste, Bearbeiten, Export/Import per Datei oder Zwischenablage, Termine-Bereich)
+- Textvorlagen-Import übersetzt Smileys zwischen JOYclub, poppen.de und Unicode (Tabelle fest eingebaut, smiley-map.json im Repo); gleiche bleiben, verlängerte werden ergänzt, sonst Rückfrage
+- Termin-Kurzform „wann - wo - Link“ wird beim Einfügen anhand der Termin-Datei wieder ausgeschrieben
+- Fickliste: Anmerkungen je Person (persons[].notes mit notesAt/notesBy, bis 8000 Zeichen; liest auch joy.notes), im Profil-Kasten, auf der Seite externer Ficks und in „Meine Fickliste“
+- Gruppenanfragen werden über user/info und die Galerie geprüft statt über einen unsichtbaren Profilaufruf; Typ-Zahl wird über i18n/pull benannt, sonst wie bisher über das Profil
+
+2.5 (25.10.2026)
+- Blocken im Hintergrund statt in Etappen: einer nach dem anderen, andere Vorgänge haben Vorrang (auch in anderen Tabs), Übernahme durch einen anderen Tab nach einer Minute, 5 Minuten Pause nach mehreren Fehlschlägen; „Jetzt abarbeiten“ auch bei ausgeschaltetem Schalter; „Maximal pro Etappe“ und „Etappen-Abstand“ entfallen
+- Freunde und Favoriten: Listen werden täglich und beim Öffnen der Seiten eingelesen → automatische Whitelist, Opa-Sperren werden aufgehoben
+- Größe und Gewicht aus user/info (beim Öffnen eines Profils) genau ins Gedächtnis (Figur-Badges)
+- Verschleierte Gruppenmitglieder (Prüfsumme statt ID, Sternchen-Name) werden übersprungen; alte Einträge einmalig entfernt
+- „Du hast die Regie!“ wird immer übersprungen, auch bei Seitenwechseln ohne Neuladen
+- API-Rekorder: vollständigere Schwärzung (eingebettete Nachrichten, private Notizen, Wünsche, Interview-Antworten; Geburtstage nur Jahr), keine falschen „Zweitwohnsitz“-Hinweise; alte Aufnahmen werden einmalig gelöscht
+- Einstellungen: „Höchstzahl der Einträge auf der Blockierliste“ ohne Rot und ohne „Limit:“
+- Profil-Menü: „Opa-Schutz“ (Opa mit Stift) statt „Opa-Schutz konfigurieren“, Schalter heißt „Opa-Schutz aktiv“
+- Messenger, Termine: nach Datum sortiert; Pfeil wie bei „Aktionen“/„Anhänge“
+
+2.4 (24.10.2026)
+- Fickliste: echte Favicons statt Kürzel für die Plattformen (fest eingebaut, kein Nachladen); Eronity und „Andere“ behalten das Kürzel; Datei favicons.json im Repo
+- Fickliste-Kasten: breiter Knopf „+“ hinter „Auch auf:“ öffnet das Popup „Auch auf …“, größerer Abstand zwischen den Profil-Links; „+ Profil anderswo“ entfällt
+- Profil-Menü: Eintrag „Fickliste“ vor dem Opa-/Oma-Scan (wie im JOYclub-Skript)
+- Gruppenanfragen: auch in Gruppen mit „interracial“ im Namen
+- Gruppenanfragen: automatisch ablehnen bei leerem Typ, ohne Profilbild (nur Platzhalter und kein öffentliches Foto) und Deutsch als einziger Sprache
+- Messenger: Abschnitt „Termine“ zwischen „Aktionen“ und „Anhänge“ – die nächsten 5 Termine aus einer lokalen Textdatei („wann - wo - was - Link“), Klick fügt die Zeile ins Eingabefeld ein; Datei wählen auch auf der Seite Opa-Schutz
+
+2.3.1 (24.10.2026)
+- Fickliste-Import: Enthält ein importierter Eintrag (z. B. von JOYclub) ein poppen.de-Profil, wird daraus ein poppen-Eintrag – sofort, wenn das Mitglied im Gedächtnis bekannt ist, sonst beim nächsten Aufruf des Profils. Das fremde Hauptprofil bleibt als Profil erhalten; Status, Treffen und Verlauf werden übernommen
+- Meine Fickliste: Der Name öffnet bei solchen Einträgen das poppen.de-Profil statt des fremden
+
+2.3 (24.10.2026)
+- Fickliste, Profile anderer Plattformen (Übernahme aus JOYclub 1.84): neues Popup „Auch auf …“ mit Liste (Häkchen „Profil gelöscht“, ✕), „+ Profil zufügen“ mit Platzhalter je Plattform und Plattformname bei „Andere …“; poppen.de selbst wird nicht angeboten
+- Aufruf über das Menü des Fickliste-Buttons, „+ Profil anderswo“ im Fickliste-Kasten und „Auch auf …“ je Person in „Meine Fickliste“
+- Vorschläge: importierte Einträge der gewählten Plattform ohne poppen-Profil per Klick zusammenführen (neuerer Status, Treffen/Profile/Verlauf, Anmerkungen angehängt; importierter Eintrag verschwindet)
+- Plattform-Symbole mit Kürzeln und Farben wie im JOYclub-Skript; in „Meine Fickliste“ auch hinter dem Status
+- Filter „Plattform“ als Mehrfachauswahl mit „Andere / ohne“
+- Austausch: profiles[].pfName und profiles[].dead (ältere Felder deleted/gone werden gelesen); Kopieren-Knopf ⧉ ohne Inline-Skript
+
+2.2 (24.10.2026)
+- Notiz: immer schreiben, Pflicht und fester Text; die drei Einstellungen entfallen (auch bei der Sperre über den Namen gilt die Pflicht)
+- Ohne Notiz keine Sperre: Sperre zurücknehmen, auf der Warteliste lassen, nach drei Fehlversuchen heraus
+- Einstellungen: Markierung „°“ und „Quelltext-Wert(e)“ entfernt; „Visuelle Einstufung“ ohne „(3 Stufen)“
+- Partygäste und AWO-Faktor ausgeblendet; Partygäste übernehmen intern die Werte der Profilbesucher
+- Gruppenanfragen nicht mehr auf der Einstellungsseite (intern unverändert)
+- Rangfolge der Quellen untereinander mit Platznummer und ▲▼
+- Warteliste: neuer Button „Abarbeiten“ – ganze Warteliste sofort, mit Fortschritt, Anhalten und Zusammenfassung
+
+2.1.3 (24.10.2026)
+- Einstellungen: Bezeichnungen untereinander (oben Einzahl, unten Mehrzahl, je Stufe eine Spalte)
+- Schieberegler: Zahlen sauber mittig über den Griffen, mehr Abstand zum Griff
+
+2.1.2 (24.10.2026)
+- Fickliste: dieselben Symbole wie im JOYclub-Skript (Ficken-Symbol, Umriss für „Ficken?“, Verbotsring für „Nein, danke!“ und „Nie wieder!“, Mülleimer); „Gefickt“ in Listen rot, der Button bei „Gefickt“ rot mit weißem Symbol
+- Popup „Regeln geändert“: Derzeit blockiert / Nach Anwenden ebenfalls auf Basis der ganzen Blockierliste
+
+2.1.1 (24.10.2026)
+- Nach einem Update (und danach wöchentlich) liest das Skript die Blockierliste still ins Gedächtnis ein: Opa-Sperren mit Quelle und Notiz, von Hand Blockierte nur als solche vermerkt; auf poppen.de wird dabei nichts geändert
+- Einstellungen: „Nach Anwenden der neuen Einstellungen“ rechnet mit der ganzen Blockierliste (derzeit blockiert − fallen weg + kommen dazu); vor dem ersten Einlesen steht dort „Blockierliste wird eingelesen …“
+- Vom Opa-Schutz Geblockte ohne bekanntes Alter zählen als „bleiben“
+
+2.1 (24.10.2026)
+- Fickliste, Austauschformat: profiles[] mit eigenem status/statusAt und sync; meets[] mit uid (zusammen mit pf); unbekannte Felder werden durchgereicht
+- Statusänderung gilt für die Person und alle Profile mit sync:true; Profile mit eigenem Status bleiben unverändert
+- Import: verknüpfte Personen behalten das fremde Hauptprofil als Profil; nicht verknüpfte behalten main unverändert
+- Treffen: Felder heißen „Was“ (Party, Anlass) und „Wo“ (Club, Ort)
+- Whitelist: Pop-MOD-Klarsinn aus den Voreinstellungen entfernt (über das Präfix „Pop-MOD-“ abgedeckt); eigene Namen bleiben erhalten
+- Veröffentlichung auf GitHub mit @updateURL/@downloadURL
+
+2.0 (24.10.2026)
+- Neuer Aufbau: Mitglieder-Gedächtnis (ein Eintrag je Mitglied) in der Browser-Datenbank, Zwischenspeicher mit gebündeltem Schreiben, Abgleich zwischen Tabs
+- Schnittstellen statt Seitenklicks: Blockierliste lesen, blockieren, entsperren und Notizen schreiben über /v2-api
+- Quellen: Likes, Sticker und Nachrichten als „Interaktionen“; Gruppen (alle eigenen, komplett); systematische Mitgliedersuche Alter für Alter in ganz Deutschland; Profilbesucher unsichtbar
+- Blocken in Etappen: Warteliste, 50 je Etappe, alle 5 Minuten, 1–3 s Pause; Vorprüfung auf Freund, Mitarbeiter, verwaltete Gruppe, Alter 99
+- Regeln wie beim JOYclub-Skript: Männer/Frauen/Paare, Grenzen je Quelle, visuelle Stufen, Bezeichnungen, Profiltypen, Paar-Regel, getrenntes Alter, Sugar Daddy/Mom, Warnalter mit Vormerken
+- Whitelist mit Gruppen; automatische Whitelist für poppen-Mitarbeiter, Freunde und Mitglieder verwalteter Gruppen (30 Tage Schonfrist, Geblockte werden entsperrt, Aufgenommene sofort geschützt)
+- Alter 99 gilt als unklar; Profiladressen exportierbar
+- Opa/Oma, Oppa/Omma je nach eigenem Profil und Wohnsitzen (Haupt- und Zweitwohnsitz); Sternzeichen grenzen Geburtszeiträume ein
+- Opa-Scan-Popup mit allen Scans, zwei Balken, Statistik und Zusammenfassung
+- Einstellungsseite „Opa-Schutz“ in den Einstellungen mit Experten-Einstellungen, „°“-Markierung, Rückfrage beim Verlassen und Popup bei Regeländerungen; Limit vorbereitet (10.000.000)
+- Profil-Menü: Opa-Scan, Opa-Schutz konfigurieren, Schalter Opa-Schutz (Automatik)
+- Kopfleiste: Opa-Symbol öffnet die Einstellungen; gelber Punkt für offene Gruppenanfragen
+- Blockierliste: keine Automatik beim Öffnen mehr; Buttons Reparieren und Synchronisieren (zwei Modi, Notizen abgleichen); Rückfrage am Mülleimer
+- Geblocktes Profil: Trotzdem öffnen (einmalig entsperren, beim Verlassen wieder sperren) und Nicht mehr ignorieren
+- Sichtbarkeitswarnung mit Unsichtbar-Schalten (wio/state) vor Profilaufrufen
+- Fickliste komplett: Button mit fünf Zuständen, Abschnitt im Profil, Meine Fickliste, Kasten im eigenen Profil, Profil-Archiv, externe Ficks, andere Plattformen (inkl. Telegram, WhatsApp, Threema, Signal), Export/Import mit automatischem Verknüpfen, gelöschte Konten im Posteingang
+- Mitgliedersuche: Kurvig → Mollig, Plus-size → Mastschwein (überall), Zusatzoption Qualle; Vermessung über die Suchfilter, Badges, Ausblenden, Sortierung; Messungen im Gedächtnis
+- Sicherung/Wiederherstellung aller Daten, Gedächtnis-Export/-Import (mischen), API-Rekorder mit Schwärzung
+- Profilinfos (inkl. kleiner Bildkopie) werden nebenbei gemerkt
+- Daten aus 1.x werden übernommen, sobald die Mitglieder mit ID auftauchen; die alten Daten bleiben erhalten
+
+1.26 (24.10.2026)
+- Gruppen-Beitrittsanfragen: automatische Annahme/Ablehnung nach Typ, Popup „Manuell prüfen“ mit Angaben und Fotos
+- Sonderseiten: Wartung, Werbung, nicht gefunden, abgemeldet, Login mit „Angemeldet bleiben“
+
+1.0–1.25 (Oktober 2026)
+- Besucherliste und Mitgliedersuche nach Alter auswerten und über das Profil bzw. die Blockierliste ignorieren; Whitelist, Notizen, Geburtsjahre, Vormerken, mehrere Tabs, Titelzeilen-Knopf
