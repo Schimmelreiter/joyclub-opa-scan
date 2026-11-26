@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – Poppen Edition
 // @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.46
+// @version      2.47
 // @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -32,7 +32,7 @@
 
 (function () {
   'use strict';
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.46';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.47';
   const REPO_URL = 'https://github.com/Schimmelreiter/swinger-companion';
   const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) || window;
   // Eingebaute Funktionen gleich beim Start festhalten (das Skript läuft in der Seitenwelt; spätere Veränderungen
@@ -200,7 +200,7 @@
     warnYears: 1,                 // so viele Jahre vor „Ignorieren ab“: dunkelorange + vormerken
     watch: true,
     whitelist: {
-      names: [{ n: 'Wildschwein_AC', g: '' }],
+      names: [],                  // Beispiel: [{ n: 'Nick_1', g: 'Freunde' }]
       groups: [],
       prefixes: ['Pop-MOD-'],
     },
@@ -268,6 +268,8 @@
       if (p === 'whitelist.names' && Array.isArray(e.v) && Array.isArray(e.src)) {
         const drop = (a) => a.filter((x) => (x && x.n) !== 'Pop-MOD-Klarsinn');
         if (same(def, drop(e.src))) { setPath(s, p, clone(drop(e.v))); continue; }
+        // 2.47: im Quelltext stehen keine echten Nicks mehr – eigene Namen bleiben trotzdem erhalten
+        setPath(s, p, clone(drop(e.v))); continue;
       }
       if (def !== undefined && !same(def, e.src)) continue;
       setPath(s, p, clone(e.v));
@@ -5202,6 +5204,17 @@
   };
   const pmUid = (p) => { const m = pm(p); return m ? String(m.uid) : ''; };
   const foreignUrl = (p) => (p && p.main && p.main.pf && p.main.pf !== 'poppen' && p.main.url) || '';
+  // 2.47: gelöschtes JOYclub-Profil (keine Adresse mehr) → Profil-Archiv im JOYclub-Skript auf joyclub.de
+  const joyArchUrl = (p) => {
+    const m = p && p.main;
+    if (!m || m.pf !== 'joyclub' || (m.url && !m.dead)) return '';
+    const q = new URLSearchParams({ flx: p.id });
+    const nick = m.nick || m.name || (p.ext && p.ext.name) || '';
+    if (nick) q.set('flnick', nick);
+    if (/^\d+$/.test(String(m.uid || ''))) q.set('fluid', String(m.uid));
+    return 'https://www.joyclub.de/edit/homepage/?fickliste&' + q.toString();
+  };
+  const extUrl = (p) => (p && p.main && p.main.dead ? '' : foreignUrl(p)) || joyArchUrl(p) || '/setting/profile#extern=' + encodeURIComponent(p.id);
 
   // ---------- Profil-Fakten (Persönliche Details) ----------
   function detailsFrom(doc = document) {
@@ -5639,7 +5652,7 @@
     for (const p of persons) {
       const m = await memberOf(p);
       const name = (m && m.nick) || (pm(p) && pm(p).nick) || (p.main && p.main.nick) || (p.ext && p.ext.name) || '?';
-      const base = { p, name, del: !!(m && m.del) || !!(p.ext && p.ext.gone), inactive: m && m.active === false, url: pm(p) ? profileUrl(name) : ((p.profiles || []).find((x) => x.pf === OWN_PF && x.url) || {}).url || foreignUrl(p) || '/setting/profile#extern=' + encodeURIComponent(p.id), arch: '/setting/profile#archiv=' + encodeURIComponent(pm(p) ? pm(p).uid : p.id), pfs: uniq([...(p.main && p.main.pf && p.main.pf !== 'poppen' ? [p.main.pf] : []), ...(p.profiles || []).map((x) => x.pf)]),
+      const base = { p, name, del: !!(m && m.del) || !!(p.ext && p.ext.gone), inactive: m && m.active === false, url: pm(p) ? profileUrl(name) : ((p.profiles || []).find((x) => x.pf === OWN_PF && x.url) || {}).url || extUrl(p), arch: '/setting/profile#archiv=' + encodeURIComponent(pm(p) ? pm(p).uid : p.id), pfs: uniq([...(p.main && p.main.pf && p.main.pf !== 'poppen' ? [p.main.pf] : []), ...(p.profiles || []).map((x) => x.pf)]),
         badges: uniq([...(foreignUrl(p) ? [p.main.pf + '|'] : []), ...otherProfiles(p).map((x) => `${x.pf}|${x.pf === 'other' ? (x.pfName || '') : ''}`)]) };
       if (!(p.meets || []).length) rows.push({ ...base, t: null });
       for (const t of p.meets || []) rows.push({ ...base, t });
@@ -5718,7 +5731,7 @@
     const rowsH = await Promise.all(last.map(async ({ p, t }) => {
       const img = pm(p) ? await Images.get(pm(p).uid) : (p.ext && p.ext.img) || '';
       const name = (p.main && p.main.nick) || (p.ext && p.ext.name);
-      return `<div style="display:flex;gap:8px;align-items:center;margin:4px 0"><img src="${esc(img)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;background:#3a3a3a"><a href="${pm(p) ? esc(profileUrl(name)) : esc(foreignUrl(p) || '/setting/profile#extern=' + encodeURIComponent(p.id))}" target="_blank">${esc(name)}</a><span style="color:#a6a6a6">${esc([t.where, t.club].filter(Boolean).join(' · '))} · ${t.date ? deDate(new Date(t.date + 'T12:00')) : ''}</span></div>`;
+      return `<div style="display:flex;gap:8px;align-items:center;margin:4px 0"><img src="${esc(img)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;background:#3a3a3a"><a href="${pm(p) ? esc(profileUrl(name)) : esc(extUrl(p))}" target="_blank">${esc(name)}</a><span style="color:#a6a6a6">${esc([t.where, t.club].filter(Boolean).join(' · '))} · ${t.date ? deDate(new Date(t.date + 'T12:00')) : ''}</span></div>`;
     }));
     box.innerHTML = `<div><h2>Fickliste <span style="font-size:12px;font-weight:400;color:#8c8c8c">· Nur für dich sichtbar</span></h2></div>
       <div style="display:flex;gap:14px;margin:6px 0 10px">${Object.entries(FSTATES).map(([k, v]) => `<a href="/setting/profile#fickliste" data-st="${k}" title="${esc(v.label)}" style="color:#e8e8e8">${fickIcon(v.i, 18, true)} ${counts[k]}</a>`).join('')}</div>

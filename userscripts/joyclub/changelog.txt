@@ -1,6 +1,11 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.12 (27.11.2026)
+- Behoben: In der Fickliste öffnete ein Klick auf eine Person mit poppen.de-Profil die Archiv-Ansicht für gelöschte JOYclub-Profile, wenn die Adresse des poppen-Profils fehlte. Die Adresse wird jetzt aus dem Nick gebildet; auch unter „Auch auf“
+- Neu: Das poppen-Skript kann Personen mit gelöschtem JOYclub-Profil direkt in deren Profil-Archiv auf joyclub.de öffnen
+- Die Whitelist im Quelltext ist leer. Deine bisherige Whitelist bleibt vollständig gespeichert und gilt weiter
+
 2.11 (26.11.2026)
 - Behoben: Personen mit gelöschtem Profil (ohne Profil-ID und Link) wurden beim Abgleich mit poppen.de immer wieder neu angelegt – jede Runde eine weitere Kopie mit demselben Treffen. Das Skript erkennt sie jetzt an der Kennung, unter der sie schon in der gemeinsamen Ablage stehen, und an Plattform und Nick des gelöschten Profils
 - Vorhandene Kopien werden einmalig zu einer Person zusammengeführt: gleiche Treffen nur einmal, verschiedene bleiben alle, das Bild bleibt; die überzähligen Einträge in der gemeinsamen Ablage bekommen Löschmarken. Zusammengeführt wird nur bei gelöschten Profilen mit gleichem Nick auf derselben Plattform

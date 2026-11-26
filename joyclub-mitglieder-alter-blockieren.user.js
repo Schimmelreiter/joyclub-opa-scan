@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.11
+// @version      2.12
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -1245,58 +1245,10 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
     // gefundene Einträge (z. B. Gruppen-Moderatoren aus dem Opa-Scan), die im Tampermonkey-Speicher liegen.
     // Nach Begründung geordnet: neue Namen einfach in die passende Gruppe schreiben (oder eine neue Gruppe anlegen).
     WHITELIST: {
-      'Veranstalter': [
-        'dreamys_hh',
-        'Erosaeon',
-        'F_Store_Fashion',
-        'FARO8',
-        'JR_Relax',
-        'kai2hai',
-        'KAI_Partys',
-        'kaihai',
-        'perami',
-        'Zerberux',
-      ],
-      'DJ': [
-        'DJ_Blue_White',
-        'Dj_Cherry',
-        'DJ_Olli',
-        'Jenz_Im_Glueck',
-        'Sintouch',
-      ],
-      'Party': [
-        'geneti',
-        'Hengist',
-        'Kaepten_Kikki',
-        'TeufelGespielin',
-        'Tritron',
-      ],
-      'manuell eingetragen': [
-        'Wildschwein_AC',
-      ],
-      'Freundesliste (Stand 19.10.2026)': [
-        'Goofy6767',
-        'Goofy_6767',
-        'here69',
-        'Kleinerotesuese',
-        'Klio_79',
-        'MD1989',
-        'Rumtreiber1993',
-        'SxxxH',
-        'Tr3ntn4rm',
-      ],
-      'Freundesliste von Wildschwein_AC (Stand 19.10.2026)': [
-        'Absolution',
-        'Apfeleis',
-        'BlackAshSoul',
-        'DirtyDxxx',
-        'HerrUndKueken',
-        'loewin95',
-        'Nita72',
-        'Sariy',
-        'SizeQueenAC',
-        'Spinnchen',
-      ],
+      // Beispiel: 'Freunde': ['Nick_1', 'Nick_2'],
+      'Veranstalter': [],
+      'DJ': [],
+      'Party': [],
     },
 
     // Umkreis-Suche: Städte, deren Umkreise (AREA_RADIUS_KM) zusammen ganz Deutschland abdecken.
@@ -1588,6 +1540,8 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
       SOURCE_DEFAULTS[k] = JSON.parse(src);
       const e = st[k];
       if (e && e.src === src && e.value !== undefined) CONFIG[k] = JSON.parse(JSON.stringify(e.value));
+      // 2.12: die Whitelist im Quelltext ist leer (keine echten Nicks im öffentlichen Code) – die gespeicherte Liste bleibt
+      else if (k === 'WHITELIST' && e && e.value && typeof e.value === 'object') { CONFIG[k] = JSON.parse(JSON.stringify(e.value)); st[k] = { value: e.value, src }; ch = true; }
       else { st[k] = { value: JSON.parse(src), src }; ch = true; }
     }
     // Quellen, die im gespeicherten Wert fehlen (neue Skript-Version), hinten anhängen
@@ -12080,7 +12034,15 @@ fragment ImageUIDataFragment on ImageUIData {
     return o;
   }
   // nicht-JOYclub-Hauptprofil: Nick verlinkt auf die Plattform
-  const flForeignMain = (p) => !!(p && flIsExt(p.id) && p.main && p.main.pf && p.main.pf !== 'joyclub' && p.main.url);
+  // Adresse des fremden Hauptprofils; poppen.de-Profile ohne gespeicherte Adresse aus dem Nick (/p/<nick klein>)
+  function flMainUrl(p) {
+    const m = p && p.main;
+    if (!m || !m.pf || m.pf === 'joyclub' || m.dead) return (m && m.url) || '';
+    if (m.url) return m.url;
+    const n = String(m.nick || m.name || (flIsExt(p.id) ? p.nick : '') || '').trim();
+    return m.pf === 'poppen' && n ? 'https://www.poppen.de/p/' + encodeURIComponent(n.toLowerCase()) : '';
+  }
+  const flForeignMain = (p) => !!(p && flIsExt(p.id) && p.main && p.main.pf && p.main.pf !== 'joyclub' && flMainUrl(p));
   // Plattformen einer Person (für Filter und Symbole)
   function flPersonPfs(ids) {
     const fl = getFl(), s = new Set();
@@ -12095,13 +12057,14 @@ fragment ImageUIDataFragment on ImageUIData {
   }
   function flProfilesHtml(p, opt = {}) {
     const l = (p.profiles || []).filter((x) => !(x.pf === 'joyclub' && x.uid && flGet(String(x.uid))));
-    if (flForeignMain(p)) l.unshift(Object.assign({ main: true }, p.main));
+    if (flForeignMain(p)) l.unshift(Object.assign({ main: true }, p.main, { url: flMainUrl(p) }));
     if (!l.length && !opt.plus) return '';
     const plus = opt.plus ? `<button type="button" class="jaf-fl-plus" data-pid="${escHtml(p.id)}" title="Profil auf einer anderen Plattform oder Messenger-Kontakt zufügen" style="min-width:40px;height:22px;padding:0 12px;border-radius:11px;border:1px solid rgba(128,128,128,.6);background:rgba(128,128,128,.18);color:inherit;font:bold 15px/1 system-ui;cursor:pointer">+</button>` : '';
     return '<div class="jaf-fl-also" style="font-size:12.5px;margin-top:6px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center"><span style="opacity:.8">Auch auf:</span>' + l.map((x) => {
       const nm = escHtml(flProfName(x));
       const inner = `${flPfBadge(x.pf, { pfName: x.pfName, title: flPfLabel(x.pf, x.pfName) + (x.dead ? ' (Profil gelöscht)' : '') })}<span style="${x.dead ? 'text-decoration:line-through;opacity:.6' : ''}">${nm}</span>`;
-      if (x.url) return `<a href="${escHtml(x.url)}" target="_blank" rel="noopener noreferrer" style="color:inherit;display:inline-flex;gap:5px;align-items:center;text-decoration:none">${inner}</a>`;
+      const url = x.url || (x.pf === 'poppen' && !x.dead && (x.name || x.nick) ? 'https://www.poppen.de/p/' + encodeURIComponent(String(x.name || x.nick).trim().toLowerCase()) : '');
+      if (url) return `<a href="${escHtml(url)}" target="_blank" rel="noopener noreferrer" style="color:inherit;display:inline-flex;gap:5px;align-items:center;text-decoration:none">${inner}</a>`;
       return `<span style="display:inline-flex;gap:5px;align-items:center">${inner}<button type="button" class="jaf-fl-copy" data-t="${escHtml(x.name || '')}" title="Kopieren" style="background:none;border:0;color:inherit;opacity:.7;cursor:pointer;padding:0 2px;font-size:13px">⧉</button></span>`;
     }).join('') + plus + '</div>';
   }
@@ -12383,6 +12346,22 @@ fragment ImageUIDataFragment on ImageUIData {
     if (!ga) G[gid] = { primary: a, members: { [a]: { sync: false } } };
     if (gb) { Object.assign(G[gid].members, gb.g.members); delete G[gb.gid]; } else G[gid].members[b] = { sync: false };
     flSetGroups(G);
+  }
+  // 2.12: Aufruf aus dem poppen-Skript (/edit/homepage/?fickliste&flx=<ID in der Ablage>&flnick=…&fluid=…):
+  // die Person in der eigenen Fickliste suchen und ihre Ansicht öffnen (gelöschtes Profil → Profil-Archiv)
+  function flResolveFlx() {
+    const sp = new URLSearchParams(location.search);
+    const x = sp.get('flx');
+    if (!x || window.__jafFlx) return false;
+    window.__jafFlx = true;
+    const nick = sp.get('flnick') || '', uid = sp.get('fluid') || '';
+    const idx = flLocalIndex();
+    const pid = idx.get('xid:' + x) || (/^\d+$/.test(uid) && (idx.get('joyclub:' + uid) || (flGet(uid) ? uid : ''))) ||
+      (nick && idx.get(flDeadKey('joyclub', nick))) || (flGet(x) ? x : '');
+    const p = pid && flGet(pid);
+    if (!p || !flOwnPath()) return false;
+    location.replace(flDead(p) ? flArchiveUrl(p) : flLiveUrl(p));
+    return true;
   }
   // lokaler Index: Schlüssel → Eintrags-ID
   function flLocalIndex() {
@@ -13066,7 +13045,7 @@ fragment ImageUIDataFragment on ImageUIData {
     const t = ts || (stands.some((s) => s.ts === p.lastStand) ? p.lastStand : (stands[stands.length - 1] || {}).ts) || 0;
     return flCarrierUrl(p.id, t, nav);
   }
-  const flLiveUrl = (p, nav = true) => { if (flForeignMain(p)) return p.main.url; if (flIsExt(p.id)) return flCarrierUrl(p.id, 0, nav); const b = flPath(p); return location.origin + b + (nav ? (b.includes('?') ? '&' : '?') + 'flnav=1' : ''); };
+  const flLiveUrl = (p, nav = true) => { if (flForeignMain(p)) return flMainUrl(p); if (flIsExt(p.id)) return flCarrierUrl(p.id, 0, nav); const b = flPath(p); return location.origin + b + (nav ? (b.includes('?') ? '&' : '?') + 'flnav=1' : ''); };
   const flNavOn = (pid) => ssGet('jaf_flnav') === pid;
   // Navigation „Profil-Archiv“ (überblendet, wie die JOYclub-Infoleiste)
   function flShowNav(p, curTs) {
@@ -14196,6 +14175,7 @@ fragment ImageUIDataFragment on ImageUIData {
     const on = ownNick(); if (on && on !== GM_getValue('jaf_own_nick', '')) GM_setValue('jaf_own_nick', on);
     flSaveEventPage();
     flEditNav();
+    if (flResolveFlx()) return;
     if (flOverviewPage() && !document.querySelector('.jaf-fl-page') && document.getElementById('c')) flRenderOverview();
     // eigener Profilpfad (Träger der Fickliste-Ansichten)
     const ub = navUserLink(document);

@@ -1,6 +1,10 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.47 (27.11.2026)
+- Behoben: Personen mit gelöschtem JOYclub-Profil öffneten die Archiv-Ansicht für poppen-Profile. Sie öffnen jetzt ihr Profil-Archiv auf joyclub.de (dafür JOYclub-Skript ab 2.12)
+- Die Whitelist im Quelltext ist leer. Selbst eingetragene Namen bleiben erhalten; ein Name, der nur als Voreinstellung drinstand, muss bei Bedarf neu eingetragen werden
+
 2.46 (26.11.2026)
 - Neuer Name: Tampermonkey zeigt das Skript als „Swinger Companion – Poppen Edition“. Die interne Kennung bleibt gleich, alle Daten und Updates bleiben erhalten. Der Opa-Schutz behält als Funktion seinen Namen
 
