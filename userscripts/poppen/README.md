@@ -1,12 +1,12 @@
-# poppen-opa-scan
+# Swinger Companion – Poppen
 
 Implementiert einen Schutz vor sabbernden alten Opas auf poppen.de.
 
 Ein Tampermonkey-Userscript für [poppen.de](https://www.poppen.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), und setzt sie mit einer Notiz auf die Blockierliste von poppen.de – bei Interaktionen (Likes, Sticker, Nachrichten), Profilbesuchern, in Gruppen und in der Mitgliedersuche. Dazu kommen eine private Fickliste, Figur-Badges in der Suche, eine Whitelist für Mitglieder verwalteter Gruppen und die Prüfung von Gruppen-Beitrittsanfragen.
 
-Das Gegenstück für JOYclub: [joyclub-opa-scan](https://github.com/Schimmelreiter/joyclub-opa-scan).
+Das Gegenstück für JOYclub: [JOYclub-Skript](../joyclub/README.md). Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 2.8 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 2.44 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ---
 
@@ -14,7 +14,7 @@ Stand: Version 2.8 – Änderungen siehe [changelog.txt](changelog.txt)
 
 1. [Tampermonkey](https://www.tampermonkey.net/) im Browser installieren.
 2. Diesen Link öffnen und auf „Installieren“ klicken:
-   https://raw.githubusercontent.com/Schimmelreiter/poppen-opa-scan/main/poppen-opa-schutz.user.js
+   https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/poppen/poppen-opa-schutz.user.js
 3. Updates holt Tampermonkey automatisch (`@updateURL`), standardmäßig einmal täglich – sofort über *Dashboard → Nach Updates suchen*.
 
 Beim ersten Start fragt Tampermonkey nach den Rechten des Skripts (u. a. Zugriff auf `img-z.poppen.de`, um kleine Kopien von Profilbildern zu speichern).
@@ -238,7 +238,7 @@ Eigene Textbausteine (bis **100**, je bis **8000 Zeichen**), gespeichert im Tamp
 - **Termine-Bereich:** Enthält der Name „Termin“, erscheinen im Bearbeiten-Fenster die nächsten 5 Termine aus der Termin-Datei; „Alle übernehmen“ ersetzt den Text. 
 - **Termin-Kurzform:** Beim Einfügen wird eine Zeile `wann - wo - Link` ohne „was“ anhand der Termin-Datei wieder zur vollen Zeile ausgeschrieben.
 - **Export/Import** per Datei oder Zwischenablage, in derselben verschlüsselten Hülle wie die Fickliste (`templates` statt `persons`). Beim Import werden Smileys zwischen JOYclub, poppen.de und Unicode übersetzt (Tabelle fest im Skript); gleiche Vorlagen bleiben unverändert, nur vorne/hinten verlängerte werden ergänzt, sonst Rückfrage. Nicht übersetzbare Smileys stehen im Bericht.
-- **Gemeinsamer Bestand** (gemeinsames Regelwerk mit dem JOYclub-Skript, siehe [FORMAT.md](FORMAT.md)): Die Vorlagen liegen im Briefkasten in JOYclub-Schreibweise und werden hier beim Anzeigen/Einfügen übersetzt. Schreiben zwei Stellen gleichzeitig: Ist die andere Fassung unverändert, wird geschrieben; sind es nur Ergänzungen, werden beide zusammengeführt (die ältere zuerst); sonst gewinnt die gerade gespeicherte Fassung und die andere kommt für **30 Tage in den Papierkorb**. Neue Vorlagen bekommen IDs `x:<zufall>`; Felder des JOYclub-Skripts (`pfIds`, `owner`) bleiben erhalten. Gehört der Bestand laut `owner` einem anderen Konto, wird nicht abgeglichen.
+- **Gemeinsamer Bestand** (gemeinsames Regelwerk mit dem JOYclub-Skript, siehe [FORMAT.md](../../docs/FORMAT.md)): Die Vorlagen liegen im Briefkasten in JOYclub-Schreibweise und werden hier beim Anzeigen/Einfügen übersetzt. Schreiben zwei Stellen gleichzeitig: Ist die andere Fassung unverändert, wird geschrieben; sind es nur Ergänzungen, werden beide zusammengeführt (die ältere zuerst); sonst gewinnt die gerade gespeicherte Fassung und die andere kommt für **30 Tage in den Papierkorb**. Neue Vorlagen bekommen IDs `x:<zufall>`; Felder des JOYclub-Skripts (`pfIds`, `owner`) bleiben erhalten. Gehört der Bestand laut `owner` einem anderen Konto, wird nicht abgeglichen.
 - **Gedächtnis-Import:** Datei des eigenen Kontos (auch über die „Ich“-Profile erkannt) → Vorlagen ohne Rückfrage abgleichen, einschließlich Löschungen (nur, wenn die Vorlage hier seit dem letzten Import unverändert ist). Datei eines anderen Kontos → Schalter **„Auch Textvorlagen migrieren“** (Standard aus): aus = Vorlagen bleiben unberührt; an = abgleichen ohne Löschen, „Termine“ wird nie übernommen. Beim ersten Import ohne gemeinsamen Stand werden nur neue Namen angelegt und gleiche Texte verknüpft. Danach zeigt ein Bericht je Vorlage, was passiert ist.
 
 ## Moppel-Liebhaber (Figur)
@@ -284,7 +284,7 @@ Wartung (neuer Versuch nach 15 Minuten), Werbe-Zwischenseiten (werden übersprun
 ## Ablage und Datenschutz
 
 - **Gedächtnis, Warteliste, Bilder, Profil-Archiv:** verschlüsselt (AES-GCM) in einer unauffällig benannten Datenbank des Browsers auf poppen.de. poppen.de sieht nur unlesbare Daten. Der Schlüssel liegt im Tampermonkey-Speicher und als Kopie im Briefkasten.
-- **Fickliste und Textvorlagen:** ein gemeinsamer Bestand im Briefkasten (`schimmelreiter.github.io`, für keine Plattform lesbar), den alle Opa-Scan-Skripte benutzen. Format: [FORMAT.md](FORMAT.md).
+- **Fickliste und Textvorlagen:** ein gemeinsamer Bestand im Briefkasten (`schimmelreiter.github.io`, für keine Plattform lesbar), den alle Opa-Scan-Skripte benutzen. Format: [FORMAT.md](../../docs/FORMAT.md).
 - **Rettungsanker:** gepackte Kopie im Tampermonkey-Speicher (übersteht „Website-Daten löschen“). **Einstellungs-Spiegel** im Briefkasten (übersteht eine Neuinstallation).
 
 ## Daten sichern und austauschen
@@ -302,9 +302,9 @@ Schneidet die Abfragen der Seite an `/v2-api/` mit (nur neue Muster, je zwei Bei
 
 ## Abgleich mit JOYclub (gemeinsame Ablage)
 
-Das Skript teilt Fickliste, Textvorlagen und Termin-Datei mit dem [JOYclub-Skript](https://github.com/Schimmelreiter/joyclub-opa-scan) (ab 1.96) über eine gemeinsame Ablage, ohne Export/Import von Hand.
+Das Skript teilt Fickliste, Textvorlagen und Termin-Datei mit dem [JOYclub-Skript](../joyclub/README.md) (ab 1.96) über eine gemeinsame Ablage, ohne Export/Import von Hand.
 
-- Beide Skripte betten eine leere, neutrale Seite (GitHub Pages, `opa-gemeinsam`) unsichtbar ein und lesen und schreiben deren lokalen Speicher. Der Seiten-Code von poppen.de und JOYclub kommt nicht heran. Das Format steht in [FORMAT.md](FORMAT.md).
+- Beide Skripte betten eine leere, neutrale Seite (GitHub Pages, `opa-gemeinsam`) unsichtbar ein und lesen und schreiben deren lokalen Speicher. Der Seiten-Code von poppen.de und JOYclub kommt nicht heran. Das Format steht in [FORMAT.md](../../docs/FORMAT.md).
 - Jeder Eintrag ist versioniert; gleichzeitiges Schreiben wird gemischt oder landet im Papierkorb (Textvorlagen 30 Tage).
 - Das JOYclub-Skript macht beim Speichern sein Profil zum Hauptprofil; das poppen-Profil steht dann unter „Auch auf …“. Das poppen-Skript findet solche Personen trotzdem und baut sie nicht um.
 - Smileys werden zwischen den Plattformen übersetzt.

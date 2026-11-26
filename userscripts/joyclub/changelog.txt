@@ -1,6 +1,10 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.05 (26.11.2026)
+- Umzug: Das Repo heißt jetzt swinger-companion, das Skript liegt unter userscripts/joyclub/. Update-Adresse, Anleitung und „Fehler melden“ zeigen dorthin
+- Gemeinsame Ablage unter der festen Adresse schimmelreiter.github.io/briefkasten.html. Die alte Adresse bleibt erreichbar; die Daten bleiben unverändert erhalten (gleicher Ursprung)
+
 2.04 (23.11.2026)
 - ClubMail, Profilbesucher, „Mögen mich“: Abzeichen mit „?“ (Alter unbekannt oder Geburtstag im Zeitraum) holen das Alter gesammelt über die Schnittstelle nach (bis 50 je Abruf, kein Profilaufruf) und färben sich danach richtig ein
 

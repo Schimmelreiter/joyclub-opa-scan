@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         JOYclub – Mitgliedersuche nach Alter ignorieren
 // @namespace    local.joyclub-age-filter
-// @version      2.04
+// @version      2.05
 // @description  Opa-Scan für JOYclub: Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe (Männer, Frauen, Paare) und Quelle durchsuchen und Treffer ignorieren; Einstellungsseite, Whitelist, Ignorierlisten-Limit, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
 // @match        https://www.poppen.de/*
 // @match        https://poppen.de/*
+// @match        https://schimmelreiter.github.io/briefkasten.html*
 // @match        https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=joyclub.de
 // @grant        GM_getValue
@@ -24,9 +25,9 @@
 // @connect      gstatic.com
 // @connect      apiv2.joyclub.com
 // @run-at       document-start
-// @homepageURL  https://github.com/Schimmelreiter/joyclub-opa-scan
-// @updateURL    https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
-// @downloadURL  https://raw.githubusercontent.com/Schimmelreiter/joyclub-opa-scan/main/joyclub-mitglieder-alter-blockieren.user.js
+// @homepageURL  https://github.com/Schimmelreiter/swinger-companion
+// @updateURL    https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/joyclub/joyclub-mitglieder-alter-blockieren.user.js
+// @downloadURL  https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/joyclub/joyclub-mitglieder-alter-blockieren.user.js
 // ==/UserScript==
 
 const __jafGmSet = GM_setValue, __jafGmDel = GM_deleteValue; // vor der Abschirmung durch die Kontobindung
@@ -43,7 +44,7 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
   // Eine leere Seite ohne Code auf GitHub Pages wird unsichtbar eingebettet. Beide Skripte laufen darin und tauschen über
   // deren localStorage aus – die Seiten-Codes von JOYclub und poppen.de kommen an diesen Speicher nicht heran.
   // Seite ↔ eigenes iframe nur über den eigenen GM-Speicher (kein postMessage). Auf poppen.de ist das Skript passiv.
-  const BK_URL = 'https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html';
+  const BK_URL = 'https://schimmelreiter.github.io/briefkasten.html';
   const BK_HOST = 'schimmelreiter.github.io';
   const BK_ME = 'joyclub', BK_OTHER = 'poppen';
   const K_BK_OUT = 'jaf_bk_outbox';   // eigener Postausgang { v, platform, account, ts, items: [{ seq, ts, kind, data }] }
@@ -97,7 +98,7 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
     publish(); read();
     setInterval(() => { read(); GM_setValue(K_BK_ALIVE, { ts: Date.now(), ls: true }); }, 5000);
   }
-  // ---------- Gemeinsame Ablage „opa-gemeinsam“ im Briefkasten (ab 1.96, Formatdefinition: FORMAT.md im poppen-Repo) ----------
+  // ---------- Gemeinsame Ablage „opa-gemeinsam“ im Briefkasten (ab 1.96, Formatdefinition: docs/FORMAT.md) ----------
   // IndexedDB auf github.io, für alle Opa-Scan-Skripte; nur dieser Rahmen öffnet sie. Seite ↔ Rahmen über den eigenen
   // Tampermonkey-Speicher: Anfragen jaf_rpcq_<Tab>, Antworten jaf_rpcr_<Tab>, Lebenszeichen jaf_rpca_<Tab>.
   const SHARED_DB = 'opa-gemeinsam';
@@ -1433,7 +1434,7 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
     NOTE_OPEN_TEXTS: ['notiz'],
     NOTE_SAVE_TEXTS: ['speichern', 'übernehmen', 'fertig', 'ok'],
   };
-  const REPO_URL = 'https://github.com/Schimmelreiter/joyclub-opa-scan';
+  const REPO_URL = 'https://github.com/Schimmelreiter/swinger-companion';
   const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const normType = (t) => norm(t).replace(/[-\s]/g, '');
   const SCAN_SOURCES = ['Likes', 'Besucher', 'Party', 'Gruppen', 'Suche'];

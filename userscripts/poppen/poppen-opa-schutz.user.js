@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Poppen.de – Besucher nach Alter ignorieren
 // @namespace    local.visitor-age-filter
-// @version      2.43
+// @version      2.44
 // @description  Opa-Schutz für poppen.de: erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
-// @homepageURL  https://github.com/Schimmelreiter/poppen-opa-scan
-// @supportURL   https://github.com/Schimmelreiter/poppen-opa-scan/issues
-// @updateURL    https://raw.githubusercontent.com/Schimmelreiter/poppen-opa-scan/main/poppen-opa-schutz.user.js
-// @downloadURL  https://raw.githubusercontent.com/Schimmelreiter/poppen-opa-scan/main/poppen-opa-schutz.user.js
+// @homepageURL  https://github.com/Schimmelreiter/swinger-companion
+// @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
+// @updateURL    https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/poppen/poppen-opa-schutz.user.js
+// @downloadURL  https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/poppen/poppen-opa-schutz.user.js
 // @match        https://www.poppen.de/*
+// @match        https://schimmelreiter.github.io/briefkasten.html*
 // @match        https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html*
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PGNpcmNsZSBjeD0iMzIiIGN5PSIzMiIgcj0iMzAiIGZpbGw9IiMyYjJiMmIiIHN0cm9rZT0iI2U1MzkzNSIgc3Ryb2tlLXdpZHRoPSI1Ii8+PHRleHQgeD0iMzIiIHk9IjQxIiBmb250LWZhbWlseT0iQXJpYWwsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjUiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj41MCs8L3RleHQ+PGxpbmUgeDE9IjEyIiB5MT0iNTIiIHgyPSI1MiIgeTI9IjEyIiBzdHJva2U9IiNlNTM5MzUiIHN0cm9rZS13aWR0aD0iNiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+
 // @grant        GM_getValue
@@ -30,7 +31,7 @@
 (function () {
   'use strict';
   const VERSION = '2.43';
-  const REPO_URL = 'https://github.com/Schimmelreiter/poppen-opa-scan';
+  const REPO_URL = 'https://github.com/Schimmelreiter/swinger-companion';
   const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) || window;
   // Eingebaute Funktionen gleich beim Start festhalten (das Skript läuft in der Seitenwelt; spätere Veränderungen
   // durch Seitenskripte an crypto/indexedDB wirken so nicht mehr auf Verschlüsselung und Datenbank)
@@ -7359,7 +7360,7 @@
   // Briefkasten: automatischer Abgleich von Fickliste und Textvorlagen mit dem JOYclub-Skript
   // über eine leere, neutrale Seite (GitHub Pages). Siehe Nachtrag „Abgleich über den Briefkasten“.
   // =====================================================================================
-  const BK_URL = 'https://schimmelreiter.github.io/joyclub-opa-scan/briefkasten.html';
+  const BK_URL = 'https://schimmelreiter.github.io/briefkasten.html';
   const BK_HOST = 'schimmelreiter.github.io';
   const PLAT = (() => { const h = location.hostname; return /joyclub\.de$/.test(h) ? 'joyclub' : /poppen\.de$/.test(h) ? 'poppen' : h === BK_HOST ? 'bk' : 'other'; })();
   // Betriebsart: 'poppen' (eigene Seite) | 'joyclub' (passiv) | 'briefkasten' (iframe) | 'inert' (nichts tun)

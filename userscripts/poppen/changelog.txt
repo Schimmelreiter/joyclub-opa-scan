@@ -1,6 +1,10 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.44 (26.11.2026)
+- Umzug: Das Skript liegt jetzt im Repo swinger-companion unter userscripts/poppen/ (gemeinsam mit dem JOYclub-Skript). Update-Adresse, Anleitung und „Fehler melden“ zeigen dorthin
+- Gemeinsame Ablage unter der festen Adresse schimmelreiter.github.io/briefkasten.html. Die alte Adresse bleibt erreichbar; die Daten bleiben unverändert erhalten (gleicher Ursprung)
+
 2.43 (09.11.2026)
 - Behoben: Das Skript hängte seine Tab-Kennung („;vaf:…“) an den Namen jedes Fensters, auch an fremde Frames auf joyclub.de. Dadurch erkannte das JOYclub-Skript seine Hintergrund-Frames nicht mehr, und Party-Scans brachen seit etwa 28.10. ab (JOYclub-Skript ab 2.01 robust dagegen). Die Kennung liegt jetzt im sessionStorage; Fensternamen fasst das Skript nicht mehr an, alte Reste entfernt es einmalig nur im eigenen obersten Fenster
 - Das Skript läuft nicht mehr auf joyclub.de (dort hatte es seit 2.38 nichts mehr zu tun). Die gemeinsame Ablage bleibt unverändert
