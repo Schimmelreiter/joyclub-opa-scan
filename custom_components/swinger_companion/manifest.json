@@ -1,0 +1,13 @@
+{
+  "domain": "swinger_companion",
+  "name": "Swinger Companion",
+  "codeowners": ["@Schimmelreiter"],
+  "config_flow": true,
+  "dependencies": ["http", "webhook"],
+  "documentation": "https://github.com/Schimmelreiter/swinger-companion",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/Schimmelreiter/swinger-companion/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

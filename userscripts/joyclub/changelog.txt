@@ -1,6 +1,10 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.10 (26.11.2026)
+- Neu: Home Assistant. In den Einstellungen unter Allgemein › Home Assistant die Adresse aus der Integration „Swinger Companion“ eintragen (mit dem Schlüssel nach „#“). Das Skript sendet die Fickliste (beider Seiten) nach jeder Änderung, gebündelt nach 10 Sekunden, sonst alle 6 Stunden; Vorschaubilder nur, wenn Home Assistant sie anfordert, auf 160 px verkleinert. Alles AES-256-GCM-verschlüsselt, der Schlüssel verlässt den Browser nie
+- Tampermonkey fragt einmal nach der Erlaubnis, die Adresse von Home Assistant aufzurufen (@connect *)
+
 2.09 (26.11.2026)
 - Abgleich mit poppen.de: Ein Fehler wird nur noch angezeigt, wenn er nach dem letzten erfolgreichen Abgleich auftrat, mit Uhrzeit (bisher blieb der letzte Fehler für immer stehen)
 - Textvorlagen, Termine: Die Termin-Knöpfe werden nicht mehr links abgeschnitten (kürzere Beschriftung, der volle Text steht im Tooltip)

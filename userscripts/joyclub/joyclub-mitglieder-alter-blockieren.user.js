@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.09
+// @version      2.10
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -26,6 +26,7 @@
 // @connect      www.google.com
 // @connect      gstatic.com
 // @connect      apiv2.joyclub.com
+// @connect      *
 // @run-at       document-start
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @updateURL    https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/joyclub/joyclub-mitglieder-alter-blockieren.user.js
@@ -10727,6 +10728,24 @@ fragment ImageUIDataFragment on ImageUIData {
       showT();
       row2(tb2, 'Party-Termine', 'Werden in Textvorlage umgewandelt', txt('Textdatei mit Terminen', 'jaf-val'), jb('Datei wählen …', pickT), st);
     }
+    {
+      // Home Assistant (Integration „Swinger Companion“): Adresse samt Schlüssel nach „#“
+      const inp = document.createElement('input');
+      inp.type = 'password'; inp.className = 'form-control'; inp.autocomplete = 'off'; inp.spellcheck = false;
+      inp.placeholder = 'https://…/api/webhook/…#…'; inp.value = GM_getValue(K_HA_URL, '') || '';
+      inp.style.cssText = 'width:100%;min-width:260px;padding:8px;border-radius:8px;background:#24272a;color:#eee;border:1px solid #3a3e42;font:14px system-ui';
+      const st = txt(haStatusText(), 'jaf-st');
+      const save = async () => {
+        const v = inp.value.trim();
+        if (v && !haParse(v)) { st.textContent = 'Das ist keine vollständige Adresse aus Home Assistant (…/api/webhook/…#Schlüssel).'; return; }
+        GM_setValue(K_HA_URL, v); GM_setValue(K_HA_STAT, {});
+        if (!v) { st.textContent = haStatusText(); return; }
+        st.textContent = 'Sende …';
+        await haSend(true);
+        st.textContent = haStatusText();
+      };
+      row2(tb2, 'Home Assistant', 'Fickliste an die Integration „Swinger Companion“ senden', inp, jb('Speichern und senden', save), st);
+    }
     // ---- AWO-Faktor ----
     renderAwoSettings(d, section, row, grpRefs);
     // ---- Sicherung (immer offen, direkt vor den Experten-Einstellungen) ----
@@ -11017,7 +11036,7 @@ fragment ImageUIDataFragment on ImageUIData {
   const FL_ST_DEFAULT = ['will', 'gef', 'nie']; // „Nein, danke!“ beim ersten Aufruf/Zurücksetzen aus
   const flLabel = (st) => (FL_ST[st] ? FL_ST[st].label : 'Ficken?');
   const getFl = () => GM_getValue(K_FL, {}) || {};
-  const setFl = (m) => GM_setValue(K_FL, m);
+  const setFl = (m) => { GM_setValue(K_FL, m); try { haSoon(); } catch (e) { /* egal */ } };
   const flGet = (pid) => getFl()[pid] || null;
   function flPut(p) {
     const m = getFl();
@@ -15459,6 +15478,99 @@ fragment ImageUIDataFragment on ImageUIData {
       bkStat({ sent: Date.now() });
     } catch (e) { bkStat({ err: e.message || String(e) }); } finally { shTplBusy = false; }
   }
+
+  // ---- Home Assistant (ab 2.10): Fickliste an die Integration „Swinger Companion“ ----
+  // Adresse aus Home Assistant: https://<ha>/api/webhook/<id>#<Schlüssel>. Der Schlüssel (nach „#“) verlässt den Browser nie;
+  // gesendet wird AES-256-GCM-verschlüsselt. Nach jeder Änderung der Fickliste (10 s gebündelt), sonst alle 6 Stunden.
+  // Vorschaubilder nur, wenn Home Assistant sie anfordert (neu oder geändert), auf 160 px verkleinert.
+  const K_HA_URL = 'jaf_ha_url', K_HA_STAT = 'jaf_ha_stat', K_HA_DIRTY = 'jaf_ha_dirty', K_HA_LOCK = 'jaf_ha_lock';
+  function haParse(v) {
+    const m = /^(https?:\/\/[^#\s]+\/api\/webhook\/[A-Za-z0-9_-]+)#([A-Za-z0-9_-]{43})$/.exec(String(v || '').trim());
+    return m ? { url: m[1], key: m[2] } : null;
+  }
+  function haStatusText() {
+    const a = haParse(GM_getValue(K_HA_URL, ''));
+    if (!a) return 'Nicht eingerichtet – die Adresse steht in Home Assistant unter Swinger Companion › Konfigurieren.';
+    const s = GM_getValue(K_HA_STAT, {}) || {};
+    if (s.errAt && (!s.at || s.errAt > s.at)) return `Fehler um ${fmtTs(s.errAt)}: ${s.err}`;
+    return s.at ? `Zuletzt gesendet ${fmtTs(s.at)} · ${s.count || 0} Personen in Home Assistant` : 'Noch nichts gesendet.';
+  }
+  let haTimer = 0;
+  function haSoon() {
+    if (window.top !== window || !haParse(GM_getValue(K_HA_URL, ''))) return;
+    GM_setValue(K_HA_DIRTY, Date.now());
+    clearTimeout(haTimer); haTimer = setTimeout(() => haSend(false), 10000);
+  }
+  const haB64Url = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
+  async function haKey(k) { return crypto.subtle.importKey('raw', haB64Url(k), 'AES-GCM', false, ['encrypt', 'decrypt']); }
+  function haShrink(dataUrl) {
+    return new Promise((resolve) => {
+      if (!dataUrl || !/^data:image\//.test(dataUrl)) { resolve(''); return; }
+      const im = new Image();
+      im.onload = () => {
+        try {
+          const f = Math.min(1, 160 / Math.max(im.naturalWidth || 1, im.naturalHeight || 1));
+          const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.naturalWidth * f)); c.height = Math.max(1, Math.round(im.naturalHeight * f));
+          c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/jpeg', 0.8));
+        } catch (e) { resolve(dataUrl.length < 150000 ? dataUrl : ''); }
+      };
+      im.onerror = () => resolve('');
+      im.src = dataUrl;
+    });
+  }
+  function haPost(url, body) {
+    return new Promise((resolve, reject) => GM_xmlhttpRequest({
+      method: 'POST', url, headers: { 'Content-Type': 'application/json' }, data: JSON.stringify(body), timeout: 60000,
+      onload: (r) => resolve(r), onerror: () => reject(new Error('Home Assistant nicht erreichbar')), ontimeout: () => reject(new Error('Zeitüberschreitung')) }));
+  }
+  let haBusy = false;
+  async function haSend(force) {
+    const a = haParse(GM_getValue(K_HA_URL, ''));
+    if (!a || haBusy || window.top !== window) return;
+    const s0 = GM_getValue(K_HA_STAT, {}) || {}, dirty = GM_getValue(K_HA_DIRTY, 0) || 0;
+    if (!force && dirty <= (s0.at || 0) && Date.now() - (s0.at || 0) < 6 * 3600000) return;
+    const lock = GM_getValue(K_HA_LOCK, 0) || 0;
+    if (!force && Date.now() - lock < 90000) return; // ein anderer Tab sendet gerade
+    GM_setValue(K_HA_LOCK, Date.now());
+    haBusy = true;
+    const started = Date.now();
+    try {
+      const key = await haKey(a.key);
+      const fl = getFl();
+      const persons = flExportPersons();
+      const thumbKeys = {};
+      for (const x of persons) { const q = fl[x.__lid]; if (q && q.img) thumbKeys[x.id] = String(q.img); }
+      const ver = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '';
+      let need = [], ans = null;
+      for (let round = 0; round < 12; round++) {
+        const thumbs = {};
+        for (const pid of need.slice(0, 40)) {
+          const x = persons.find((y) => y.id === pid), q = x && fl[x.__lid];
+          const d = q && q.img ? await haShrink(GM_getValue(K_FLI + q.img, '')) : '';
+          if (d) thumbs[pid] = d;
+        }
+        const payload = { format: 'swinger-companion', v: 1, platform: 'joyclub', script: ver, account: { uid: String(tplMe() || ''), nick: ownNick() || '' }, persons, thumbKeys, thumbs };
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
+        const r = await haPost(a.url, { v: 1, iv: b64(iv), data: b64(ct) });
+        if (r.status === 403) throw new Error('Schlüssel passt nicht – Adresse in Home Assistant neu kopieren');
+        if (r.status === 404) throw new Error('Adresse unbekannt – Integration in Home Assistant eingerichtet?');
+        if (r.status < 200 || r.status >= 300) throw new Error(`Home Assistant antwortet mit ${r.status}`);
+        const env = JSON.parse(r.responseText || '{}');
+        const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data));
+        ans = JSON.parse(new TextDecoder().decode(pt));
+        const sentNow = Object.keys(thumbs);
+        need = (ans.need || []).filter((pid) => !sentNow.includes(pid) || !thumbs[pid]);
+        need = need.filter((pid) => { const x = persons.find((y) => y.id === pid); return x && fl[x.__lid] && GM_getValue(K_FLI + fl[x.__lid].img, ''); });
+        if (!need.length || sentNow.length === 0 && round > 0) break;
+      }
+      GM_setValue(K_HA_STAT, { at: started, count: ans ? ans.count : 0 });
+    } catch (e) {
+      GM_setValue(K_HA_STAT, Object.assign({}, GM_getValue(K_HA_STAT, {}) || {}, { err: e.message || String(e), errAt: Date.now() }));
+    } finally { haBusy = false; GM_setValue(K_HA_LOCK, 0); }
+  }
+  if (window.top === window && /(^|\.)joyclub\.de$/.test(location.hostname)) { setTimeout(() => haSend(false), 15000); setInterval(() => haSend(false), 15 * 60000); }
 
   // ---- Termin-Datei (meta.termine_file): eine Datei für alle, neuere gewinnt, Text immer roh ----
   // h = Datei-Griff (oder null), picked = gerade neu gewählt → { text, note } oder null

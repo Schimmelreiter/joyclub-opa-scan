@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
 
-Stand: Version 2.09 – Änderungen siehe [changelog.txt](changelog.txt). Teil von [Swinger Companion](../../README.md).
+Stand: Version 2.10 – Änderungen siehe [changelog.txt](changelog.txt). Teil von [Swinger Companion](../../README.md).
 
 ---
 
@@ -770,3 +770,14 @@ Beim Ansehen von „Mögen mich“, „Profilbesuche“ und der ClubMail merkt s
 - **Fehleranzeige:** Startfehler erscheinen in einem Panel mit „Alles zurücksetzen“.
 - **Popups:** alle im selben Stil (dunkler Kasten, große Buttons untereinander wie bei JOYclub; rot nur für Buttons, die einen Scan starten; vorausgewählter Button weiß umrandet, Esc schließt).
 - **Umkreise:** `CONFIG.AREAS` enthält 90 Städte mit GeoNames-ID, deren 50-km-Umkreise ganz Deutschland abdecken – gruppiert nach Bundesland (NRW zuerst und vollständig, dann absteigend).
+
+## Home Assistant
+
+Mit der Integration **Swinger Companion** (in diesem Repo, `custom_components/swinger_companion`) zeigt Home Assistant die Fickliste: wer noch auf der Liste steht, wer schon gefickt ist, das letzte Treffen – mit kleinen Vorschaubildern.
+
+1. In Home Assistant die Integration einrichten (eine Person, z. B. „Alex“), dann bei ihr auf **Konfigurieren**: Dort steht die Adresse für das Skript.
+2. Im Skript: **Opa-Schutz › Allgemein › Home Assistant** die Adresse vollständig einfügen (mit dem Teil nach „#“) und **Speichern und senden**. Tampermonkey fragt einmal, ob das Skript die Adresse aufrufen darf.
+3. Das Konto erscheint in Home Assistant von selbst als Gerät unter der Person.
+
+Gesendet wird nach jeder Änderung der Fickliste (10 s gebündelt), sonst alle 6 Stunden. Die Daten sind mit AES-256-GCM verschlüsselt; der Schlüssel steht nach „#“ und verlässt den Browser nie. Die Adresse nicht weitergeben – unter *Konfigurieren* lässt sich jederzeit eine neue erzeugen.
+

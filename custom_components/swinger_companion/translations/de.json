@@ -1,0 +1,76 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Person",
+        "description": "Eine Person mit ihren Konten auf den Seiten (z. B. JOYclub, poppen.de). Die Konten melden sich selbst, sobald das Skript im Browser dieser Person zum ersten Mal sendet.",
+        "data": {
+          "person": "Name"
+        }
+      }
+    },
+    "error": {
+      "empty": "Bitte einen Namen eingeben."
+    },
+    "abort": {
+      "already_configured": "Diese Person gibt es schon."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Adresse für die Skripte",
+        "description": "In den Einstellungen des Skripts (JOYclub: Opa-Schutz › Allgemein › Home Assistant) diese Adresse eintragen – vollständig, mit dem Teil nach „#“:\n\n`{address}`\n\nDer Teil nach „#“ ist der Schlüssel; er verlässt den Browser nie, die Daten kommen verschlüsselt an. Die Adresse nicht weitergeben.",
+        "data": {
+          "renew": "Neue Adresse erzeugen (die alte gilt dann nicht mehr)"
+        }
+      }
+    }
+  },
+  "config_subentries": {
+    "account": {
+      "initiate_flow": {
+        "user": "Konto hinzufügen"
+      },
+      "entry_type": "Konto",
+      "step": {
+        "user": {
+          "title": "Konto hinzufügen",
+          "description": "Normalerweise nicht nötig: Ein Konto erscheint von selbst, sobald sein Skript sendet.",
+          "data": {
+            "platform": "Seite",
+            "nick": "Nick",
+            "uid": "Profil-ID (falls bekannt)"
+          }
+        }
+      },
+      "abort": {
+        "already_configured": "Dieses Konto gibt es schon."
+      }
+    }
+  },
+  "selector": {
+    "platform": {
+      "options": {
+        "joyclub": "JOYclub",
+        "poppen": "poppen.de"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "want": {
+        "name": "Zu ficken"
+      },
+      "done": {
+        "name": "Gefickt"
+      },
+      "last_meet": {
+        "name": "Letztes Treffen"
+      },
+      "last_sent": {
+        "name": "Letzte Übertragung"
+      }
+    }
+  }
+}

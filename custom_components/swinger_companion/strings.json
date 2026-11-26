@@ -1,0 +1,76 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Person",
+        "description": "One person with their accounts on the sites (e.g. JOYclub, poppen.de). The accounts appear by themselves when the script in this person's browser sends for the first time.",
+        "data": {
+          "person": "Name"
+        }
+      }
+    },
+    "error": {
+      "empty": "Please enter a name."
+    },
+    "abort": {
+      "already_configured": "This person already exists."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Address for the scripts",
+        "description": "Enter this address in the script's settings (JOYclub: Opa-Schutz › General › Home Assistant) – complete, including the part after “#”:\n\n`{address}`\n\nThe part after “#” is the key; it never leaves the browser, the data arrives encrypted. Do not share the address.",
+        "data": {
+          "renew": "Issue a new address (the old one stops working)"
+        }
+      }
+    }
+  },
+  "config_subentries": {
+    "account": {
+      "initiate_flow": {
+        "user": "Add account"
+      },
+      "entry_type": "Account",
+      "step": {
+        "user": {
+          "title": "Add account",
+          "description": "Usually not needed: an account appears by itself once its script sends.",
+          "data": {
+            "platform": "Site",
+            "nick": "Nick",
+            "uid": "Profile ID (if known)"
+          }
+        }
+      },
+      "abort": {
+        "already_configured": "This account already exists."
+      }
+    }
+  },
+  "selector": {
+    "platform": {
+      "options": {
+        "joyclub": "JOYclub",
+        "poppen": "poppen.de"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "want": {
+        "name": "Want to fuck"
+      },
+      "done": {
+        "name": "Fucked"
+      },
+      "last_meet": {
+        "name": "Last meeting"
+      },
+      "last_sent": {
+        "name": "Last transfer"
+      }
+    }
+  }
+}
