@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.3
+// @version      0.1.4
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -318,7 +318,7 @@
   function scanStart() {
     const m = me();
     const steps = ['/my/friends', '/my/friend-requests', '/my/blocked-users', '/notifications', '/my/messages', '@conv', '/dating?sort=activity', '@datingMore'];
-    if (m && m.nick) steps.unshift('/users/' + m.nick.toLowerCase());
+    if (m && m.nick) steps.unshift('@profile:' + m.nick);
     const p = partner();
     steps.push(p ? '@profile:' + p : '@profile:first-friend');
     steps.push('@sub:videos', '@sub:shorts', '@sub:photos', '@gallery', '@photo', '@video');
@@ -327,14 +327,20 @@
     recEvent('Scan-Lauf gestartet', { info: `${steps.length} Schritte` });
     scanTick();
   }
+  // 0.1.4: jede Seite höchstens einmal ansteuern – leitet xHamster um (z. B. nach /users/profiles/…), wird genommen, was kam
+  function goOnce(st, s, url) {
+    if (st.ctx.tried === s) return 'here';
+    st.ctx.tried = s; gs(K.scan, st);
+    go(url);
+    return 'nav';
+  }
   async function scanStep(st, s) {
     const ini = initials() || {};
-    if (s.startsWith('/')) { if (location.pathname + location.search !== s) { go(abs(s)); return 'nav'; } return 'here'; }
+    if (s.startsWith('/')) return location.pathname + location.search === s ? 'here' : goOnce(st, s, abs(s));
     if (s === '@conv') {
       const c = (ini.conversationCollection || [])[0];
       if (!c || !c.pageURL) return 'skip';
-      if (abs(c.pageURL) !== location.href) { go(abs(c.pageURL)); return 'nav'; }
-      return 'here';
+      return abs(c.pageURL) === location.href ? 'here' : goOnce(st, s, abs(c.pageURL));
     }
     if (s === '@datingMore') {
       const nx = [...document.querySelectorAll('a, button')].find((e) => visible(e) && /^(next|show more|load more|more|weiter|mehr)$/i.test(e.textContent.trim()));
@@ -357,8 +363,7 @@
       const g = st.ctx.gallery || ([...document.querySelectorAll('a[href*="/photos/gallery/"]')].map((a) => a.href).find((h) => !/\/\d+\/\d+$/.test(h)));
       if (!g) return 'skip';
       st.ctx.gallery = g; gs(K.scan, st);
-      if (location.href !== g) { go(g); return 'nav'; }
-      return 'here';
+      return location.href === g ? 'here' : goOnce(st, s, g);
     }
     if (s === '@photo') {
       let p = st.ctx.photo;
@@ -366,14 +371,12 @@
       if (!p) p = ([...document.querySelectorAll('a[href*="/photos/gallery/"]')].map((a) => a.href).find((h) => /\/\d+\/\d+$/.test(h)) || '');
       if (!p) return 'skip';
       st.ctx.photo = p; gs(K.scan, st);
-      if (location.href !== abs(p)) { go(abs(p)); return 'nav'; }
-      return 'here';
+      return location.href === abs(p) ? 'here' : goOnce(st, s, abs(p));
     }
     if (s === '@video') {
       const v = st.ctx.video;
       if (!v) return 'skip';
-      if (location.href !== v) { go(v); return 'nav'; }
-      return 'here';
+      return location.href === v ? 'here' : goOnce(st, s, v);
     }
     return 'skip';
   }
@@ -466,9 +469,24 @@
     finally { actBusy = false; }
   }
   const next = (step, patch) => { actSave(Object.assign({ step }, patch || {})); setTimeout(actTick, 1500); };
+  // 0.1.4: höchstens 3 Seitenaufrufe je Schritt – sonst (Umleitung, Anmeldung …) bricht der Aktionstest ab statt endlos zu laden
+  function actGo(url) {
+    const a = gm(K.act, null);
+    if (!a) return;
+    const k = 'nav_' + a.step;
+    a[k] = (a[k] || 0) + 1;
+    if (a[k] > 3) {
+      gs(K.act, null);
+      recEvent('Aktionstest abgebrochen: Seite lässt sich nicht erreichen', { info: `${a.step} → ${url} (gelandet auf ${location.pathname})` });
+      uiStatus('Aktionstest abgebrochen – Seite nicht erreichbar, siehe Protokoll');
+      return;
+    }
+    gs(K.act, a);
+    go(url);
+  }
   async function actBlock(a) {
     uiStatus('Aktionstest 1/3: entblocken und wieder blockieren');
-    if (!/^\/my\/blocked-users\/?$/.test(location.pathname)) { go(abs('/my/blocked-users')); return; }
+    if (!/^\/my\/blocked-users\/?$/.test(location.pathname)) { actGo(abs('/my/blocked-users')); return; }
     const it = await waitFor(() => [...document.querySelectorAll('.item.friend')].find((x) => x.querySelector('a.unblock-user') && visible(x.querySelector('a.unblock-user')) && !sameNick(itemNick(x), a.partner)));
     if (!it) { recDom('Blockierte: kein Eintrag mit Unblock', document.querySelector('.friends-users-list, main') || document.body); recEvent('Entblocken: kein Eintrag gefunden'); next('conv'); return; }
     const nick = itemNick(it);
@@ -493,18 +511,18 @@
   }
   async function actConv(a) {
     uiStatus('Aktionstest 2/3: Chat mit ' + a.partner + ' öffnen');
-    if (!onProfile(a.partner)) { if (a.tried === 'conv') { recEvent('Partnerprofil nicht erreichbar', { info: location.pathname }); next('unfriend'); return; } actSave({ tried: 'conv' }); go(profileUrl(a.partner)); return; }
+    if (!onProfile(a.partner)) { if (a.tried === 'conv') { recEvent('Partnerprofil nicht erreichbar', { info: location.pathname }); next('unfriend'); return; } actSave({ tried: 'conv' }); actGo(profileUrl(a.partner)); return; }
     await sleep(1500);
     const dm = (initials() || {}).displayUserModel || {};
     recDom('Profil: Knopfleiste', document.querySelector('[data-role="controls-container"]'));
     if (!dm.messagesURL) { recEvent('Partnerprofil ohne Nachrichtenadresse'); next('unfriend'); return; }
     actSave({ conv: dm.messagesURL, step: 'msg', i: 0 });
-    go(abs(dm.messagesURL));
+    actGo(abs(dm.messagesURL));
   }
   const composer = () => document.querySelector('.xh-editable-content[contenteditable="true"]');
   const mineIds = () => new Set([...document.querySelectorAll('.message.mine[id^="message-"]')].map((e) => e.id));
   async function actMsg(a) {
-    if (a.conv && !location.pathname.startsWith(new URL(a.conv, location.origin).pathname.split('/').slice(0, 4).join('/'))) { go(abs(a.conv)); return; }
+    if (a.conv && !location.pathname.startsWith(new URL(a.conv, location.origin).pathname.split('/').slice(0, 4).join('/'))) { actGo(abs(a.conv)); return; }
     const ed = await waitFor(composer, 15000);
     if (!ed) { recDom('Chat: kein Eingabefeld', document.querySelector('.messages-main-view') || document.body); recEvent('Chat: Eingabefeld nicht gefunden'); next('unfriend'); return; }
     for (let i = a.i; i < MSG_VARIANTS.length; i++) {
@@ -538,7 +556,7 @@
   }
   async function actDel(a) {
     uiStatus('Aktionstest 2/3: Testnachrichten löschen');
-    if (a.conv && location.pathname.indexOf('/my/messages') !== 0) { go(abs(a.conv)); return; }
+    if (a.conv && location.pathname.indexOf('/my/messages') !== 0) { actGo(abs(a.conv)); return; }
     await waitFor(composer, 15000);
     let n = 0;
     for (const s of a.sent || []) {
@@ -561,7 +579,7 @@
   }
   async function actUnfriend(a) {
     uiStatus('Aktionstest 3/3: ' + a.partner + ' entfreunden');
-    if (!/^\/my\/friends\/?$/.test(location.pathname)) { go(abs('/my/friends')); return; }
+    if (!/^\/my\/friends\/?$/.test(location.pathname)) { actGo(abs('/my/friends')); return; }
     const it = await waitFor(() => [...document.querySelectorAll('.item.friend')].find((x) => sameNick(itemNick(x), a.partner)));
     if (!it) { recEvent('Entfreunden: Partner nicht in der Freundesliste', { info: a.partner }); next('invite', { unfriended: false }); return; }
     recDom('Freunde: Eintrag vorher', it);
@@ -576,7 +594,7 @@
   const friendState = (b) => { const u = b && b.querySelector('use'); return (u && (u.id || (u.getAttribute('xlink:href') || '').split('#')[1])) || ''; };
   async function actInvite(a) {
     uiStatus('Aktionstest 3/3: neue Freundschaftsanfrage an ' + a.partner);
-    if (!onProfile(a.partner)) { if (a.tried === 'invite') { recEvent('Partnerprofil nicht erreichbar', { info: location.pathname }); next('done'); return; } actSave({ tried: 'invite' }); go(profileUrl(a.partner)); return; }
+    if (!onProfile(a.partner)) { if (a.tried === 'invite') { recEvent('Partnerprofil nicht erreichbar', { info: location.pathname }); next('done'); return; } actSave({ tried: 'invite' }); actGo(profileUrl(a.partner)); return; }
     const b = await waitFor(friendBtn, 10000);
     if (!b) { recDom('Profil: kein Freundschaftsknopf', document.querySelector('[data-role="controls-container"]') || document.body); recEvent('Anfrage: Knopf nicht gefunden'); next('done'); return; }
     const s0 = friendState(b);

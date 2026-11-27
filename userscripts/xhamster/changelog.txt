@@ -1,6 +1,11 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.1.4 (27.11.2026)
+- Behoben: Der Scan-Lauf kam bei nicht öffentlichem eigenem Profil nicht aus dem Profil heraus (Umleitung nach
+  /users/profiles/…, endloses Neuladen). Jede Seite wird jetzt höchstens einmal angesteuert; leitet xHamster um, wird
+  genommen, was kam. Der Aktionstest bricht nach drei vergeblichen Seitenaufrufen je Schritt ab
+
 0.1.3 (27.11.2026)
 - Rekorder: Lesende /x-api-Anfragen landeten noch ohne Vorgangsnamen unter einem Eintrag. Adressen als URL-Objekt werden
   jetzt in Text gewandelt; bleibt der Name unerkannt, behält der Eintrag die neuesten Beispiele und vermerkt, was ankam
