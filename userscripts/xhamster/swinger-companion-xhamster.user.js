@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.2
+// @version      0.1.3
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -125,11 +125,12 @@
   let recBuf = null, recT = 0;
   function recGet() { if (!recBuf) recBuf = gm(K.rec, null) || { started: now(), pages: {}, req: {}, dom: {}, events: [] }; return recBuf; }
   function recSave() { clearTimeout(recT); recT = setTimeout(() => { if (recBuf) { recBuf.at = now(); gs(K.rec, recBuf); recBuf = null; } }, 800); }
-  function recPush(map, key, sample, max = 3) {
+  function recPush(map, key, sample, max = 3, rotate = false) {
     const r = recGet();
     const l = (r[map][key] = r[map][key] || { n: 0, samples: [] });
     l.n++;
     if (l.samples.length < max) l.samples.push(sample);
+    else if (rotate) { l.samples.shift(); l.samples.push(sample); }
     recSave();
   }
   function recEvent(what, data) {
@@ -160,8 +161,12 @@
       else if (typeof FormData !== 'undefined' && body instanceof W.FormData) { try { req = shrink(Object.fromEntries([...body.entries()].map(([k, v]) => [k, typeof v === 'string' ? v : '(Datei)'])), keepText); } catch (e) { req = '(FormData)'; } }
       else req = '(' + (body.constructor && body.constructor.name) + ')';
     }
-    const key = `${String(method || 'GET').toUpperCase()} ${host === location.hostname ? '' : host}${pathPattern(url)}${opNames(url, body)}`;
-    recPush('req', key, { at: now(), page: location.pathname, url: maskUrl(url), status, ctype: ctype || '', req, resp });
+    const ops = opNames(url, body);
+    const key = `${String(method || 'GET').toUpperCase()} ${host === location.hostname ? '' : host}${pathPattern(url)}${ops}`;
+    // /x-api ohne erkannten Vorgang: die neuesten Beispiele behalten und festhalten, was ankam (zur Fehlersuche)
+    const bare = !ops && /\/x-api\/?$/.test(pathPattern(url));
+    const dbg = bare ? { urlType: typeof url, bodyType: body == null ? String(body) : typeof body, rawUrl: maskStr(String(url).slice(0, 300)) } : undefined;
+    recPush('req', key, { at: now(), page: location.pathname, url: maskUrl(url), status, ctype: ctype || '', req, resp, dbg }, 3, bare);
   }
   // 0.1.1: xHamster bündelt viele Vorgänge über /x-api (Name im Rumpf oder im Parameter r) und /api/front/batch/<base64> –
   // dort nach dem Vorgang unterscheiden, sonst verdrängt die ständige Nutzerabfrage alle anderen Beispiele
@@ -189,7 +194,7 @@
       const of = W.fetch;
       if (of && !of.__xhRec) {
         const nf = function (input, init) {
-          const url = typeof input === 'string' ? input : (input && input.url) || String(input || '');
+          const url = typeof input === 'string' ? input : (input && typeof input.url === 'string' && input.url) || String((input && input.href) || input || '');
           const method = (init && init.method) || (input && input.method) || 'GET';
           const body = init && init.body;
           const p = of.apply(this, arguments);
@@ -204,7 +209,7 @@
       const XP = W.XMLHttpRequest.prototype;
       if (!XP.__xhRec) {
         const oo = XP.open, os = XP.send;
-        XP.open = function (m, u) { this.__xhm = m; this.__xhu = u; return oo.apply(this, arguments); };
+        XP.open = function (m, u) { this.__xhm = m; this.__xhu = String((u && u.href) || u || ''); return oo.apply(this, arguments); };
         XP.send = function (b) {
           const x = this;
           try {
