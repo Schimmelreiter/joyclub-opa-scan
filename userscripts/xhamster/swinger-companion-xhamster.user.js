@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.8
+// @version      0.1.9
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -434,16 +434,17 @@
   // =====================================================================
   const PARTY = '17.07.2026 - Club o6 in Gelsenkirchen - Die unanständige Drecksau-Party - ';
   const EV = 'joyclub.de/event/1768453.die_unanstaendige_drecksau_party.html';
+  // 0.1.9: Befund 0.1.8 – enthält die Nachricht „https://“, ersetzt xHamster die Zeichen 2–9 der Nachricht durch Sternchen
+  // („Party-Tipp:“ → „P********p:“), der Link selbst bleibt (über exit.php). Ohne „https://“ bleibt alles unverändert.
+  // Jetzt: wo genau maskiert wird und wie man es umgeht
   const MSG_VARIANTS = [
     'Hi! ' + PARTY + 'https://' + EV,
-    'Party-Tipp: ' + PARTY + 'https://www.' + EV,
-    'Wir gehen hin: ' + PARTY + EV,
-    'Kommst Du mit? ' + PARTY + 'joyclub.de',
-    'Treffen wir uns dort? ' + PARTY + 'joyclub . de / event / 1768453',
+    'https://' + EV + ' - ' + PARTY.replace(/ - $/, ''),
+    '>>>>>>>>> Hi! ' + PARTY + 'https://' + EV,
+    'Hi! ' + PARTY + 'www.' + EV,
+    'Hi! ' + PARTY + 'http://' + EV,
     'Hallo, ' + PARTY.replace(/ - $/, ''),
     'Termin: 17. Juli 2026 - Club o6 in Gelsenkirchen - Die unanständige Drecksau-Party',
-    'Termin: 17.07. - Club o6 in Gelsenkirchen - Die unanständige Drecksau-Party',
-    'Info: Club o6 in Gelsenkirchen - Die unanständige Drecksau-Party',
   ];
   function actStart() {
     const p = partner();
@@ -529,10 +530,13 @@
   async function actMsg(a) {
     // 0.1.8: xHamster leitet die Chat-Adresse um (z. B. neue Unterhaltung) – jede Chatseite mit dem Partner im Pfad gilt
     if (!inPartnerChat(a)) { recEvent('Chat: Umleitung', { info: location.pathname }); actGo(abs(a.conv)); return; }
-    const ed = await waitFor(composer, 15000);
+    const ed0 = await waitFor(composer, 15000);
+    const ed = ed0;
     if (!ed) { recDom('Chat: kein Eingabefeld', document.querySelector('.messages-main-view') || document.body); recEvent('Chat: Eingabefeld nicht gefunden'); next('unfriend'); return; }
     for (let i = a.i; i < MSG_VARIANTS.length; i++) {
       const text = MSG_VARIANTS[i];
+      // 0.1.9: xHamster baut das Eingabefeld nach einigen Nachrichten neu auf – jedes Mal frisch holen
+      const ed = (await waitFor(composer, 10000)) || ed0;
       uiStatus(`Aktionstest 2/3: Nachricht ${i + 1}/${MSG_VARIANTS.length}`);
       const before = mineIds();
       ed.focus();
