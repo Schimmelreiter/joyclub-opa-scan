@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.2.6 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.2.7 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -12,6 +12,9 @@ Stand: Version 0.2.6 – Änderungen siehe [changelog.txt](changelog.txt)
    https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/xhamster/swinger-companion-xhamster.user.js
 
 ## Was es tut
+
+- **Einstellungsseite „Opa-Schutz“** in „Edit profile“ (linke Leiste hinter „Privacy“, auch im Nutzer-Menü): Regeln von
+  poppen.de zum Nachsehen, Anzeige-Schalter, Opa-Scan (Länder, Höchstzahl, letzter Lauf, Start).
 
 - **Menü:** Alle Befehle stehen im Nutzer-Menü von xHamster (Klick auf den eigenen Avatar oben rechts) unter
   „Swinger Companion“ und zusätzlich im Tampermonkey-Menü; die Rekorder-Befehle der Testkonten nur im Tampermonkey-Menü.

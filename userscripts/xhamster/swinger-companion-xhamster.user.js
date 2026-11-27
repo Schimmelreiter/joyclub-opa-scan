@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.6
+// @version      0.2.7
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1078,7 +1078,7 @@
     rulesCache.ruhr = !!r.ruhr;
     rulesCache.popG = r.popG || [];
     rulesCache.sextype = r.sextype || [];
-    rulesCache.from = r.src === 'poppen' ? `poppen.de (Stand ${new Date(r.popAt || r.at || 0).toLocaleString()})` : 'Vorgaben des poppen-Skripts';
+    rulesCache.from = r.src === 'poppen' ? `poppen.de (Stand ${new Date(r.popAt || r.at || 0).toLocaleString('de-DE')})` : 'Vorgaben des poppen-Skripts';
     return rulesCache;
   }
   async function rulesRefresh(force = false) {
@@ -1658,6 +1658,109 @@
   }
 
   // =====================================================================
+  // Einstellungsseite „Opa-Schutz“ (ab 0.2.7) in „Edit profile“ (/my/edit/profile), Eintrag in der linken Leiste
+  // hinter „Privacy“. Die Regeln selbst werden im poppen-Skript geändert; hier stehen sie nur zum Nachsehen.
+  // =====================================================================
+  const SET_HASH = '#opa-schutz';
+  const setUrl = () => location.origin + '/my/edit/profile' + SET_HASH;
+  const onEditPage = () => /^\/my\/edit\/profile\/?$/.test(location.pathname);
+  function setRow(label, html, tip) {
+    return `<div class="field-row"><label>${esc(label)}${tip ? `<span class="additional-tip">${esc(tip)}</span>` : ''}</label><div class="field-container">${html}</div></div>`;
+  }
+  function setPanelHtml() {
+    const s = rules();
+    const o = opa();
+    const last = gm('xh_oscan_last', null);
+    const lim = (g) => (s.expert.sharedLimits ? g.src.global : g.src.suche) || [];
+    const grp = ['m', 'w', 'p'].map((gk) => {
+      const g = s.groups[gk]; const l = labelsOf(gk, s); const x = lim(g);
+      return `<tr><td>${{ m: 'Männer', w: 'Frauen', p: 'Paare' }[gk]}</td><td>${esc(l[0])} bis ${x[0]}</td><td>${esc(l[2])} bis ${x[1]}</td><td>${esc(l[4])} ab ${x[2]}</td><td>${g.visual ? 'ja' : 'nein'}</td><td>${g.ignore ? '<b style="color:#e53935">ja</b>' : 'nein'}</td></tr>`;
+    }).join('');
+    const sw = (id, on) => `<input type="checkbox" class="switcher" id="${id}" ${on ? 'checked' : ''}><label for="${id}" class="switcher-visible"></label>`;
+    const lastTxt = last ? `${last.mode === 'dry' ? 'Probelauf' : 'Blockieren'} am ${esc(new Date(last.at).toLocaleString('de-DE'))}: ${esc(last.why)} · ${last.seen} gesehen · ${last.hits} Treffer · ${last.done} blockiert${last.fail ? ` · ${last.fail} Fehler` : ''}` : 'noch keiner';
+    return `<fieldset><legend>Regeln von poppen.de</legend>
+      <p style="margin:0 0 10px">Altersgrenzen, Bezeichnungen und Whitelist kommen aus dem poppen-Skript und werden dort geändert. Stand: ${esc(s.from)}.</p>
+      <table style="border-collapse:collapse;margin-bottom:8px" class="xhsc-set-table"><tr><th></th><th>Stufe 1</th><th>Stufe 2</th><th>Stufe 3 (Grenze)</th><th>markieren</th><th>ignorieren</th></tr>${grp}</table>
+      ${setRow('Whitelist', `${(s.whitelist.names || []).length} Namen · Präfixe: ${esc((s.whitelist.prefixes || []).join(', ') || '–')}`, 'dazu immer: Freunde, Fickliste, Du selbst')}
+      ${setRow('Moppel-Liebhaber', s.moppel.on ? `an – Link „${esc((s.moppel.labels || [])[5] || 'XXL')}“ in der Kopfzeile` : 'aus')}
+      <div class="buttons-block" style="text-align:left"><button type="button" class="xh-button black" data-a="reload">Regeln neu laden</button></div></fieldset>
+      <fieldset><legend>Anzeige</legend>
+      ${setRow('Opas in der Dating-Suche ausblenden', sw('xhsc-set-hide', o.hide), 'aus = nur abdunkeln')}
+      </fieldset>
+      <fieldset class="last"><legend>Opa-Scan</legend>
+      ${setRow('Länder', `<input class="input-text" data-k="cty" value="${esc(gm('xh_oscan_cty', 'de,at,ch'))}" style="max-width:220px">`, 'Kürzel, durch Komma getrennt; leer = alle')}
+      ${setRow('Höchstens je Lauf blockieren', `<input class="input-text" data-k="max" type="number" min="1" value="${esc(gm('xh_oscan_max', 200))}" style="max-width:120px">`)}
+      ${setRow('Letzter Lauf', lastTxt)}
+      <div class="buttons-block" style="text-align:left;display:flex;gap:8px"><button type="button" class="xh-button black" data-a="dry">Probelauf (zählt nur)</button><button type="button" class="xh-button red" data-a="block">Opas blockieren</button></div></fieldset>`;
+  }
+  function setBind(box) {
+    const q = (sel) => box.querySelector(sel);
+    q('[data-a=reload]').onclick = async () => { await rulesRefresh(true); setFill(box); uiToast('Regeln neu geladen.'); };
+    q('#xhsc-set-hide').onchange = (e) => { const o = opa(); o.hide = !!e.target.checked; gs(K.opa, o); };
+    q('[data-k=cty]').onchange = (e) => gs('xh_oscan_cty', e.target.value.trim());
+    q('[data-k=max]').onchange = (e) => gs('xh_oscan_max', Math.max(1, parseInt(e.target.value, 10) || 200));
+    // Start mit den Werten dieser Seite (ohne Rückfragen nach Land und Höchstzahl)
+    q('[data-a=dry]').onclick = () => oscanStart('dry', true);
+    q('[data-a=block]').onclick = () => oscanStart('block', true);
+  }
+  function setFill(box) { box.innerHTML = setPanelHtml(); setBind(box); }
+  // linke Leiste: Eintrag „Opa-Schutz“ hinter „Privacy“ (Vorlage: ein vorhandener Eintrag)
+  function setMenu() {
+    if (!onEditPage()) return;
+    const ul = document.querySelector('[data-role="edit-menu"] ul');
+    if (!ul || ul.querySelector('.xhsc-set-li')) return;
+    const lis = [...ul.children];
+    const priv = lis.find((li) => /^\s*privacy\s*$/i.test(li.textContent)) || lis[lis.length - 1];
+    const proto = lis.find((li) => li.getAttribute('aria-current') !== 'page') || lis[0];
+    if (!priv || !proto) return;
+    const li = proto.cloneNode(true);
+    li.classList.add('xhsc-set-li');
+    li.setAttribute('aria-current', 'false');
+    const lab = li.querySelector('[class*="label-"]') || li;
+    lab.textContent = ' Opa-Schutz ';
+    priv.after(li);
+    li.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setOpen(); }, true);
+  }
+  let setState = null;
+  function setOpen() {
+    if (!onEditPage()) { location.assign(setUrl()); return; }
+    setMenu();
+    const ul = document.querySelector('[data-role="edit-menu"] ul');
+    const block = document.querySelector('.edit-profile-block .content-container-no-overflow') || document.querySelector('.edit-profile-block');
+    const li = ul && ul.querySelector('.xhsc-set-li');
+    if (!ul || !block || !li) return;
+    if (setState) return;
+    const lis = [...ul.children].filter((x) => x !== li);
+    const cur = lis.find((x) => x.getAttribute('aria-current') === 'page') || null;
+    // Klassen, die nur der gewählte Eintrag hat (gehasht, deshalb abgeguckt)
+    const selCls = cur ? [...cur.classList].filter((c) => lis.filter((x) => x !== cur).every((x) => !x.classList.contains(c))) : [];
+    const tabs = [...block.children].filter((x) => !x.classList.contains('xhsc-set'));
+    setState = { cur, selCls, tabs: tabs.map((t) => [t, t.style.display]) };
+    tabs.forEach((t) => { t.style.display = 'none'; });
+    if (cur) { selCls.forEach((c) => cur.classList.remove(c)); cur.setAttribute('aria-current', 'false'); }
+    selCls.forEach((c) => li.classList.add(c)); li.setAttribute('aria-current', 'page');
+    const box = document.createElement('div');
+    box.className = 'xhsc-set';
+    block.prepend(box);
+    setFill(box);
+    if (location.hash !== SET_HASH) try { history.replaceState(null, '', location.pathname + location.search + SET_HASH); } catch (e) { /* egal */ }
+    // anderer Eintrag der Leiste: Seite wie vorher, dann übernimmt xHamster (Lauscher vor dem von xHamster)
+    const leave = (ev) => {
+      const t = ev.target.closest('li');
+      if (!t || t === li || !setState) return;
+      ul.removeEventListener('click', leave, true);
+      box.remove();
+      setState.tabs.forEach(([el, d]) => { el.style.display = d; });
+      selCls.forEach((c) => li.classList.remove(c)); li.setAttribute('aria-current', 'false');
+      if (setState.cur) { selCls.forEach((c) => setState.cur.classList.add(c)); setState.cur.setAttribute('aria-current', 'page'); }
+      setState = null;
+      if (location.hash === SET_HASH) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* egal */ }
+    };
+    ul.addEventListener('click', leave, true);
+  }
+  function setCheckHash() { if (onEditPage() && location.hash === SET_HASH) setOpen(); }
+
+  // =====================================================================
   // Opa-Scan (ab 0.2.0): Dating-Suche nach den poppen-Regeln durchgehen und Opas blockieren
   // Erst Probelauf (zählt nur), dann Blockieren: der erste Block wird geprüft, danach Pausen von 2–5 s.
   // Ausgenommen: Whitelist, Freunde, Fickliste, man selbst, schon Blockierte, gelöschte Konten.
@@ -1714,15 +1817,16 @@
     }
     return out;
   }
-  function oscanStart(mode) {
+  // quiet: Länder und Höchstzahl nicht nachfragen (Einstellungsseite)
+  function oscanStart(mode, quiet = false) {
     const plan = oscanPlan();
     if (!plan.length) { alert('Nach den poppen-Regeln wird keine Gruppe ignoriert – nichts zu tun.'); return; }
-    const cty = prompt('Länder (Kürzel, durch Komma getrennt; leer = alle):', gm('xh_oscan_cty', 'de,at,ch'));
+    const cty = quiet ? gm('xh_oscan_cty', 'de,at,ch') : prompt('Länder (Kürzel, durch Komma getrennt; leer = alle):', gm('xh_oscan_cty', 'de,at,ch'));
     if (cty == null) return;
     gs('xh_oscan_cty', cty);
     let max = 0;
     if (mode === 'block') {
-      const v = prompt('Höchstens so viele in diesem Lauf blockieren:', String(gm('xh_oscan_max', 200)));
+      const v = quiet ? String(gm('xh_oscan_max', 200)) : prompt('Höchstens so viele in diesem Lauf blockieren:', String(gm('xh_oscan_max', 200)));
       if (v == null) return;
       max = Math.max(1, parseInt(v, 10) || 200); gs('xh_oscan_max', max);
       const dry = gm('xh_oscan_last', null);
@@ -1861,6 +1965,7 @@
   const toggleHide = () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? 'Opas werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).' : 'Opas werden nur abgedunkelt (ab dem nächsten Laden).'); };
   const ACTIONS = [
     { g: 'fl', icon: 'heart', label: () => 'Fickliste', fn: flOpen },
+    { g: 'fl', icon: 'shield', label: () => 'Opa-Schutz (Einstellungen)', fn: setOpen },
     { g: 'opa', icon: 'stop', label: () => '■ Anhalten (Opa-Scan, Scan-Lauf, Aktionstest)', fn: stopAll, dd: running },
     { g: 'opa', icon: 'scan', label: () => 'Opa-Scan: Probelauf (zählt nur)', fn: () => oscanStart('dry') },
     { g: 'opa', icon: 'block', label: () => 'Opa-Scan: Opas blockieren', fn: () => oscanStart('block') },
@@ -1888,6 +1993,7 @@
     reload: '<path d="M10 3a7 7 0 0 1 6.3 4H14v2h5V4h-2v1.7A9 9 0 1 0 19 10h-2a7 7 0 1 1-7-7Z"/>',
     eye: '<path d="M10 4c4.5 0 7.6 3.6 8.6 6-1 2.4-4.1 6-8.6 6S2.4 12.4 1.4 10C2.4 7.6 5.5 4 10 4Zm0 2.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/>',
     rec: '<circle cx="10" cy="10" r="5"/>',
+    shield: '<path d="M10 2 3 5v5c0 4.2 3 7.4 7 8 4-.6 7-3.8 7-8V5l-7-3Zm0 2.2 5 2.1V10c0 3.1-2.1 5.6-5 6.1-2.9-.5-5-3-5-6.1V6.3l5-2.1Z"/>',
     heart: '<path d="M10 17.3 8.9 16.3C4.8 12.6 2 10.1 2 7a4 4 0 0 1 4-4c1.5 0 3 .7 4 1.8A5.3 5.3 0 0 1 14 3a4 4 0 0 1 4 4c0 3.1-2.8 5.6-6.9 9.3L10 17.3Z"/>',
     send: '<path d="M2 3l16 7-16 7 2.5-7L2 3Zm3.8 6h5.7v2H5.8L5 13.6 13.4 10 5 6.4 5.8 9Z"/>',
   };
@@ -1967,13 +2073,15 @@
     if (gm(K.scan, null)) setTimeout(scanTick, 2500);
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
-    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); mopNav(); } catch (e) { /* egal */ } };
+    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); mopNav(); setMenu(); } catch (e) { /* egal */ } };
     navCss();
     // Nutzer-Menü: entsteht erst beim Öffnen – sofort ergänzen
     try { new MutationObserver(() => { try { ddInsert(); } catch (e) { /* egal */ } }).observe(document.body, { childList: true, subtree: true }); } catch (e) { /* egal */ }
     tick();
     flCheckHash();
     window.addEventListener('hashchange', flCheckHash);
+    setCheckHash();
+    window.addEventListener('hashchange', setCheckHash);
     setInterval(tick, 1500);
     // Seitenwechsel ohne Neuladen: Stand der neuen Seite aufzeichnen
     let last = location.href;

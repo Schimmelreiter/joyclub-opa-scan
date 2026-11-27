@@ -1,6 +1,12 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.7 (27.11.2026)
+- Einstellungsseite „Opa-Schutz“ in „Edit profile“ (linke Leiste hinter „Privacy“, auch über das Nutzer-Menü):
+  Regeln von poppen.de zum Nachsehen (Grenzen, Bezeichnungen, markieren/ignorieren, Whitelist, Moppel-Liebhaber) mit
+  „Regeln neu laden“, Schalter „Opas in der Dating-Suche ausblenden“, Opa-Scan mit Ländern, Höchstzahl, letztem Lauf
+  und Start von Probelauf und Blockieren. Direkt: https://xhamster.com/my/edit/profile#opa-schutz
+
 0.2.6 (27.11.2026)
 - Rekorder-Befehle (Scan-Lauf, Aktionstest, Rekorder …) nur noch im Tampermonkey-Menü, nicht im Nutzer-Menü von xHamster
 
