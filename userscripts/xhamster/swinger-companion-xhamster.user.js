@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.10
+// @version      0.1.11
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -437,24 +437,53 @@
   // 0.1.9: Befund 0.1.8 – enthält die Nachricht „https://“, ersetzt xHamster die Zeichen 2–9 der Nachricht durch Sternchen
   // („Party-Tipp:“ → „P********p:“), der Link selbst bleibt (über exit.php). Ohne „https://“ bleibt alles unverändert.
   // Jetzt: wo genau maskiert wird und wie man es umgeht
+  // 0.1.11: Befund 0.1.10 – 10 Sternchen vorn fangen die Maskierung ab (sichtbar unverändert, Link klickbar); ein als
+  // Text eingefügter Zeilenumbruch geht verloren. Jetzt: wie bekommt man zwei Zeilen (Alt+Enter, Einfügen wie Strg+V, <br>)
+  const L1 = '********** Da findest Du mich:', L2 = PARTY + 'https://' + EV;
   const MSG_VARIANTS = [
-    'Hi! ' + PARTY + 'https://' + EV,
-    'https://' + EV + ' - ' + PARTY.replace(/ - $/, ''),
-    '>>>>>>>>> Hi! ' + PARTY + 'https://' + EV,
-    // 0.1.10: Vorschlag des Nutzers – Sternchen als Rahmen, die die Maskierung „abfangen“
-    '********** Da findest Du mich: ' + PARTY + 'https://' + EV + ' **********',
-    '********* Da findest Du mich: *********\n' + PARTY + 'https://' + EV,
-    'Hi! ' + PARTY + 'www.' + EV,
-    'Hi! ' + PARTY + 'http://' + EV,
-    'Hallo, ' + PARTY.replace(/ - $/, ''),
-    'Termin: 17. Juli 2026 - Club o6 in Gelsenkirchen - Die unanständige Drecksau-Party',
+    { how: 'alt', t: L1 + '\n' + L2 },
+    { how: 'paste', t: L1 + '\r\n' + L2 },
+    { how: 'paste', t: L1 + '\n' + L2 },
+    { how: 'br', t: L1 + '\n' + L2 },
+    { how: 'alt', t: 'Hallo!\nZweite Zeile ohne Link' },
+    { how: 'text', t: '********** ' + PARTY + 'https://' + EV },
   ];
+  const vText = (v) => (typeof v === 'string' ? v : v.t);
+  // Text ins Eingabefeld: als Text, mit Alt+Enter zwischen den Zeilen, als Einfügen (Strg+V) oder mit <br>
+  async function typeInto(ed, v) {
+    const how = typeof v === 'string' ? 'text' : v.how;
+    const t = vText(v);
+    ed.focus();
+    try { document.execCommand('selectAll', false); document.execCommand('delete', false); } catch (e) { ed.textContent = ''; }
+    if (how === 'alt') {
+      const lines = t.split('\n');
+      for (let k = 0; k < lines.length; k++) {
+        if (k) {
+          for (const ty of ['keydown', 'keypress', 'keyup']) ed.dispatchEvent(new KeyboardEvent(ty, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, altKey: true, bubbles: true, cancelable: true }));
+          await sleep(200);
+        }
+        try { document.execCommand('insertText', false, lines[k]); } catch (e) { ed.append(lines[k]); }
+      }
+    } else if (how === 'paste') {
+      let dt = null;
+      try { dt = new DataTransfer(); dt.setData('text/plain', t); } catch (e) { dt = null; }
+      const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+      const handled = !ed.dispatchEvent(ev); // xHamster fängt das Einfügen ab → hat es selbst eingesetzt
+      if (!handled) { try { document.execCommand('insertText', false, t); } catch (e) { ed.textContent = t; } }
+    } else if (how === 'br') {
+      try { document.execCommand('insertHTML', false, t.split('\n').map((x) => x.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))).join('<br>')); } catch (e) { ed.innerHTML = t.split('\n').join('<br>'); }
+    } else {
+      try { document.execCommand('insertText', false, t); } catch (e) { ed.textContent = t; }
+    }
+    ed.dispatchEvent(new InputEvent('input', { bubbles: true, data: t, inputType: 'insertText' }));
+    return how;
+  }
   function actStart() {
     const p = partner();
     if (!p) { alert('Bitte zuerst im Tampermonkey-Menü das Partnerkonto eintragen.'); return; }
     if (!confirm(`Aktionstest mit Partner ${p}:\n\n1. einen Blockierten entblocken und sofort wieder blockieren\n2. ${MSG_VARIANTS.length} Testnachrichten an ${p} (alle 30 s), danach wieder löschen\n3. ${p} entfreunden und neu anfragen (im anderen Konto: Menü „Freundschaftsanfrage des Partners annehmen“)\n\nDauert etwa 7 Minuten. Tab offen lassen. Starten?`)) return;
     gs(K.recOn, true);
-    gs(K.tests, MSG_VARIANTS.map((x) => x.replace(/\s+/g, ' ').trim()));
+    gs(K.tests, MSG_VARIANTS.map((x) => vText(x).replace(/\s+/g, ' ').trim()));
     gs(K.act, { step: 'block', started: now(), partner: p, sent: [], i: 0 });
     recEvent('Aktionstest gestartet', { info: 'Partner ' + p });
     actTick();
@@ -534,19 +563,19 @@
     // 0.1.8: xHamster leitet die Chat-Adresse um (z. B. neue Unterhaltung) – jede Chatseite mit dem Partner im Pfad gilt
     if (!inPartnerChat(a)) { recEvent('Chat: Umleitung', { info: location.pathname }); actGo(abs(a.conv)); return; }
     const ed0 = await waitFor(composer, 15000);
+    // 0.1.11: eigene Nachrichten vor dem Test merken – alles Neue (auch versehentlich geteilte Nachrichten) wird danach gelöscht
+    if (!a.startIds) { a.startIds = [...mineIds()]; actSave({ startIds: a.startIds }); }
     const ed = ed0;
     if (!ed) { recDom('Chat: kein Eingabefeld', document.querySelector('.messages-main-view') || document.body); recEvent('Chat: Eingabefeld nicht gefunden'); next('unfriend'); return; }
     for (let i = a.i; i < MSG_VARIANTS.length; i++) {
-      const text = MSG_VARIANTS[i];
+      const v = MSG_VARIANTS[i], text = vText(v);
       // 0.1.9: xHamster baut das Eingabefeld nach einigen Nachrichten neu auf – jedes Mal frisch holen
       const ed = (await waitFor(composer, 10000)) || ed0;
       uiStatus(`Aktionstest 2/3: Nachricht ${i + 1}/${MSG_VARIANTS.length}`);
       const before = mineIds();
-      ed.focus();
-      try { document.execCommand('selectAll', false); document.execCommand('insertText', false, text); } catch (e) { ed.textContent = text; }
-      ed.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+      const mode = await typeInto(ed, v);
       await sleep(400);
-      if (i === 0) recDom('Chat: Eingabe vor dem Senden', document.querySelector('[data-role="input-box"]'));
+      recDom(`Chat: Eingabe vor dem Senden (${mode})`, ed);
       for (const t of ['keydown', 'keypress', 'keyup']) ed.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
       const newMsg = () => [...document.querySelectorAll('.message.mine[id^="message-"]')].find((e) => !before.has(e.id));
       let el = await waitFor(newMsg, 5000);
@@ -580,7 +609,8 @@
         const shown = ((w || el).innerText != null ? (w || el).innerText : (w || el).textContent || '').trim();
         const diff = censorDiff(text, shown);
         sent.sent.push({ id: el.id, i });
-        recEvent('Testnachricht', { info: `${i + 1} (${how}): ${diff || 'unverändert'}`, sent: text, shown, html: maskStr((w ? w.innerHTML : '').slice(0, 1500)), censored: diff });
+        const lines = (w ? w.innerHTML : '').split(/<br\s*\/?>|<\/div>\s*<div|<\/p>\s*<p|\n/i).filter((x) => x.replace(/<[^>]+>/g, '').trim()).length;
+        recEvent('Testnachricht', { info: `${i + 1} (${typeof v === 'string' ? 'text' : v.how}/${how}): ${diff || 'unverändert'} · ${lines} Zeile(n)`, sent: text, shown, lines, html: maskStr((w ? w.innerHTML : '').slice(0, 1500)), censored: diff });
         if (i === 0) recDom('Chat: gesendete Nachricht', el);
       }
       actSave({ i: i + 1, sent: sent.sent });
@@ -593,7 +623,10 @@
     if (!inPartnerChat(a)) { actGo(abs(a.conv)); return; }
     await waitFor(composer, 15000);
     let n = 0;
-    for (const s of a.sent || []) {
+    const known = new Set((a.sent || []).map((x) => x.id));
+    const extra = a.startIds ? [...mineIds()].filter((id) => !a.startIds.includes(id) && !known.has(id)).map((id) => ({ id })) : [];
+    if (extra.length) recEvent('Weitere eigene Testnachrichten gefunden', { info: String(extra.length) });
+    for (const s of [...(a.sent || []), ...extra]) {
       const el = document.getElementById(s.id);
       if (!el) continue;
       try { el.scrollIntoView({ block: 'center' }); } catch (e) { /* egal */ }
@@ -608,7 +641,7 @@
       if (gone) n++; else recDom('Chat: Nachricht nach Löschen noch da', document.getElementById(s.id));
       await sleep(1500);
     }
-    recEvent('Testnachrichten gelöscht', { info: `${n} von ${(a.sent || []).length}` });
+    recEvent('Testnachrichten gelöscht', { info: `${n} von ${(a.sent || []).length + extra.length}` });
     next('unfriend');
   }
   async function actUnfriend(a) {
