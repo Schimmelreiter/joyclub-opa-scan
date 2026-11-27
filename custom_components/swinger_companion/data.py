@@ -237,6 +237,16 @@ class PersonData:
         self.pics.setdefault(pid, {})[key] = {"file": rel, "type": ctype, "at": now.isoformat(), "size": size}
         return rel
 
+    def drop_pics(self, drops: Any) -> list[str]:
+        """Pictures the script removed ([person id, key]): forget them, returns their files (to delete)."""
+        files = []
+        for d in drops if isinstance(drops, list) else []:
+            if isinstance(d, list) and len(d) == 2 and (info := (self.pics.get(str(d[0])) or {}).pop(str(d[1]), None)):
+                files.append(info["file"])
+                if not self.pics[str(d[0])]:
+                    del self.pics[str(d[0])]
+        return files
+
     def pic_list(self, pid: str) -> list[str]:
         """Stored picture keys of a person: in the script's order, then older ones it no longer reports."""
         have = self.pics.get(pid) or {}

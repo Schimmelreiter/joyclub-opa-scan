@@ -94,6 +94,13 @@ def _write(path: Path, raw: bytes) -> None:
     tmp.replace(path)
 
 
+def _unlink(base: Path, files: list[str]) -> None:
+    for rel in files:
+        path = (base / rel).resolve()
+        if base.resolve() in path.parents:
+            path.unlink(missing_ok=True)
+
+
 def thumb_url(entry: ConfigEntry, data: PersonData, pid: str) -> str | None:
     t = data.thumbs.get(pid)
     if not t:
@@ -223,6 +230,8 @@ async def _handle_webhook(hass: HomeAssistant, webhook_id: str, request: web.Req
     akey = sub.unique_id if sub is not None and sub.unique_id else account_key(platform, uid, nick)
     rt = entry.runtime_data
     rt.data.ack(payload.get("ack"))
+    if files := rt.data.drop_pics(payload.get("dropPics")):
+        await hass.async_add_executor_job(_unlink, pic_dir(hass, entry), files)
     try:
         need = rt.data.apply(payload, akey, dt_util.utcnow())
     except ValueError:

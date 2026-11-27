@@ -147,6 +147,13 @@ async def test_full_pictures(hass: HomeAssistant, hass_client_no_auth, tmp_path)
     r = await client.get(pics[0])
     assert r.status == 200 and (await r.read()).startswith(b"\xff\xd8")
     assert (await client.get(pics[0].replace("?s=", "?s=0"))).status == 404
+    # the script removes a picture → file and entry gone
+    r = await client.post(url, json=encrypt(key, _payload(persons=persons, dropPics=[["j:1", "a2"], ["j:1", "nope"]])))
+    assert r.status == 200
+    assert not (tmp_path / "swinger_companion" / entry.entry_id / "j_1" / "a2.jpg").exists()
+    assert (await client.get(pics[0])).status == 404
+    ans = decrypt(key, await (await client.post(url, json=pic("a2"))).json())
+    assert ans["ok"]
     # list without pictures later: stored pictures stay
     r = await client.post(url, json=encrypt(key, _payload()))
     assert decrypt(key, await r.json())["needPics"] == []

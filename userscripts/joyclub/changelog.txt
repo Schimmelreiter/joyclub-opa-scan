@@ -1,6 +1,12 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.16 (27.11.2026)
+- Bilder der Fickliste: Bilder aus dem Album „Aktuelles“ werden bei keinem Profil gesichert (meist Sprüche als Bild). Auf jeder Album-Seite einer Person aus der Fickliste steht neben dem Albumnamen ein Knopf „Gesichert – nicht mehr sichern“ bzw. „Nicht gesichert – wieder sichern“
+- Bilder aus abgewählten Alben werden aus der Fickliste und aus Home Assistant (ab Swinger Companion 0.3.1) gelöscht und kommen über den Abgleich nicht zurück
+- Einmalig: Bilder, die 2.13/2.14 gesammelt hatten, werden entfernt (darunter fremde Bilder von Gruppen und Events) und beim nächsten Besuch richtig neu gesammelt
+- Die Albenübersicht (/profile/fotos/…) wird nicht mehr ausgewertet (Titelbilder ohne Albumzuordnung)
+
 2.15 (27.11.2026)
 - Bilder der Fickliste: erkannt wird jedes Bild jetzt über seinen Bild-Link (gehört sicher zum Profil); Bilder von Gruppen, Events und anderen Mitgliedern auf derselben Seite bleiben außen vor. Auch das Fotoalbum (/profile/fotoalbum/…) wird ausgewertet
 - Profilbild und Vorschaubilder werden statt als quadratischer Ausschnitt in voller Auflösung (1920 px) gespeichert

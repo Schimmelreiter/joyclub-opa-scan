@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.15
+// @version      2.16
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -11243,7 +11243,8 @@ fragment ImageUIDataFragment on ImageUIData {
   function flPagePics(doc = document) {
     const main = doc.querySelector('main.profile-container:not(.jaf-fl-tpl)') || doc.querySelector('main');
     const out = new Map();
-    if (!main) return out;
+    if (!main || /^\/profile\/fotos\//.test(location.pathname)) return out; // Albenübersicht: Titelbilder ohne Albumzuordnung
+    const album = flAlbumName(main);
     const seen = new Set();
     for (const a of main.querySelectorAll('a[href*="media_id_"]')) {
       if (a.closest('[class*="jaf-"]')) continue;
@@ -11259,15 +11260,42 @@ fragment ImageUIDataFragment on ImageUIData {
       // Profilbild und Vorschau sind quadratische Ausschnitte (/1-1/image_720_…); dasselbe Bild gibt es als /orig/image_1920_…
       const abs = new URL(u, location.href).href;
       const orig = abs.replace(/\/1-1\/image_\d+_/, '/orig/image_1920_');
-      out.get(m[2]).push(orig !== abs ? { k: flPicKey('joyclub', m[1]), src: orig, alt: abs, pf: 'joyclub' } : { k: flPicKey('joyclub', m[1]), src: abs, pf: 'joyclub' });
+      const inAlbum = album && a.closest('.profile-album-detail-page') ? album : '';
+      out.get(m[2]).push(Object.assign({ k: flPicKey('joyclub', m[1]), src: orig, pf: 'joyclub', album: inAlbum }, orig !== abs ? { alt: abs } : {}));
     }
     return out;
+  }
+  // Name des gerade gezeigten Albums (Album-Seite), sonst ''
+  function flAlbumName(main) {
+    const h = main.querySelector('.profile-album-detail-page .profile-segmented-row__center-container h2, .profile-album-detail-page h2');
+    return h ? (h.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  }
+  // Alben, deren Bilder nicht gesichert werden: bei allen Profilen „Aktuelles“ (meist Sprüche als Bild), dazu je Person gewählte
+  const FL_PIC_SKIP_ALBUMS = ['Aktuelles'];
+  const flAlbumSkipped = (q, album) => !!album && [...FL_PIC_SKIP_ALBUMS, ...(q.picAlbumsSkip || [])].some((x) => norm(x) === norm(album));
+  // Bilder entfernen: aus der Person, aus dem lokalen Speicher und (mit der nächsten Übertragung) aus Home Assistant.
+  // Die Kennungen bleiben als „entfernt“ vermerkt, damit sie nicht über den Abgleich zurückkommen.
+  const K_HA_DROP = 'jaf_ha_droppics';
+  function flDropPics(pid, keys) {
+    const q = flGet(pid);
+    if (!q || !keys.length) return 0;
+    const ks = new Set(keys);
+    const before = (q.pics || []).length;
+    q.pics = (q.pics || []).filter((x) => !ks.has(x.k));
+    q.picsDrop = [...new Set([...(q.picsDrop || []), ...keys])].slice(-3000);
+    for (const k of keys) GM_deleteValue(K_FLP + k);
+    const dq = GM_getValue(K_HA_DROP, []) || [];
+    for (const k of keys) if (!dq.some((x) => x[0] === pid && x[1] === k)) dq.push([pid, k]);
+    GM_setValue(K_HA_DROP, dq);
+    flPut(q);
+    haSoon();
+    return before - q.pics.length;
   }
   // neue Bilder übernehmen (Original laden); gibt die Zahl neuer Bilder zurück
   async function flAddPics(pid, found) {
     const p0 = flGet(pid);
     if (!p0 || !found.length) return 0;
-    const list = (p0.pics || []).slice(), byK = new Set(list.map((x) => x.k)), byH = new Set(list.map((x) => x.h).filter(Boolean));
+    const list = (p0.pics || []).slice(), byK = new Set([...list.map((x) => x.k), ...(p0.picsDrop || [])]), byH = new Set(list.map((x) => x.h).filter(Boolean));
     let n = 0;
     for (const f of found) {
       if (byK.has(f.k)) continue;
@@ -11278,7 +11306,7 @@ fragment ImageUIDataFragment on ImageUIData {
       byK.add(f.k);
       if (h && byH.has(h)) continue; // dasselbe Bild unter neuer Kennung
       if (data) GM_setValue(K_FLP + f.k, data);
-      list.push({ k: f.k, src, pf: f.pf, at: Date.now(), h, full: data ? 1 : 0 });
+      list.push({ k: f.k, src, pf: f.pf, at: Date.now(), h, full: data ? 1 : 0, m: 1 });
       if (h) byH.add(h);
       n++;
     }
@@ -11297,8 +11325,66 @@ fragment ImageUIDataFragment on ImageUIData {
     const found = [...flPagePics()].filter(([uid]) => flGet(uid));
     if (!found.length) return;
     flPicsBusy = true;
-    (async () => { for (const [uid, l] of found) await flAddPics(uid, l); })()
+    (async () => {
+      for (const [uid, l] of found) {
+        const q = flGet(uid);
+        const skip = l.filter((x) => flAlbumSkipped(q, x.album)).map((x) => x.k);
+        const have = new Set((q.pics || []).map((x) => x.k));
+        if (skip.some((k) => have.has(k))) flDropPics(uid, skip.filter((k) => have.has(k)));
+        await flAddPics(uid, l.filter((x) => !skip.includes(x.k)));
+      }
+      flAlbumButton();
+    })()
       .catch((e) => console.warn('[Alter-Filter] Fickliste-Bilder', e)).finally(() => { flPicsBusy = false; });
+  }
+  // Knopf auf der Album-Seite einer Person aus der Fickliste: dieses Album sichern ja/nein
+  function flAlbumButton() {
+    const main = document.querySelector('main.profile-container:not(.jaf-fl-tpl)') || document.querySelector('main');
+    const h = main && main.querySelector('.profile-album-detail-page .profile-segmented-row__center-container h2');
+    if (!h) return;
+    const album = flAlbumName(main);
+    const ml = main.querySelector('.profile-album-detail-page a[href*="media_id_"]');
+    const uid = ml && (ml.getAttribute('href') || '').match(/media_id_\d+_\d+_\d+_(\d+)/);
+    const q = uid && flGet(uid[1]);
+    let b = h.parentElement.querySelector('.jaf-fl-albumbtn');
+    if (!q) { if (b) b.remove(); return; }
+    const fixed = FL_PIC_SKIP_ALBUMS.some((x) => norm(x) === norm(album));
+    const off = flAlbumSkipped(q, album);
+    const label = fixed ? '📷 Wird nie gesichert' : off ? '📷 Nicht gesichert – wieder sichern' : '📷 Gesichert – nicht mehr sichern';
+    if (b && b.__sig === album + '|' + off) return;
+    if (!b) {
+      b = document.createElement('button');
+      b.className = 'jaf-fl-albumbtn';
+      b.style.cssText = 'margin-left:10px;padding:2px 10px;border-radius:12px;border:1px solid rgba(128,128,128,.6);background:rgba(128,128,128,.18);color:inherit;font:12px system-ui;cursor:pointer;vertical-align:middle';
+      h.insertAdjacentElement('afterend', b);
+      b.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const q2 = flGet(uid[1]), al = flAlbumName(main);
+        if (!q2 || FL_PIC_SKIP_ALBUMS.some((x) => norm(x) === norm(al))) return;
+        const l = q2.picAlbumsSkip || [];
+        const now = l.some((x) => norm(x) === norm(al));
+        q2.picAlbumsSkip = now ? l.filter((x) => norm(x) !== norm(al)) : [...l, al];
+        if (now) { const back = new Set((flPagePics().get(uid[1]) || []).map((x) => x.k)); q2.picsDrop = (q2.picsDrop || []).filter((k) => !back.has(k)); }
+        flPut(q2);
+        flPicsAt = 0; flPicsTick();
+      });
+    }
+    b.__sig = album + '|' + off;
+    b.disabled = fixed;
+    b.textContent = label;
+    b.title = fixed ? 'Bilder aus diesem Album sichert die Fickliste bei keinem Profil.' : 'Bilder dieses Albums in der Fickliste und in Home Assistant sichern oder entfernen.';
+  }
+  // 2.16: Bilder aus 2.13/2.14 (ohne Bild-Link erkannt, teils fremde Bilder) einmalig entfernen
+  if (window.top === window && /(^|\.)joyclub\.de$/.test(location.hostname) && !GM_getValue('jaf_pics_mig216', 0)) {
+    setTimeout(() => {
+      try {
+        for (const q of Object.values(getFl())) {
+          const old = (q.pics || []).filter((x) => x.pf === 'joyclub' && !x.m).map((x) => x.k);
+          if (old.length) flDropPics(q.id, old);
+        }
+        GM_setValue('jaf_pics_mig216', 1);
+      } catch (e) { console.warn('[Alter-Filter] Bilder-Umbau', e); }
+    }, 8000);
   }
   // lokale Kennzeichen setzen, ohne „geändert“ (kein erneuter Abgleich)
   function flPicFlag(k, patch) {
@@ -11321,8 +11407,8 @@ fragment ImageUIDataFragment on ImageUIData {
     if (prev) { GM_setValue(K_FLP + k, prev); flPicFlag(k, { full: 0 }); }
   }
   // Bilder aller Mitglieder einer Person zusammen (Austauschformat: nur k, src, pf, at)
-  function flPicsOut(lists) {
-    const out = [], seen = new Set();
+  function flPicsOut(lists, drop = new Set()) {
+    const out = [], seen = new Set(drop);
     for (const l of lists) for (const x of l || []) {
       if (!x || !x.k || seen.has(x.k)) continue;
       seen.add(x.k);
@@ -12386,7 +12472,7 @@ fragment ImageUIDataFragment on ImageUIData {
       x.meets = [];
       for (const id of ids) for (const m of fl[id].meets || []) x.meets.push(flMeetOut(m, fl[id]));
       x.history = (prim.hist || []).map((h) => ({ at: h.ts, what: h.why }));
-      x.pics = flPicsOut([...ids.map((id) => fl[id].pics), ...ids.map((id) => fl[id].xfer && fl[id].xfer.pics)]);
+      x.pics = flPicsOut([...ids.map((id) => fl[id].pics), ...ids.map((id) => fl[id].xfer && fl[id].xfer.pics)], new Set(ids.flatMap((id) => fl[id].picsDrop || [])));
       if (!x.pics.length) delete x.pics;
       // Anmerkungen: allgemeines Feld (seit 1.88), joy.notes bleibt vorerst für ältere Stände
       x.notes = prim.notes || '';
@@ -15755,7 +15841,9 @@ fragment ImageUIDataFragment on ImageUIData {
           if (d) thumbs[pid] = d;
         }
         const ack = GM_getValue(K_HA_ACK, []) || [];
-        const payload = { format: 'swinger-companion', v: 1, platform: 'joyclub', script: ver, account: { uid: String(tplMe() || ''), nick: ownNick() || '' }, persons, thumbKeys, thumbs, ack };
+        const dropQ = GM_getValue(K_HA_DROP, []) || [];
+        const dropPics = dropQ.map(([lid, k]) => { const x = persons.find((y) => y.__lid === lid) || persons.find((y) => y.id === lid); return [x ? x.id : lid, k]; });
+        const payload = { format: 'swinger-companion', v: 1, platform: 'joyclub', script: ver, account: { uid: String(tplMe() || ''), nick: ownNick() || '' }, persons, thumbKeys, thumbs, ack, dropPics };
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
         const r = await haPost(a.url, { v: 1, iv: b64(iv), data: b64(ct) });
@@ -15765,6 +15853,7 @@ fragment ImageUIDataFragment on ImageUIData {
         const env = JSON.parse(r.responseText || '{}');
         const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data));
         ans = JSON.parse(new TextDecoder().decode(pt));
+        if (dropQ.length) { const sentD = new Set(dropQ.map((x) => x.join('|'))); GM_setValue(K_HA_DROP, (GM_getValue(K_HA_DROP, []) || []).filter((x) => !sentD.has(x.join('|')))); }
         if (ack.length) { const sent = new Set(ack.map((a) => a.id + '|' + a.rev)); GM_setValue(K_HA_ACK, (GM_getValue(K_HA_ACK, []) || []).filter((a) => !sent.has(a.id + '|' + a.rev))); }
         const sentNow = Object.keys(thumbs);
         need = (ans.need || []).filter((pid) => !sentNow.includes(pid) || !thumbs[pid]);
