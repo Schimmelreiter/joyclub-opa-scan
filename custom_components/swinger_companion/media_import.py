@@ -67,17 +67,17 @@ def import_dir(src: Path, dest: Path, pid: str, stored: dict[str, dict[str, Any]
     """Copy new files; stored = the person's pictures so far ({key: info}).
 
     Returns {"added": [...], "upgraded": [...], "duplicates": n, "skipped": n}. A picture that is already there in a smaller
-    size is replaced by the larger one under its old key (so the scripts do not send it again).
+    size or much stronger compressed is replaced by the better one under its old key (so the scripts do not send it again).
     """
     known_sha: set[str] = set()
-    known: list[list[Any]] = []  # [hash, pixels, key]
+    known: list[list[Any]] = []  # [hash, pixels, key, bytes]
     for key, info in stored.items():
         f = dest / info["file"]
         if not f.is_file():
             continue
         known_sha.add(info.get("sha") or _sha(f))
         if info.get("type", "").startswith("image/") and (d := _dhash(f)):
-            known.append([d[0], d[1], key])
+            known.append([d[0], d[1], key, f.stat().st_size])
     cands = []
     skipped = 0
     for f in sorted(p for p in src.rglob("*") if p.is_file()):
@@ -97,7 +97,10 @@ def import_dir(src: Path, dest: Path, pid: str, stored: dict[str, dict[str, Any]
             continue
         same = next((k for k in known if d and bin(d[0] ^ k[0]).count("1") <= SIMILAR), None) if d else None
         if same is not None:
-            if same[2] in stored and d[1] > same[1] * 1.1:  # stored before in a smaller size → replace
+            size = f.stat().st_size
+            # stored before in a smaller size, or same size but much stronger compressed → replace
+            better = d[1] > same[1] * 1.1 or (d[1] >= same[1] * 0.95 and size > same[3] * 1.5)
+            if same[2] in stored and better:
                 old = stored[same[2]]
                 target = dest / pic_rel(pid, same[2], ctype)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -105,7 +108,7 @@ def import_dir(src: Path, dest: Path, pid: str, stored: dict[str, dict[str, Any]
                 if (dest / old["file"]) != target:
                     (dest / old["file"]).unlink(missing_ok=True)
                 upgraded.append({"key": same[2], "type": ctype, "size": target.stat().st_size, "sha": sha, "name": f.name})
-                same[1] = d[1]
+                same[1], same[3] = d[1], size
                 known_sha.add(sha)
             else:
                 dup += 1
@@ -113,7 +116,7 @@ def import_dir(src: Path, dest: Path, pid: str, stored: dict[str, dict[str, Any]
         known_sha.add(sha)
         key = "local-" + sha[:16]
         if d:
-            known.append([d[0], d[1], key])
+            known.append([d[0], d[1], key, f.stat().st_size])
         target = dest / pic_rel(pid, key, ctype)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(f, target)

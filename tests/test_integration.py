@@ -246,9 +246,30 @@ async def test_import_files(hass: HomeAssistant, hass_client_no_auth, tmp_path) 
     big.resize((800, 600)).save(up / "huge.jpg")
     res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(up)}, blocking=True, return_response=True)
     assert res["added"] == 0 and res["upgraded"] == 1
+    # same size, much less compressed → also better
+    q = tmp_path / "import" / "quality"
+    q.mkdir()
+    Image.open(up / "huge.jpg").save(q / "low.jpg", quality=10)
+    Image.open(up / "huge.jpg").save(q / "low2.jpg", quality=10)
+    res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(q)}, blocking=True, return_response=True)
+    assert res["added"] == 0 and res["upgraded"] == 0
+    import random
+
+    rnd = random.Random(7)
+    grid = Image.new("L", (9, 8))
+    grid.putdata([rnd.randrange(0, 256, 40) for _ in range(72)])
+    noisy = Image.blend(grid.resize((600, 400)).convert("RGB"), Image.effect_noise((600, 400), 80).convert("RGB"), 0.25)
+    lo, hi = tmp_path / "import" / "lo", tmp_path / "import" / "hi"
+    lo.mkdir(); hi.mkdir()
+    noisy.save(lo / "n.jpg", quality=15)
+    noisy.save(hi / "n.jpg", quality=95)
+    res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(lo)}, blocking=True, return_response=True)
+    assert res["added"] == 1
+    res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(hi)}, blocking=True, return_response=True)
+    assert res["added"] == 0 and res["upgraded"] == 1
     await hass.async_block_till_done()
     want = [s for s in hass.states.async_all("sensor") if s.attributes.get("persons") and s.attributes["persons"][0]["name"] == "Lisa"][0]
-    assert len(want.attributes["persons"][0]["pics"]) == 2
+    assert len(want.attributes["persons"][0]["pics"]) == 3
     with __import__("pytest").raises(Exception):
         await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": "/etc"}, blocking=True, return_response=True)
 
