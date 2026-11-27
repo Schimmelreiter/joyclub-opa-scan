@@ -1,6 +1,9 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.1.7 (27.11.2026)
+- Neu: Menüpunkt „Scan-Lauf / Aktionstest anhalten“ (ganz oben im Menü, auch erreichbar, wenn die Seite ständig neu lädt)
+
 0.1.6 (27.11.2026)
 - Rekorder: Lesende /x-api-Anfragen bekommen jetzt ihren Vorgangsnamen (xHamster schickt auch bei GET einen Text-Rumpf;
   der Name steht dann im Parameter r)

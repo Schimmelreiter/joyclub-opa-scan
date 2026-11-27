@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.6
+// @version      0.1.7
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -810,6 +810,8 @@
   // Start
   // =====================================================================
   hookNetwork();
+  // 0.1.7: zuerst, damit es auch bei schnellem Neuladen erreichbar ist
+  try { GM_registerMenuCommand('■ Scan-Lauf / Aktionstest anhalten', () => { gs(K.scan, null); gs(K.act, null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); }); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand('Scan-Lauf starten', scanStart); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand('Aktionstest starten (mit Partnerkonto)', actStart); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand('Freundschaftsanfrage des Partners annehmen', acceptPartner); } catch (e) { /* egal */ }
