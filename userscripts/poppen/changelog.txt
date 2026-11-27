@@ -1,6 +1,9 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.51 (27.11.2026)
+- Neu: „Meine Fickliste“ und der Fickliste-Kasten im eigenen Profil zeigen Bilder: von poppen-Mitgliedern das Profilbild, von JOYclub-Personen das Vorschaubild des JOYclub-Skripts (ab 2.23), von eigenen Externen ihr Bild. Für Personen mit poppen-Profil legt das Skript sein Bild als Vorschaubild in die gemeinsame Ablage (alle 30 Minuten abgeglichen)
+
 2.50 (27.11.2026)
 - Neu: Fickliste merkt sich auch die Videos einer Person, sobald Du ihr Profil öffnest (alle, nicht nur die ersten 6 der Vorschau). Das JOYclub-Skript (ab 2.20) lädt sie in bester Qualität und überträgt sie an Home Assistant. Die Video-Adressen gelten nur etwa einen Tag; jeder Profilbesuch erneuert sie. Gesperrte Videos bleiben weg
 

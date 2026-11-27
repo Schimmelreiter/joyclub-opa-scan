@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – Poppen Edition
 // @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.50
+// @version      2.51
 // @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -5203,6 +5203,36 @@
     return x ? { pf: 'poppen', uid: String(x.uid), nick: x.name || x.nick || '', url: x.url } : null;
   };
   const pmUid = (p) => { const m = pm(p); return m ? String(m.uid) : ''; };
+  // 2.51: Vorschaubild der gemeinsamen Ablage (thumb, data-URL): poppen liefert es für Personen mit poppen-Hauptprofil
+  // (und eigene Externe mit Bild), das JOYclub-Skript für Personen mit JOYclub-Hauptprofil
+  const THUMB_RE = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+  const thumbOk = (t) => (typeof t === 'string' && t.length < 200000 && THUMB_RE.test(t) ? t : '');
+  const mainIsPoppen = (p) => !!(p && p.main && (!p.main.pf || p.main.pf === 'poppen') && p.main.uid);
+  async function fickImg(p) {
+    const own = pm(p) ? await Images.get(pm(p).uid) : '';
+    return own || thumbOk(p.thumb) || (p.ext && thumbOk(p.ext.img)) || '';
+  }
+  let fickThumbsBusy = false;
+  async function fickThumbs() {
+    if (fickThumbsBusy) return;
+    fickThumbsBusy = true;
+    try {
+      for (const p of await Fick.all()) {
+        if (!p || p.deleted) continue;
+        let t = '';
+        if (mainIsPoppen(p)) {
+          t = await Images.get(p.main.uid);
+          if (!t) { const m = await Members.get(String(p.main.uid)); if (m && m.avatar && !isPlaceholderAvatar(m.avatar)) Images.want(m.uid, m.avatar); }
+        } else if (p.ext && (!p.main || !p.main.pf || !['joyclub'].includes(p.main.pf))) t = thumbOk(p.ext.img);
+        else continue;
+        t = thumbOk(t);
+        if (!t || p.thumb === t) continue;
+        p.thumb = t;
+        try { await Fick.put(p); } catch (e) { /* beim nächsten Mal */ }
+        await sleep(200);
+      }
+    } finally { fickThumbsBusy = false; }
+  }
   const foreignUrl = (p) => (p && p.main && p.main.pf && p.main.pf !== 'poppen' && p.main.url) || '';
   // 2.47: gelöschtes JOYclub-Profil (keine Adresse mehr) → Profil-Archiv im JOYclub-Skript auf joyclub.de
   const joyArchUrl = (p) => {
@@ -5757,7 +5787,7 @@
     for (const p of persons) {
       const m = await memberOf(p);
       const name = (m && m.nick) || (pm(p) && pm(p).nick) || (p.main && p.main.nick) || (p.ext && p.ext.name) || '?';
-      const base = { p, name, del: !!(m && m.del) || !!(p.ext && p.ext.gone), inactive: m && m.active === false, url: pm(p) ? profileUrl(name) : ((p.profiles || []).find((x) => x.pf === OWN_PF && x.url) || {}).url || extUrl(p), arch: '/setting/profile#archiv=' + encodeURIComponent(pm(p) ? pm(p).uid : p.id), pfs: uniq([...(p.main && p.main.pf && p.main.pf !== 'poppen' ? [p.main.pf] : []), ...(p.profiles || []).map((x) => x.pf)]),
+      const base = { p, name, img: await fickImg(p), del: !!(m && m.del) || !!(p.ext && p.ext.gone), inactive: m && m.active === false, url: pm(p) ? profileUrl(name) : ((p.profiles || []).find((x) => x.pf === OWN_PF && x.url) || {}).url || extUrl(p), arch: '/setting/profile#archiv=' + encodeURIComponent(pm(p) ? pm(p).uid : p.id), pfs: uniq([...(p.main && p.main.pf && p.main.pf !== 'poppen' ? [p.main.pf] : []), ...(p.profiles || []).map((x) => x.pf)]),
         badges: uniq([...(foreignUrl(p) ? [p.main.pf + '|'] : []), ...otherProfiles(p).map((x) => `${x.pf}|${x.pf === 'other' ? (x.pfName || '') : ''}`)]) };
       if (!(p.meets || []).length) rows.push({ ...base, t: null });
       for (const t of p.meets || []) rows.push({ ...base, t });
@@ -5796,13 +5826,14 @@
               ${[...pfAll.filter((k) => k !== 'other'), 'none'].map((k) => `<label style="display:flex;gap:8px;align-items:center;padding:3px 0;cursor:pointer"><input type="checkbox" data-pfc="${k}" ${st.pfs.includes(k) ? 'checked' : ''}>${k === 'none' ? 'Andere / ohne' : pfBadge(k) + esc(pfLabel(k))}</label>`).join('')}
               <a href="#" data-a="pfall" style="font-size:12px">alle</a></div></div></div>
         <table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr style="text-align:left;color:#a6a6a6">
-          <th style="cursor:pointer;padding:6px" data-sort="date">Datum ${st.sort === 'date' ? (st.dir < 0 ? '▼' : '▲') : ''}</th><th style="cursor:pointer;padding:6px" data-sort="name">Mitglied ${st.sort === 'name' ? (st.dir < 0 ? '▼' : '▲') : ''}</th><th></th><th>Was</th><th>Wo</th><th>Notiz</th></tr></thead>
+          <th style="cursor:pointer;padding:6px" data-sort="date">Datum ${st.sort === 'date' ? (st.dir < 0 ? '▼' : '▲') : ''}</th><th></th><th style="cursor:pointer;padding:6px" data-sort="name">Mitglied ${st.sort === 'name' ? (st.dir < 0 ? '▼' : '▲') : ''}</th><th></th><th>Was</th><th>Wo</th><th>Notiz</th></tr></thead>
           <tbody>${list.map((r, i) => `<tr data-i="${i}" style="border-top:1px solid #2c2c2c;cursor:pointer">
             <td style="padding:6px;white-space:nowrap">${r.t && r.t.date ? deDate(new Date(r.t.date + 'T12:00')) : '–'}</td>
+            <td style="padding:6px;width:52px">${r.img ? `<img src="${esc(r.img)}" alt="" style="width:48px;height:48px;border-radius:6px;object-fit:cover;display:block${r.del ? ';filter:grayscale(1);opacity:.7' : ''}">` : `<div style="width:48px;height:48px;border-radius:6px;background:#5c6470;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">${esc((r.name || '?').slice(0, 1).toUpperCase())}</div>`}</td>
             <td style="padding:6px"><a href="${esc(r.url)}" target="_blank" rel="noopener" class="${r.del ? 'vaf-strike' : ''}" style="${r.inactive ? 'color:#ff7875' : ''}">${esc(r.name)}</a><br><a href="${esc(r.arch)}" style="font-size:12px;color:#a6a6a6">Profil-Archiv</a> · <a href="#" data-also="${i}" style="font-size:12px;color:#a6a6a6">Auch auf …</a>${notesOf(r.p) ? `<div title="${esc(notesOf(r.p))}" style="font-size:12px;color:#8c8c8c;max-width:360px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap">${esc(notesOf(r.p))}</div>` : ''}</td>
             <td style="white-space:nowrap">${fickIcon(r.p.status ? FSTATES[r.p.status].i : 0, 18, true)} ${r.badges.map((b) => { const [pf, n] = b.split('|'); return pfBadge(pf, '', n); }).join('')}</td>
             <td>${esc((r.t && r.t.where) || '')}</td><td>${esc((r.t && r.t.club) || '')}${r.t && r.t.link ? ` <a href="${esc(r.t.link)}" target="_blank" rel="noopener">${pfBadge(r.t.pf || platformOfUrl(r.t.link))}</a>` : ''}</td>
-            <td style="color:#a6a6a6">${esc((r.t && r.t.note) || '')}</td></tr>`).join('') || '<tr><td colspan="6" style="padding:12px;color:#8c8c8c">Keine Einträge.</td></tr>'}</tbody></table>
+            <td style="color:#a6a6a6">${esc((r.t && r.t.note) || '')}</td></tr>`).join('') || '<tr><td colspan="7" style="padding:12px;color:#8c8c8c">Keine Einträge.</td></tr>'}</tbody></table>
         <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap"><button type="button" class="vaf-big" style="width:auto" data-a="ext">+ Externen Fick zufügen</button>
           <button type="button" class="vaf-big" style="width:auto" data-a="exp">Exportieren</button><button type="button" class="vaf-big" style="width:auto" data-a="imp">Importieren</button></div></div>`;
       el.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', () => { st.status = st.status === b.dataset.st ? '' : b.dataset.st; draw(); }));
@@ -5834,7 +5865,7 @@
     const box = document.createElement('div');
     box.id = 'vaf-own-fick'; box.className = host.className; box.dataset.vafSkip = '1';
     const rowsH = await Promise.all(last.map(async ({ p, t }) => {
-      const img = pm(p) ? await Images.get(pm(p).uid) : (p.ext && p.ext.img) || '';
+      const img = await fickImg(p);
       const name = (p.main && p.main.nick) || (p.ext && p.ext.name);
       return `<div style="display:flex;gap:8px;align-items:center;margin:4px 0"><img src="${esc(img)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;background:#3a3a3a"><a href="${pm(p) ? esc(profileUrl(name)) : esc(extUrl(p))}" target="_blank">${esc(name)}</a><span style="color:#a6a6a6">${esc([t.where, t.club].filter(Boolean).join(' · '))} · ${t.date ? deDate(new Date(t.date + 'T12:00')) : ''}</span></div>`;
     }));
@@ -10547,6 +10578,9 @@
       await registerIch().catch(() => {});
       await TplSync.pull().catch((e) => warn('Textvorlagen abgleichen', e));
       if (now() - G.get('gm_bk_at', 0) > 6 * 3600000) mirrorSettingsToBk().catch(() => {});
+      // 2.51: Vorschaubilder in die gemeinsame Fickliste
+      setTimeout(() => fickThumbs().catch((e) => warn('Vorschaubilder', e)), 20000);
+      setInterval(() => fickThumbs().catch(() => {}), 30 * 60000);
     }, 4000);
     setTimeout(() => mirrorRestore(true).catch(() => {}), 15000);
     setTimeout(() => mirrorRun().catch((e) => warn('Rettungsanker', e)), 120000);

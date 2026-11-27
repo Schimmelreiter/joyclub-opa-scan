@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.22
+// @version      2.23
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -11006,6 +11006,25 @@ fragment ImageUIDataFragment on ImageUIData {
   const flStands = (pid) => GM_getValue(K_FLA + pid, []) || [];
   const flSetStands = (pid, l) => GM_setValue(K_FLA + pid, l);
   const flImg = (id) => (id ? GM_getValue(K_FLI + id, '') : '');
+  // 2.23: Vorschaubild für die gemeinsame Ablage (Personen, deren Hauptprofil hier liegt) und das der anderen Seite
+  const K_FLT = 'jaf_flt_'; // Bild-ID → verkleinertes Bild (data-URL, höchstens 150 px)
+  const FL_THUMB_RE = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+  function flXThumb(p) {
+    if (!p) return '';
+    const q = flGet(flPrimaryId(p.id)) || p;
+    const t = (q.xfer && q.xfer.thumb) || (p.xfer && p.xfer.thumb) || '';
+    return typeof t === 'string' && t.length < 200000 && FL_THUMB_RE.test(t) ? t : '';
+  }
+  const flOwnThumbSide = (q) => !!q && (!flIsExt(q.id) || !!q.wasJoy); // Hauptprofil auf JOYclub
+  async function flThumbsPrepare() {
+    let n = 0;
+    for (const q of Object.values(getFl())) {
+      if (!flOwnThumbSide(q) || !q.img || GM_getValue(K_FLT + q.img, '')) continue;
+      const t = await haShrink(GM_getValue(K_FLI + q.img, ''), 150);
+      if (t) GM_setValue(K_FLT + q.img, t);
+      if (++n >= 40) break;
+    }
+  }
   const flIsExt = (pid) => /^x-/.test(String(pid));
   const flPath = (p) => (flIsExt(p.id) ? `${flOwnPath()}?fl=${encodeURIComponent(p.id)}` : (p.path || `/profile/${p.id}.html`));
   const flUrl = (p) => location.origin + flPath(p);
@@ -11702,9 +11721,9 @@ fragment ImageUIDataFragment on ImageUIData {
   }
   function flDeleteAll(pid) {
     flLinkRemove(pid);
-    for (const s of flStands(pid)) if (s.img) GM_deleteValue(K_FLI + s.img);
+    for (const s of flStands(pid)) if (s.img) { GM_deleteValue(K_FLI + s.img); GM_deleteValue(K_FLT + s.img); }
     const p = flGet(pid);
-    if (p && p.img) GM_deleteValue(K_FLI + p.img);
+    if (p && p.img) { GM_deleteValue(K_FLI + p.img); GM_deleteValue(K_FLT + p.img); }
     GM_deleteValue(K_FLA + pid);
     const m = getFl(); delete m[pid]; setFl(m);
   }
@@ -12574,6 +12593,8 @@ fragment ImageUIDataFragment on ImageUIData {
       if (prim.notesAt) x.notesAt = prim.notesAt; else delete x.notesAt;
       if (prim.notesBy) x.notesBy = prim.notesBy; else delete x.notesBy;
       x.joy = Object.assign({}, x.joy || {}, { type: prim.type || '', notes: prim.notes || '', pnote: prim.pnote || '' });
+      // 2.23: Vorschaubild – liegt das Hauptprofil hier, kommt es von hier, sonst bleibt das der anderen Seite (aus xfer)
+      if (flOwnThumbSide(prim)) { const t = prim.img ? GM_getValue(K_FLT + prim.img, '') : ''; if (t) x.thumb = t; else delete x.thumb; }
       out.push(x);
     }
     return out;
@@ -13289,7 +13310,7 @@ fragment ImageUIDataFragment on ImageUIData {
     return c;
   }
   function flAvatar(p, size = 40, radius = '50%') {
-    const src = flImg(p.img);
+    const src = flImg(p.img) || flXThumb(p);
     const init = escHtml((p.nick || '?').slice(0, 1).toUpperCase());
     return src ? `<img src="${src}" alt="" style="width:${size}px;height:${size}px;border-radius:${radius};object-fit:cover;flex:none${flDead(p) ? ';filter:grayscale(1);opacity:.7' : ''}">`
       : `<span style="width:${size}px;height:${size}px;border-radius:${radius};background:#5c6470;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex:none">${init}</span>`;
@@ -15688,6 +15709,7 @@ fragment ImageUIDataFragment on ImageUIData {
         }
       }
       // 3. Eigene Änderungen schreiben (Versionsprüfung; bei Konflikt beim nächsten Durchlauf zusammenführen)
+      try { await flThumbsPrepare(); } catch (e) { /* später */ }
       const seen = new Set();
       for (const x of flExportPersons()) {
         const lid = x.__lid;
@@ -15987,17 +16009,19 @@ fragment ImageUIDataFragment on ImageUIData {
     const started = Date.now();
     try {
       const key = await haKey(a.key);
+      try { await flThumbsPrepare(); } catch (e) { /* später */ }
       const fl = getFl();
       const persons = flExportPersons();
       const thumbKeys = {};
-      for (const x of persons) { const q = fl[x.__lid]; if (q && q.img) thumbKeys[x.id] = String(q.img); }
+      // 2.23: ohne eigenes Bild das Vorschaubild der anderen Seite (z. B. poppen)
+      for (const x of persons) { const q = fl[x.__lid]; if (q && q.img) thumbKeys[x.id] = String(q.img); else if (q && flXThumb(q)) thumbKeys[x.id] = 'x' + bkHash(flXThumb(q)); }
       const ver = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '';
       let need = [], ans = null;
       for (let round = 0; round < 12; round++) {
         const thumbs = {};
         for (const pid of need.slice(0, 40)) {
           const x = persons.find((y) => y.id === pid), q = x && fl[x.__lid];
-          const d = q && q.img ? await haShrink(GM_getValue(K_FLI + q.img, '')) : '';
+          const d = q && q.img ? await haShrink(GM_getValue(K_FLI + q.img, '')) : (q ? flXThumb(q) : '');
           if (d) thumbs[pid] = d;
         }
         const ack = GM_getValue(K_HA_ACK, []) || [];
@@ -16017,7 +16041,7 @@ fragment ImageUIDataFragment on ImageUIData {
         if (ack.length) { const sent = new Set(ack.map((a) => a.id + '|' + a.rev)); GM_setValue(K_HA_ACK, (GM_getValue(K_HA_ACK, []) || []).filter((a) => !sent.has(a.id + '|' + a.rev))); }
         const sentNow = Object.keys(thumbs);
         need = (ans.need || []).filter((pid) => !sentNow.includes(pid) || !thumbs[pid]);
-        need = need.filter((pid) => { const x = persons.find((y) => y.id === pid); return x && fl[x.__lid] && GM_getValue(K_FLI + fl[x.__lid].img, ''); });
+        need = need.filter((pid) => { const x = persons.find((y) => y.id === pid); return x && fl[x.__lid] && (GM_getValue(K_FLI + fl[x.__lid].img, '') || flXThumb(fl[x.__lid])); });
         if (!need.length || sentNow.length === 0 && round > 0) break;
       }
       if (ans && Array.isArray(ans.changes) && ans.changes.length) haApplyChanges(ans.changes, persons);

@@ -81,6 +81,7 @@ Eine Person je Eintrag. Alle Felder sind optional außer `id`.
 | `history[]` | `{ at, what }`: Verlauf als Klartext |
 | `ext` | Person ohne Plattform-Profil: `{ name, typ, city, short, texts, img (data-URL), gone }` |
 | `alias`, `aliasAt` | eigener Name des Nutzers für diese Person (bis 60 Zeichen) und Zeitpunkt; der neuere gewinnt. Home Assistant zeigt „alias (Nick)“ (seit poppen 2.49 / JOYclub 2.18) |
+| `thumb` | Vorschaubild (data-URL, JPEG/PNG/WebP, höchstens 150 px): schreibt nur das Skript der Plattform des Hauptprofils (poppen-Skript für poppen, JOYclub-Skript für JOYclub, poppen-Skript auch für eigene Externe mit `ext.img`); die anderen führen es mit und zeigen es an (seit poppen 2.51 / JOYclub 2.23) |
 | `pics[]` | alle Bilder der Person: `{ k, src, pf, at }` – `k` stabile Kennung (`joyclub-<Bild-ID>`, `poppen-<uid>-<hash>`), `src` Adresse in voller Auflösung, `pf` Plattform, `at` gefunden am (ms); Videos zusätzlich `v: 1, vid` (Video-ID); JOYclub (ab 2.19) mit `vuid` (Profil-ID) und leerem `src`, poppen (ab 2.50) mit der signierten HLS-Adresse in `src` und ihrem Ablauf `exp` (ms). Nie entfernen; gleiche `k` nur einmal. Bilddaten liegen nur lokal bzw. in Home Assistant (seit JOYclub 2.13 / poppen 2.48) |
 | `imported` | Herkunft beim Import (Text) |
 | `created` | Anlagezeitpunkt |
@@ -115,7 +116,7 @@ Eine Person je Eintrag. Alle Felder sind optional außer `id`.
 | `imported` | Nick des Exporteurs, wenn aus einer fremden Fickliste übernommen |
 
 **Felder, die das JOYclub-Skript bisher evtl. nicht kennt** (mitführen, nie entfernen): `meets[].pf`, `meets[].imported`,
-`profiles[].sync`, `profiles[].dead`, `profiles[].pfName`, `profiles[].text`, `notesBy`, `ext.*`, `imported`, `history[]`, `pics[]`, `alias`, `aliasAt` und die
+`profiles[].sync`, `profiles[].dead`, `profiles[].pfName`, `profiles[].text`, `notesBy`, `ext.*`, `imported`, `history[]`, `pics[]`, `alias`, `aliasAt`, `thumb` und die
 Versionsfelder `rev`, `updatedAt`, `updatedBy`, `deleted`.
 
 ### `tpl` – gemeinsame Textvorlagen
