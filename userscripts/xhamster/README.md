@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.2.0 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.2.1 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -12,6 +12,9 @@ Stand: Version 0.2.0 – Änderungen siehe [changelog.txt](changelog.txt)
    https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/xhamster/swinger-companion-xhamster.user.js
 
 ## Was es tut
+
+- **Menü:** Alle Befehle stehen im Nutzer-Menü von xHamster (Klick auf den eigenen Avatar oben rechts) unter
+  „Swinger Companion“ und zusätzlich im Tampermonkey-Menü.
 
 - **Regeln von poppen.de:** Altersgrenzen (Stufe 1, Stufe 2, „Ignorieren ab“), Bezeichnungen (Jungspund, Mann, Opa …,
   im Ruhrgebiet „Oppa“), „markieren“/„ignorieren“ je Gruppe und die Whitelist kommen aus der Einstellungs-Kopie, die das

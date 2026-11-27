@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.0
+// @version      0.2.1
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1301,7 +1301,7 @@
     const src = srcOfPage();
     const items = document.querySelectorAll('.item.friend, [class*="card"], [class*="Card"], li');
     for (const it of items) {
-      if (it.querySelector('.xhsc-badge') || it.closest('#xhsc-box')) continue;
+      if (it.querySelector('.xhsc-badge') || it.closest('#xhsc-box, header, .user-dropdown, [data-role="header"]')) continue;
       // 0.2.0: in der Dating-Suche ist die Karte selbst der Link
       const a = it.matches('a[href*="/users/"]') ? it : it.querySelector('a[href*="/users/"]');
       const r = it.querySelector('.retired');
@@ -1585,22 +1585,79 @@
   // =====================================================================
   hookNetwork();
   // 0.1.7: zuerst, damit es auch bei schnellem Neuladen erreichbar ist
-  try { GM_registerMenuCommand('■ Anhalten (Opa-Scan, Scan-Lauf, Aktionstest)', () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs('xh_oscan_lock', null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); }); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Opa-Scan: Probelauf (zählt nur)', () => oscanStart('dry')); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Opa-Scan: Opas blockieren', () => oscanStart('block')); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Regeln von poppen.de anzeigen', rulesInfo); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Regeln von poppen.de neu laden', async () => { await rulesRefresh(true); rulesInfo(); }); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand(`Opas in der Dating-Suche ${opa().hide ? 'nur abdunkeln' : 'ausblenden'}`, () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? 'Opas werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).' : 'Opas werden nur abgedunkelt (ab dem nächsten Laden).'); }); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Scan-Lauf starten', scanStart); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Aktionstest starten (mit Partnerkonto)', actStart); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Freundschaftsanfrage des Partners annehmen', acceptPartner); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Rekorder an Home Assistant senden', recToHa); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Rekorder exportieren (Datei)', recExportFile); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand(`Rekorder ${recOn() ? 'ausschalten' : 'einschalten'}`, () => { gs(K.recOn, !recOn()); alert('Rekorder ' + (recOn() ? 'an' : 'aus') + ' (gilt ab dem nächsten Laden).'); }); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Rekorder: Vorgabe wiederherstellen (nur Testkonten)', () => { GM_deleteValue(K.recOn); alert('Rekorder läuft jetzt nur für die Testkonten.'); }); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Rekorder leeren', () => { if (confirm('Alles Gesammelte löschen?')) { recBuf = null; GM_deleteValue(K.rec); } }); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Partnerkonto eintragen', () => { const v = prompt('Nick des Partnerkontos (leer = Vorgabe):', gm(K.partner, '') || partner()); if (v != null) gs(K.partner, v.trim()); }); } catch (e) { /* egal */ }
-  if (recGate()) try { GM_registerMenuCommand('Home-Assistant-Adresse eintragen', haSetup); } catch (e) { /* egal */ }
+  // 0.2.1: eine Liste für beide Menüs – das Tampermonkey-Menü und das Nutzer-Menü von xHamster (Klick auf den eigenen Avatar)
+  const running = () => !!(gm(K.scan, null) || gm(K.act, null) || gm(K.oscan, null));
+  const stopAll = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs('xh_oscan_lock', null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); };
+  const toggleHide = () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? 'Opas werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).' : 'Opas werden nur abgedunkelt (ab dem nächsten Laden).'); };
+  const ACTIONS = [
+    { g: 'opa', icon: 'stop', label: () => '■ Anhalten (Opa-Scan, Scan-Lauf, Aktionstest)', fn: stopAll, dd: running },
+    { g: 'opa', icon: 'scan', label: () => 'Opa-Scan: Probelauf (zählt nur)', fn: () => oscanStart('dry') },
+    { g: 'opa', icon: 'block', label: () => 'Opa-Scan: Opas blockieren', fn: () => oscanStart('block') },
+    { g: 'opa', icon: 'rules', label: () => 'Regeln von poppen.de anzeigen', fn: rulesInfo },
+    { g: 'opa', icon: 'reload', label: () => 'Regeln von poppen.de neu laden', fn: async () => { await rulesRefresh(true); rulesInfo(); } },
+    { g: 'opa', icon: 'eye', label: () => `Opas in der Dating-Suche ${opa().hide ? 'nur abdunkeln' : 'ausblenden'}`, fn: toggleHide },
+    { g: 'rec', gate: true, icon: 'rec', label: () => 'Scan-Lauf starten', fn: scanStart },
+    { g: 'rec', gate: true, icon: 'rec', label: () => 'Aktionstest starten (mit Partnerkonto)', fn: actStart },
+    { g: 'rec', gate: true, icon: 'rec', label: () => 'Freundschaftsanfrage des Partners annehmen', fn: acceptPartner },
+    { g: 'rec', gate: true, icon: 'send', label: () => 'Rekorder an Home Assistant senden', fn: () => recToHa() },
+    { g: 'rec', gate: true, icon: 'send', label: () => 'Rekorder exportieren (Datei)', fn: recExportFile },
+    { g: 'rec', gate: true, icon: 'rec', label: () => `Rekorder ${recOn() ? 'ausschalten' : 'einschalten'}`, fn: () => { gs(K.recOn, !recOn()); alert('Rekorder ' + (recOn() ? 'an' : 'aus') + ' (gilt ab dem nächsten Laden).'); } },
+    { g: 'rec', gate: true, icon: 'rec', label: () => 'Rekorder: Vorgabe wiederherstellen (nur Testkonten)', fn: () => { GM_deleteValue(K.recOn); alert('Rekorder läuft jetzt nur für die Testkonten.'); } },
+    { g: 'rec', gate: true, icon: 'rec', label: () => 'Rekorder leeren', fn: () => { if (confirm('Alles Gesammelte löschen?')) { recBuf = null; GM_deleteValue(K.rec); } } },
+    { g: 'rec', gate: true, icon: 'rec', label: () => 'Partnerkonto eintragen', fn: () => { const v = prompt('Nick des Partnerkontos (leer = Vorgabe):', gm(K.partner, '') || partner()); if (v != null) gs(K.partner, v.trim()); } },
+    { g: 'rec', gate: true, icon: 'rec', label: () => 'Home-Assistant-Adresse eintragen', fn: haSetup },
+  ];
+  for (const x of ACTIONS) if (!x.gate || recGate()) try { GM_registerMenuCommand(x.label(), x.fn); } catch (e) { /* egal */ }
+  // Symbole (20 × 20, Stil wie die xHamster-Menüsymbole)
+  const ICONS = {
+    stop: '<rect x="5" y="5" width="10" height="10" rx="1.5"/>',
+    scan: '<path d="M8.5 3a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Zm0 1.8a3.7 3.7 0 1 0 0 7.4 3.7 3.7 0 0 0 0-7.4Zm4.6 8 4 4-1.3 1.3-4-4 1.3-1.3Z"/>',
+    block: '<path d="M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-4.7 4.6A6 6 0 0 0 13.4 14.7L5.3 6.6Zm1.3-1.3 8.1 8.1A6 6 0 0 0 6.6 5.3Z"/>',
+    rules: '<path d="M4 3h12v2H4V3Zm0 4h12v2H4V7Zm0 4h8v2H4v-2Zm0 4h8v2H4v-2Z"/>',
+    reload: '<path d="M10 3a7 7 0 0 1 6.3 4H14v2h5V4h-2v1.7A9 9 0 1 0 19 10h-2a7 7 0 1 1-7-7Z"/>',
+    eye: '<path d="M10 4c4.5 0 7.6 3.6 8.6 6-1 2.4-4.1 6-8.6 6S2.4 12.4 1.4 10C2.4 7.6 5.5 4 10 4Zm0 2.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/>',
+    rec: '<circle cx="10" cy="10" r="5"/>',
+    send: '<path d="M2 3l16 7-16 7 2.5-7L2 3Zm3.8 6h5.7v2H5.8L5 13.6 13.4 10 5 6.4 5.8 9Z"/>',
+  };
+  // Nutzer-Menü von xHamster: eigene Einträge vor „Edit profile“ (wird bei jedem Öffnen neu aufgebaut)
+  function ddInsert() {
+    const ul = document.querySelector('.user-dropdown > ul');
+    if (!ul || ul.querySelector('.xhsc-dd')) return;
+    const edit = [...ul.querySelectorAll('a[href]')].find((a) => /\/my\/edit\/profile\/?$/.test(a.getAttribute('href') || ''));
+    const anchor = edit ? edit.closest('li') : null;
+    const linkCls = (ul.querySelector('a.user-dropdown-link:not(.profile-link)') || {}).className || 'user-dropdown-link';
+    const iconCls = (ul.querySelector('.user-dropdown-link .xh-icon') || {}).className || 'xh-icon';
+    const svgEl = ul.querySelector('.user-dropdown-link .xh-icon svg');
+    const svgCls = (svgEl && svgEl.getAttribute('class')) || '';
+    const frag = document.createDocumentFragment();
+    const sep = () => { const li = document.createElement('li'); li.className = 'user-dropdown-item separator xhsc-dd'; frag.appendChild(li); };
+    sep();
+    const head = document.createElement('li');
+    head.className = 'user-dropdown-item xhsc-dd';
+    head.style.cssText = 'padding:6px 16px 2px;font:600 11px/1.3 system-ui,sans-serif;letter-spacing:.04em;text-transform:uppercase;opacity:.6';
+    head.textContent = 'Swinger Companion';
+    frag.appendChild(head);
+    let lastG = '';
+    for (const x of ACTIONS) {
+      if (x.gate && !recGate()) continue;
+      if (x.dd && !x.dd()) continue;
+      if (lastG && x.g !== lastG) sep();
+      lastG = x.g;
+      const li = document.createElement('li');
+      li.className = 'user-dropdown-item with-icon xhsc-dd';
+      li.innerHTML = `<a class="${esc(linkCls)}" href="#"><span class="${esc(iconCls)}"><svg viewBox="0 0 20 20" width="20" class="${esc(svgCls)}" fill="currentColor">${ICONS[x.icon] || ''}</svg></span> </a>`;
+      li.querySelector('a').append(x.label().replace(/^■ /, ''));
+      li.querySelector('a').addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        // Menü schließen (Klick neben das Menü), dann ausführen
+        try { document.body.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (er) { /* egal */ }
+        setTimeout(() => { try { x.fn(); } catch (er) { console.warn('[xHamster-SC]', er); } }, 50);
+      });
+      frag.appendChild(li);
+    }
+    if (anchor) { const prev = anchor.previousElementSibling; (prev && prev.matches('li.separator') ? prev : anchor).before(frag); }
+    else ul.appendChild(frag);
+  }
 
   // Fehler 503 (Server überlastet): mit steigendem Abstand neu laden, das fängt sich von selbst
   function is503() {
@@ -1639,6 +1696,8 @@
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
     const tick = () => { try { profileBox(); decorate(); } catch (e) { /* egal */ } };
+    // Nutzer-Menü: entsteht erst beim Öffnen – sofort ergänzen
+    try { new MutationObserver(() => { try { ddInsert(); } catch (e) { /* egal */ } }).observe(document.body, { childList: true, subtree: true }); } catch (e) { /* egal */ }
     tick();
     setInterval(tick, 1500);
     // Seitenwechsel ohne Neuladen: Stand der neuen Seite aufzeichnen

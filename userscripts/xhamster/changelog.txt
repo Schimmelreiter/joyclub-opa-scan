@@ -1,6 +1,11 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.1 (27.11.2026)
+- Die Befehle stehen jetzt auch im Nutzer-Menü von xHamster (Klick auf den eigenen Avatar) unter „Swinger Companion“,
+  vor „Edit profile“ – wie das Hamburger-Menü bei JOYclub und poppen.de. Das Tampermonkey-Menü bleibt
+- Behoben: Im Nutzer-Menü und in der Kopfzeile erschien eine Markierung („ich“)
+
 0.2.0 (27.11.2026)
 - Gemeinsame Ablage (Briefkasten) wie bei poppen.de und JOYclub, mit eigener Brücke; dafür bettet das Skript den
   Briefkasten auch auf poppen.de und joyclub.de passiv ein
