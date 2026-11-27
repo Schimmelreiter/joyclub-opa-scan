@@ -55,6 +55,15 @@
         "joyclub": "JOYclub",
         "poppen": "poppen.de"
       }
+    },
+    "status": {
+      "options": {
+        "none": "Kein Status",
+        "want": "Will ich ficken",
+        "done": "Gefickt",
+        "no": "Nein, danke!",
+        "never": "Nie wieder!"
+      }
     }
   },
   "entity": {
@@ -70,6 +79,98 @@
       },
       "last_sent": {
         "name": "Letzte Übertragung"
+      },
+      "fick_last_meet": {
+        "name": "Letztes Treffen"
+      }
+    },
+    "select": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "none": "Kein Status",
+          "want": "Will ich ficken",
+          "done": "Gefickt",
+          "no": "Nein, danke!",
+          "never": "Nie wieder!"
+        }
+      }
+    },
+    "text": {
+      "notes": {
+        "name": "Anmerkung"
+      }
+    }
+  },
+  "exceptions": {
+    "not_a_person": {
+      "message": "Bitte eine Person der Fickliste wählen (ein Gerät von Swinger Companion unter einer Person)."
+    },
+    "notes_too_long": {
+      "message": "Diese Anmerkung ist länger als 255 Zeichen – bitte mit der Aktion „Anmerkung setzen“ ändern."
+    }
+  },
+  "services": {
+    "set_status": {
+      "name": "Status setzen",
+      "description": "Ändert den Status einer Person; die Skripte übernehmen ihn bei ihrer nächsten Übertragung.",
+      "fields": {
+        "device_id": {
+          "name": "Person",
+          "description": "Gerät der Person."
+        },
+        "status": {
+          "name": "Status",
+          "description": "none, want, done, no oder never."
+        }
+      }
+    },
+    "set_notes": {
+      "name": "Anmerkung setzen",
+      "description": "Ersetzt die Anmerkung einer Person (bis 8000 Zeichen).",
+      "fields": {
+        "device_id": {
+          "name": "Person",
+          "description": "Gerät der Person."
+        },
+        "notes": {
+          "name": "Anmerkung",
+          "description": "Neuer Text; leer entfernt die Anmerkung."
+        }
+      }
+    },
+    "add_meet": {
+      "name": "Treffen eintragen",
+      "description": "Trägt ein Treffen mit einer Person ein; die Skripte übernehmen es bei ihrer nächsten Übertragung.",
+      "fields": {
+        "device_id": {
+          "name": "Person",
+          "description": "Gerät der Person."
+        },
+        "date": {
+          "name": "Datum",
+          "description": "Tag des Treffens."
+        },
+        "time": {
+          "name": "Uhrzeit",
+          "description": "Optional."
+        },
+        "where": {
+          "name": "Was",
+          "description": "Party oder Anlass."
+        },
+        "club": {
+          "name": "Wo",
+          "description": "Club oder Ort."
+        },
+        "link": {
+          "name": "Link",
+          "description": "Optionaler Link, z. B. zur Party."
+        },
+        "note": {
+          "name": "Notiz",
+          "description": "Optionale Notiz zu diesem Treffen."
+        }
       }
     }
   }

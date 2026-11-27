@@ -1,0 +1,52 @@
+set_status:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: swinger_companion
+    status:
+      required: true
+      selector:
+        select:
+          options: ["none", "want", "done", "no", "never"]
+          translation_key: status
+set_notes:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: swinger_companion
+    notes:
+      selector:
+        text:
+          multiline: true
+add_meet:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: swinger_companion
+    date:
+      required: true
+      selector:
+        date:
+    time:
+      selector:
+        time:
+    where:
+      selector:
+        text:
+    club:
+      selector:
+        text:
+    link:
+      selector:
+        text:
+          type: url
+    note:
+      selector:
+        text:
+          multiline: true

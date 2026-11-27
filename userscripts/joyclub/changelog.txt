@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.14 (27.11.2026)
+- Neu: Rückweg aus Home Assistant (Swinger Companion ab 0.3.0). Status, Anmerkung und neue Treffen, die in Home Assistant geändert werden, übernimmt das Skript mit der nächsten Übertragung in die Fickliste (Verlauf: „Aus Home Assistant: …“) und quittiert sie; über den Abgleich kommen sie auch im poppen-Skript an
+
 2.13 (27.11.2026)
 - Neu: Fickliste speichert alle Bilder einer Person. Beim Besuch des Profils übernimmt das Skript Profilbild und alle sichtbaren Galeriebilder (auch nachgeladene beim Scrollen) in voller Auflösung – ohne zusätzliche Abrufe. Neue Bilder kommen bei späteren Besuchen dazu, nichts wird gelöscht, gleiche Bilder nur einmal
 - Home Assistant (Swinger Companion ab 0.2.0) bekommt alle Bilder in voller Auflösung, einzeln nacheinander – auch die Bilder, die das poppen-Skript gefunden hat. Sobald Home Assistant ein Bild hat, behält das Skript ab dem 6. Bild einer Person nur noch eine Vorschau

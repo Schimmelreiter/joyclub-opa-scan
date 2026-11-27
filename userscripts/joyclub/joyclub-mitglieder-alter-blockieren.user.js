@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.13
+// @version      2.14
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -15658,6 +15658,40 @@ fragment ImageUIDataFragment on ImageUIData {
       method: 'POST', url, headers: { 'Content-Type': 'application/json' }, data: JSON.stringify(body), timeout: 60000,
       onload: (r) => resolve(r), onerror: () => reject(new Error('Home Assistant nicht erreichbar')), ontimeout: () => reject(new Error('Zeitüberschreitung')) }));
   }
+  // 2.14: Änderungen aus Home Assistant (Status, Anmerkung, neue Treffen) übernehmen; Quittung mit der nächsten Übertragung
+  const K_HA_ACK = 'jaf_ha_ack';
+  function haApplyChanges(changes, persons) {
+    const acks = GM_getValue(K_HA_ACK, []) || [];
+    let n = 0;
+    for (const c of changes || []) {
+      const x = persons.find((y) => y.id === c.id);
+      const q = x && flGet(x.__lid);
+      if (!q) continue;
+      const what = [];
+      if ('status' in c) {
+        const st = c.status ? FL_X_ST_R[c.status] || null : null;
+        if ((q.status || null) !== st) {
+          what.push(`Status: ${q.status ? flLabel(q.status) : '–'} → ${st ? flLabel(st) : '–'}`);
+          q.status = st; q.statusAt = c.statusAt || Date.now(); q.__keepStatusAt = true;
+        }
+      }
+      if ('notes' in c && (q.notes || '') !== String(c.notes || '')) {
+        q.notes = String(c.notes || '').slice(0, 8000); q.notesAt = c.notesAt || Date.now(); q.notesBy = { pf: 'ha', acc: 'Home Assistant' };
+        what.push('Anmerkung geändert');
+      }
+      for (const m of c.meets || []) {
+        const keyOf = (o) => [o.date || '', o.time || '', norm(o.wo || o.where || ''), norm(o.club || '')].join('|');
+        if ((q.meets || []).some((y) => y.id === m.id || keyOf(y) === keyOf(m))) continue;
+        (q.meets = q.meets || []).push(flMeetIn(m));
+        what.push(`Treffen ${fmtDate(m.date)}${m.club ? ' · ' + m.club : ''}`);
+      }
+      if (what.length) { flHist(q, 'Aus Home Assistant: ' + what.join(', ')); flPut(q); n++; }
+      if (!acks.some((a) => a.id === c.id && a.rev >= c.rev)) acks.push({ id: c.id, rev: c.rev });
+    }
+    GM_setValue(K_HA_ACK, acks);
+    if (n || acks.length) haSoon();
+    return n;
+  }
   // Bilder einzeln senden (je Anfrage ein Bild in voller Auflösung), höchstens 3 Minuten je Lauf
   async function haSendPics(a, key, persons, need) {
     const tried = new Set(), t0 = Date.now();
@@ -15710,7 +15744,8 @@ fragment ImageUIDataFragment on ImageUIData {
           const d = q && q.img ? await haShrink(GM_getValue(K_FLI + q.img, '')) : '';
           if (d) thumbs[pid] = d;
         }
-        const payload = { format: 'swinger-companion', v: 1, platform: 'joyclub', script: ver, account: { uid: String(tplMe() || ''), nick: ownNick() || '' }, persons, thumbKeys, thumbs };
+        const ack = GM_getValue(K_HA_ACK, []) || [];
+        const payload = { format: 'swinger-companion', v: 1, platform: 'joyclub', script: ver, account: { uid: String(tplMe() || ''), nick: ownNick() || '' }, persons, thumbKeys, thumbs, ack };
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
         const r = await haPost(a.url, { v: 1, iv: b64(iv), data: b64(ct) });
@@ -15720,11 +15755,13 @@ fragment ImageUIDataFragment on ImageUIData {
         const env = JSON.parse(r.responseText || '{}');
         const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data));
         ans = JSON.parse(new TextDecoder().decode(pt));
+        if (ack.length) { const sent = new Set(ack.map((a) => a.id + '|' + a.rev)); GM_setValue(K_HA_ACK, (GM_getValue(K_HA_ACK, []) || []).filter((a) => !sent.has(a.id + '|' + a.rev))); }
         const sentNow = Object.keys(thumbs);
         need = (ans.need || []).filter((pid) => !sentNow.includes(pid) || !thumbs[pid]);
         need = need.filter((pid) => { const x = persons.find((y) => y.id === pid); return x && fl[x.__lid] && GM_getValue(K_FLI + fl[x.__lid].img, ''); });
         if (!need.length || sentNow.length === 0 && round > 0) break;
       }
+      if (ans && Array.isArray(ans.changes) && ans.changes.length) haApplyChanges(ans.changes, persons);
       const pics = ans ? await haSendPics(a, key, persons, ans.needPics || []) : 0;
       GM_setValue(K_HA_STAT, { at: started, count: ans ? ans.count : 0, pics: pics + ((GM_getValue(K_HA_STAT, {}) || {}).pics || 0) });
     } catch (e) {

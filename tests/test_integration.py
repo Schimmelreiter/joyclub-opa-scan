@@ -46,7 +46,7 @@ async def test_flow_webhook_sensors(hass: HomeAssistant, hass_client_no_auth) ->
     r = await client.post(url, json=encrypt(key, _payload()))
     assert r.status == 200
     ans = decrypt(key, await r.json())
-    assert ans == {"ok": True, "count": 3, "need": ["j:1"], "needPics": []}
+    assert ans == {"ok": True, "count": 3, "need": ["j:1"], "needPics": [], "changes": []}
     await hass.async_block_till_done()
     entry = hass.config_entries.async_get_entry(entry.entry_id)
     subs = [s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_ACCOUNT]
@@ -62,7 +62,7 @@ async def test_flow_webhook_sensors(hass: HomeAssistant, hass_client_no_auth) ->
     # devices: person + account below it
     devs = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
     names = {d.name: d for d in devs}
-    assert set(names) == {"Swinger Companion Alex", "TestNick@JOYclub"}
+    assert set(names) == {"Swinger Companion Alex", "TestNick@JOYclub", "Lisa", "Mia", "Nein"}
     assert names["TestNick@JOYclub"].via_device_id == names["Swinger Companion Alex"].id
 
     # picture sent → served only with the signed address
@@ -153,3 +153,50 @@ async def test_full_pictures(hass: HomeAssistant, hass_client_no_auth, tmp_path)
     await hass.async_block_till_done()
     want = [s for s in hass.states.async_all("sensor") if s.attributes.get("persons") and s.attributes["persons"][0]["name"] == "Lisa"][0]
     assert len(want.attributes["persons"][0]["pics"]) == 1
+
+
+async def test_person_devices_and_return_path(hass: HomeAssistant, hass_client_no_auth) -> None:
+    entry = await _entry(hass)
+    client = await hass_client_no_auth()
+    url = f"/api/webhook/{entry.data[CONF_WEBHOOK_ID]}"
+    key = entry.data[CONF_KEY]
+    persons = _payload()["persons"]
+    persons[0]["notes"] = "kurz"
+    await client.post(url, json=encrypt(key, _payload(persons=persons)))
+    await hass.async_block_till_done()
+    entry = hass.config_entries.async_get_entry(entry.entry_id)
+    reg = dr.async_get(hass)
+    devs = {d.name: d for d in dr.async_entries_for_config_entry(reg, entry.entry_id)}
+    assert {"Lisa", "Mia", "Nein"} <= set(devs)
+    assert devs["Lisa"].via_device_id == devs["Swinger Companion Alex"].id
+    sel = [s for s in hass.states.async_all("select")]
+    lisa_sel = next(s for s in sel if s.state == "want")
+    lisa_text = next(s for s in hass.states.async_all("text") if s.state == "kurz")
+
+    # change status and note in Home Assistant → shown at once, sent to the script
+    await hass.services.async_call("select", "select_option", {"entity_id": lisa_sel.entity_id, "option": "done"}, blocking=True)
+    await hass.services.async_call("text", "set_value", {"entity_id": lisa_text.entity_id, "value": "neu"}, blocking=True)
+    await hass.services.async_call(DOMAIN, "add_meet", {"device_id": devs["Lisa"].id, "date": "2026-11-20", "time": "21:30", "club": "Club Y"}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(lisa_sel.entity_id).state == "done"
+    done = [s for s in hass.states.async_all("sensor") if s.entity_id.endswith(("_gefickt", "_fucked"))][0]
+    lisa = next(p for p in done.attributes["persons"] if p["name"] == "Lisa")
+    assert lisa["pending"] and lisa["notes"] == "neu" and lisa["meets"] == 1 and lisa["last_meet"]["club"] == "Club Y"
+    ans = decrypt(key, await (await client.post(url, json=encrypt(key, _payload(persons=persons)))).json())
+    ch = ans["changes"]
+    assert len(ch) == 1 and ch[0]["id"] == "j:1" and ch[0]["status"] == "done" and ch[0]["notes"] == "neu"
+    assert ch[0]["meets"][0]["date"] == "2026-11-20" and ch[0]["meets"][0]["time"] == "21:30"
+    # an older acknowledgement does not remove a newer change
+    ans = decrypt(key, await (await client.post(url, json=encrypt(key, _payload(persons=persons, ack=[{"id": "j:1", "rev": ch[0]["rev"] - 1}])))).json())
+    assert ans["changes"]
+    persons[0].update(status="done", notes="neu", meets=[{"date": "2026-11-20", "time": "21:30", "club": "Club Y"}])
+    ans = decrypt(key, await (await client.post(url, json=encrypt(key, _payload(persons=persons, ack=[{"id": "j:1", "rev": ch[0]["rev"]}])))).json())
+    assert ans["changes"] == []
+    await hass.async_block_till_done()
+    assert hass.states.get(lisa_sel.entity_id).state == "done"
+
+    # person gone → its device is removed
+    await client.post(url, json=encrypt(key, _payload(persons=persons[:2])))
+    await hass.async_block_till_done()
+    names = {d.name for d in dr.async_entries_for_config_entry(reg, entry.entry_id)}
+    assert "Nein" not in names and "Lisa" in names

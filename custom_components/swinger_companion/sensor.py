@@ -12,8 +12,9 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from . import SCConfigEntry, person_view
+from . import SCConfigEntry, person_view, thumb_url
 from .const import CONF_NICK, CONF_PLATFORM, DOMAIN, PLATFORM_NAMES, SIGNAL_UPDATE, STATUS_DONE, STATUS_WANT, SUBENTRY_ACCOUNT
+from .entity import FickEntity, async_track_persons, person_device
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SCConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
@@ -21,6 +22,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SCConfigEntry, async_add
     for sub in entry.subentries.values():
         if sub.subentry_type == SUBENTRY_ACCOUNT:
             async_add_entities([AccountSensor(entry, sub.subentry_id)], config_subentry_id=sub.subentry_id)
+    async_track_persons(hass, entry, lambda pid: [FickLastMeet(entry, pid, "fick_last_meet")], async_add_entities)
 
 
 class _Base(SensorEntity):
@@ -40,11 +42,6 @@ class _Base(SensorEntity):
     @callback
     def _update(self) -> None:
         self.async_write_ha_state()
-
-
-def person_device(entry: SCConfigEntry) -> DeviceInfo:
-    return DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name=f"Swinger Companion {entry.title}",
-                      manufacturer="Swinger Companion", model="Person", entry_type=DeviceEntryType.SERVICE)
 
 
 class ListSensor(_Base):
@@ -134,3 +131,31 @@ class AccountSensor(_Base):
     def extra_state_attributes(self) -> dict[str, Any]:
         a = self.data.accounts.get(self.key) or {}
         return {"script_version": a.get("script") or None, "entries": a.get("count")}
+
+
+class FickLastMeet(FickEntity, SensorEntity):
+    """Last meeting with one person; picture, profiles and status as attributes."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:calendar-heart"
+
+    @property
+    def native_value(self) -> datetime | None:
+        p = self.p
+        at = ((p or {}).get("last_meet") or {}).get("at")
+        dt = dt_util.parse_datetime(at) if at else None
+        return dt_util.as_utc(dt.replace(tzinfo=dt_util.get_default_time_zone())) if dt else None
+
+    @property
+    def entity_picture(self) -> str | None:
+        return thumb_url(self.entry, self.entry.runtime_data.data, self.pid)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        p = self.entry.runtime_data.data.person(self.pid)
+        if not p:
+            return {}
+        v = person_view(self.entry, p)
+        m = v.get("last_meet") or {}
+        return {"status": v.get("status"), "meets": v.get("meets") or 0, "where": m.get("where") or "", "club": m.get("club") or "",
+                "profiles": v.get("profiles") or [], "pics": v.get("pics") or [], "pending": bool(v.get("pending"))}

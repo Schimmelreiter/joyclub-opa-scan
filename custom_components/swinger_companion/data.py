@@ -146,6 +146,7 @@ def summarize(p: dict[str, Any]) -> dict[str, Any] | None:
         "last_meet": ({"at": _meet_dt(last), "where": last.get("where") or "", "club": last.get("club") or "",
                        "link": last.get("link") or ""} if last else None),
         "notes": notes[:NOTES_MAX] + ("…" if len(notes) > NOTES_MAX else ""),
+        "notes_full": notes,
         "thumb": None,
         "pic_keys": pic_keys(p),
     }
@@ -160,15 +161,60 @@ class PersonData:
     thumbs: dict[str, dict[str, str]] = field(default_factory=dict)  # person id → {key, type, data (base64)}
     # person id → picture key → {file (relative to the picture folder), type, at, size}; never removed automatically
     pics: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
+    # changes made in Home Assistant, waiting for the script: person id → {rev, status?, statusAt?, notes?, notesAt?, meets[]}
+    changes: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"persons": self.persons, "accounts": self.accounts, "thumbs": self.thumbs, "pics": self.pics}
+        return {"persons": self.persons, "accounts": self.accounts, "thumbs": self.thumbs, "pics": self.pics, "changes": self.changes}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> PersonData:
         d = d or {}
         return cls(list(d.get("persons") or []), dict(d.get("accounts") or {}), dict(d.get("thumbs") or {}),
-                   dict(d.get("pics") or {}))
+                   dict(d.get("pics") or {}), dict(d.get("changes") or {}))
+
+    def person(self, pid: str) -> dict[str, Any] | None:
+        return next((p for p in self.persons if p["id"] == pid), None)
+
+    def change(self, pid: str, now_ms: int, **kw: Any) -> None:
+        """Remember a change made in Home Assistant (status, notes or a new meeting) for the scripts."""
+        c = self.changes.setdefault(pid, {})
+        c["rev"] = max(int(c.get("rev") or 0) + 1, now_ms)
+        if "status" in kw:
+            c["status"], c["statusAt"] = kw["status"], now_ms
+        if "notes" in kw:
+            c["notes"], c["notesAt"] = kw["notes"], now_ms
+        if "meet" in kw:
+            c.setdefault("meets", []).append(kw["meet"])
+
+    def ack(self, acks: Any) -> None:
+        """The script applied these changes: [{id, rev}]. Later changes of the same person stay."""
+        for a in acks if isinstance(acks, list) else []:
+            if isinstance(a, dict) and (c := self.changes.get(str(a.get("id")))) and int(a.get("rev") or 0) >= int(c.get("rev") or 0):
+                del self.changes[str(a["id"])]
+
+    def pending(self) -> list[dict[str, Any]]:
+        ids = {p["id"] for p in self.persons}
+        return [dict(c, id=pid) for pid, c in self.changes.items() if pid in ids]
+
+    def view(self, p: dict[str, Any]) -> dict[str, Any]:
+        """A person as Home Assistant shows it: with its changes that the script has not taken over yet."""
+        c = self.changes.get(p["id"])
+        if not c:
+            return p
+        out = dict(p)
+        if "status" in c:
+            out["status"], out["status_at"] = c["status"], c["statusAt"]
+        if "notes" in c:
+            n = str(c["notes"])
+            out["notes_full"], out["notes"] = n, n[:NOTES_MAX] + ("…" if len(n) > NOTES_MAX else "")
+        if c.get("meets"):
+            out["meets"] = int(out.get("meets") or 0) + len(c["meets"])
+            last = max(c["meets"], key=_meet_dt)
+            if not out.get("last_meet") or _meet_dt(last) > (out["last_meet"] or {}).get("at", ""):
+                out["last_meet"] = {"at": _meet_dt(last), "where": last.get("where") or "", "club": last.get("club") or "", "link": last.get("link") or ""}
+        out["pending"] = True
+        return out
 
     def need_pics(self) -> list[list[str]]:
         """[person id, key] of reported pictures that are not stored yet (at most NEED_PICS_MAX)."""
@@ -222,4 +268,4 @@ class PersonData:
         return [pid for pid in wanted if pid not in self.thumbs]
 
     def by_status(self, status: str) -> list[dict[str, Any]]:
-        return [p for p in self.persons if p.get("status") == status]
+        return [p for p in self.persons if self.view(p).get("status") == status]

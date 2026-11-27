@@ -55,6 +55,15 @@
         "joyclub": "JOYclub",
         "poppen": "poppen.de"
       }
+    },
+    "status": {
+      "options": {
+        "none": "No status",
+        "want": "Want to fuck",
+        "done": "Fucked",
+        "no": "No, thanks",
+        "never": "Never again"
+      }
     }
   },
   "entity": {
@@ -70,6 +79,98 @@
       },
       "last_sent": {
         "name": "Last transfer"
+      },
+      "fick_last_meet": {
+        "name": "Last meeting"
+      }
+    },
+    "select": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "none": "No status",
+          "want": "Want to fuck",
+          "done": "Fucked",
+          "no": "No, thanks",
+          "never": "Never again"
+        }
+      }
+    },
+    "text": {
+      "notes": {
+        "name": "Note"
+      }
+    }
+  },
+  "exceptions": {
+    "not_a_person": {
+      "message": "Pick a person of the Fickliste (a device of Swinger Companion below a person)."
+    },
+    "notes_too_long": {
+      "message": "This note is longer than 255 characters – change it with the action “Set note”."
+    }
+  },
+  "services": {
+    "set_status": {
+      "name": "Set status",
+      "description": "Changes the status of a person; the scripts take it over with their next transfer.",
+      "fields": {
+        "device_id": {
+          "name": "Person",
+          "description": "Device of the person."
+        },
+        "status": {
+          "name": "Status",
+          "description": "none, want, done, no or never."
+        }
+      }
+    },
+    "set_notes": {
+      "name": "Set note",
+      "description": "Replaces the note of a person (up to 8000 characters).",
+      "fields": {
+        "device_id": {
+          "name": "Person",
+          "description": "Device of the person."
+        },
+        "notes": {
+          "name": "Note",
+          "description": "New text; empty removes the note."
+        }
+      }
+    },
+    "add_meet": {
+      "name": "Add meeting",
+      "description": "Adds a meeting with a person; the scripts take it over with their next transfer.",
+      "fields": {
+        "device_id": {
+          "name": "Person",
+          "description": "Device of the person."
+        },
+        "date": {
+          "name": "Date",
+          "description": "Day of the meeting."
+        },
+        "time": {
+          "name": "Time",
+          "description": "Optional."
+        },
+        "where": {
+          "name": "What",
+          "description": "Party or occasion."
+        },
+        "club": {
+          "name": "Where",
+          "description": "Club or place."
+        },
+        "link": {
+          "name": "Link",
+          "description": "Optional link, e.g. to the party."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Optional note on this meeting."
+        }
       }
     }
   }

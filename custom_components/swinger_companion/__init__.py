@@ -4,21 +4,27 @@ from __future__ import annotations
 
 import base64
 import logging
-from pathlib import Path
+import secrets
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
-from urllib.parse import quote
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import voluptuous as vol
 from aiohttp import web
-
 from homeassistant.components import webhook
 from homeassistant.components.http import HomeAssistantView
-from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState, ConfigSubentry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -39,9 +45,10 @@ from .const import (
     THUMB_URL,
 )
 from .data import PersonData, decrypt, encrypt, parse_pic, sign
+from .entity import async_remove_stale_devices
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.SELECT, Platform.SENSOR, Platform.TEXT]
 STORE_VERSION = 1
 
 
@@ -93,6 +100,63 @@ def thumb_url(entry: ConfigEntry, data: PersonData, pid: str) -> str | None:
         return None
     path = THUMB_URL.format(entry_id=entry.entry_id, pid=pid)
     return f"{path}?k={t['key']}&s={sign(entry.data[CONF_SIGN], entry.entry_id, pid, t['key'])}"
+
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+STATUS_OPTIONS = ["none", "want", "done", "no", "never"]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    async def _target(call: ServiceCall) -> tuple[SCConfigEntry, str]:
+        dev = dr.async_get(hass).async_get(call.data["device_id"])
+        for ident in (i for d, i in (dev.identifiers if dev else set()) if d == DOMAIN):
+            if "_p_" in ident:
+                eid, pid = ident.split("_p_", 1)
+                entry = hass.config_entries.async_get_entry(eid)
+                if entry and entry.state is ConfigEntryState.LOADED and entry.runtime_data.data.person(pid):
+                    return entry, pid
+        raise ServiceValidationError(translation_domain=DOMAIN, translation_key="not_a_person")
+
+    async def set_status(call: ServiceCall) -> None:
+        entry, pid = await _target(call)
+        st = call.data["status"]
+        await async_changed(hass, entry, pid, status=None if st == "none" else st)
+
+    async def set_notes(call: ServiceCall) -> None:
+        entry, pid = await _target(call)
+        await async_changed(hass, entry, pid, notes=call.data.get("notes") or "")
+
+    async def add_meet(call: ServiceCall) -> None:
+        entry, pid = await _target(call)
+        d = call.data
+        meet = {"id": "m" + secrets.token_hex(5), "date": d["date"].isoformat(), "where": d.get("where") or "", "club": d.get("club") or "",
+                "note": d.get("note") or "", "link": d.get("link") or "", "at": int(time.time() * 1000)}
+        if d.get("time"):
+            meet["time"] = d["time"].strftime("%H:%M")
+        await async_changed(hass, entry, pid, meet=meet)
+
+    dev = {vol.Required("device_id"): cv.string}
+    hass.services.async_register(DOMAIN, "set_status", set_status, schema=vol.Schema({**dev, vol.Required("status"): vol.In(STATUS_OPTIONS)}))
+    hass.services.async_register(DOMAIN, "set_notes", set_notes, schema=vol.Schema({**dev, vol.Optional("notes", default=""):
+                                                                               vol.All(cv.string, vol.Length(max=8000))}))
+    hass.services.async_register(DOMAIN, "add_meet", add_meet, schema=vol.Schema({
+        **dev, vol.Required("date"): cv.date, vol.Optional("time"): cv.time, vol.Optional("where"): cv.string,
+        vol.Optional("club"): cv.string, vol.Optional("link"): cv.url, vol.Optional("note"): cv.string}))
+    return True
+
+
+async def async_changed(hass: HomeAssistant, entry: SCConfigEntry, pid: str, **kw: Any) -> None:
+    """A change made in Home Assistant: kept until the script confirms it (answer of its next transfer)."""
+    rt = entry.runtime_data
+    rt.data.change(pid, int(time.time() * 1000), **kw)
+    rt.store.async_delay_save(rt.data.as_dict, 1)
+    async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
+
+
+async def async_remove_config_entry_device(hass: HomeAssistant, entry: SCConfigEntry, device: dr.DeviceEntry) -> bool:
+    """Devices of persons that are no longer in the list may be removed by hand."""
+    ids = {i for d, i in device.identifiers if d == DOMAIN}
+    return not any(i == f"{entry.entry_id}_p_{p['id']}" for i in ids for p in entry.runtime_data.data.persons) and entry.entry_id not in ids
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SCConfigEntry) -> bool:
@@ -158,6 +222,7 @@ async def _handle_webhook(hass: HomeAssistant, webhook_id: str, request: web.Req
     sub = subentry_for(entry, platform, uid, nick)
     akey = sub.unique_id if sub is not None and sub.unique_id else account_key(platform, uid, nick)
     rt = entry.runtime_data
+    rt.data.ack(payload.get("ack"))
     try:
         need = rt.data.apply(payload, akey, dt_util.utcnow())
     except ValueError:
@@ -171,7 +236,9 @@ async def _handle_webhook(hass: HomeAssistant, webhook_id: str, request: web.Req
     else:
         rt.store.async_delay_save(rt.data.as_dict, 2)
         async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
-    return web.json_response(encrypt(key, {"ok": True, "count": len(rt.data.persons), "need": need, "needPics": rt.data.need_pics()}))
+        async_remove_stale_devices(hass, entry)
+    return web.json_response(encrypt(key, {"ok": True, "count": len(rt.data.persons), "need": need, "needPics": rt.data.need_pics(),
+                                            "changes": rt.data.pending()}))
 
 
 async def _handle_pic(hass: HomeAssistant, entry: SCConfigEntry, payload: dict[str, Any]) -> web.Response:
@@ -236,7 +303,7 @@ class PicView(HomeAssistantView):
 @callback
 def person_view(entry: SCConfigEntry, p: dict[str, Any]) -> dict[str, Any]:
     """A person summary with its signed picture addresses (small picture and all full pictures)."""
-    out = {k: v for k, v in p.items() if k != "pic_keys"}
+    out = {k: v for k, v in entry.runtime_data.data.view(p).items() if k not in ("pic_keys", "notes_full")}
     out["thumb"] = thumb_url(entry, entry.runtime_data.data, p["id"])
     out["pics"] = [pic_url(entry, p["id"], k) for k in entry.runtime_data.data.pic_list(p["id"])]
     return out
