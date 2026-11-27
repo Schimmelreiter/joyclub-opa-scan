@@ -99,6 +99,9 @@
     "text": {
       "notes": {
         "name": "Note"
+      },
+      "alias": {
+        "name": "Own name"
       }
     }
   },

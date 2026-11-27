@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import shutil
+import subprocess
 from typing import Any
 
 from .data import PIC_TYPES, pic_rel
@@ -41,17 +42,42 @@ def _dhash(path: Path) -> tuple[int, int] | None:
     return bits, pixels
 
 
+def _remux_ts(path: Path) -> None:
+    """Videos saved from HLS streams are MPEG-TS files with .mp4 name – browsers cannot play them: remux to real MP4."""
+    ff, fp = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ff or not fp:
+        return
+    try:
+        fmt = subprocess.run([fp, "-v", "error", "-show_entries", "format=format_name", "-of", "default=nw=1:nk=1", str(path)],
+                             capture_output=True, text=True, timeout=60).stdout.strip()
+        if "mpegts" not in fmt:
+            return
+        tmp = path.with_suffix(".remux.mp4")
+        r = subprocess.run([ff, "-v", "error", "-y", "-i", str(path), "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", str(tmp)],
+                           capture_output=True, timeout=600)
+        if r.returncode == 0 and tmp.stat().st_size > 0:
+            tmp.replace(path)
+        else:
+            tmp.unlink(missing_ok=True)
+    except (OSError, subprocess.SubprocessError):
+        return
+
+
 def import_dir(src: Path, dest: Path, pid: str, stored: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Copy new files; stored = the person's pictures so far ({key: info}). Returns {"added": [...], "duplicates": n, "skipped": n}."""
+    """Copy new files; stored = the person's pictures so far ({key: info}).
+
+    Returns {"added": [...], "upgraded": [...], "duplicates": n, "skipped": n}. A picture that is already there in a smaller
+    size is replaced by the larger one under its old key (so the scripts do not send it again).
+    """
     known_sha: set[str] = set()
-    known_hash: list[int] = []
-    for info in stored.values():
+    known: list[list[Any]] = []  # [hash, pixels, key]
+    for key, info in stored.items():
         f = dest / info["file"]
         if not f.is_file():
             continue
         known_sha.add(info.get("sha") or _sha(f))
         if info.get("type", "").startswith("image/") and (d := _dhash(f)):
-            known_hash.append(d[0])
+            known.append([d[0], d[1], key])
     cands = []
     skipped = 0
     for f in sorted(p for p in src.rglob("*") if p.is_file()):
@@ -63,18 +89,35 @@ def import_dir(src: Path, dest: Path, pid: str, stored: dict[str, dict[str, Any]
         cands.append((f, ctype, d))
     # largest pictures first, so the best copy of a picture is the one that stays
     cands.sort(key=lambda c: -(c[2][1] if c[2] else 0))
-    added, dup = [], 0
+    added, upgraded, dup = [], [], 0
     for f, ctype, d in cands:
         sha = _sha(f)
-        if sha in known_sha or (d and any(bin(d[0] ^ k).count("1") <= SIMILAR for k in known_hash)):
+        if sha in known_sha:
             dup += 1
             continue
+        same = next((k for k in known if d and bin(d[0] ^ k[0]).count("1") <= SIMILAR), None) if d else None
+        if same is not None:
+            if same[2] in stored and d[1] > same[1] * 1.1:  # stored before in a smaller size → replace
+                old = stored[same[2]]
+                target = dest / pic_rel(pid, same[2], ctype)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(f, target)
+                if (dest / old["file"]) != target:
+                    (dest / old["file"]).unlink(missing_ok=True)
+                upgraded.append({"key": same[2], "type": ctype, "size": target.stat().st_size, "sha": sha, "name": f.name})
+                same[1] = d[1]
+                known_sha.add(sha)
+            else:
+                dup += 1
+            continue
         known_sha.add(sha)
-        if d:
-            known_hash.append(d[0])
         key = "local-" + sha[:16]
+        if d:
+            known.append([d[0], d[1], key])
         target = dest / pic_rel(pid, key, ctype)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(f, target)
+        if ctype.startswith("video/"):
+            _remux_ts(target)
         added.append({"key": key, "type": ctype, "size": target.stat().st_size, "sha": sha, "name": f.name})
-    return {"added": added, "duplicates": dup, "skipped": skipped}
+    return {"added": added, "upgraded": upgraded, "duplicates": dup, "skipped": skipped}

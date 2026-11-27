@@ -231,7 +231,7 @@ async def test_import_files(hass: HomeAssistant, hass_client_no_auth, tmp_path) 
     (src / "notes.txt").write_text("x")
     dev = next(d for d in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id) if d.name == "Lisa")
     res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(src)}, blocking=True, return_response=True)
-    assert res == {"added": 3, "videos": 1, "duplicates": 2, "skipped": 1}
+    assert res == {"added": 3, "upgraded": 0, "videos": 1, "duplicates": 2, "skipped": 1}
     res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(src)}, blocking=True, return_response=True)
     assert res["added"] == 0 and res["duplicates"] == 5
     await hass.async_block_till_done()
@@ -240,5 +240,39 @@ async def test_import_files(hass: HomeAssistant, hass_client_no_auth, tmp_path) 
     assert len(p["pics"]) == 2 and len(p["videos"]) == 1
     r = await client.get(p["videos"][0])
     assert r.status == 200 and r.headers["Content-Type"] == "video/mp4"
+    # the same picture larger → replaces the stored one under its key
+    up = tmp_path / "import" / "better"
+    up.mkdir()
+    big.resize((800, 600)).save(up / "huge.jpg")
+    res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(up)}, blocking=True, return_response=True)
+    assert res["added"] == 0 and res["upgraded"] == 1
+    await hass.async_block_till_done()
+    want = [s for s in hass.states.async_all("sensor") if s.attributes.get("persons") and s.attributes["persons"][0]["name"] == "Lisa"][0]
+    assert len(want.attributes["persons"][0]["pics"]) == 2
     with __import__("pytest").raises(Exception):
         await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": "/etc"}, blocking=True, return_response=True)
+
+
+
+async def test_own_name(hass: HomeAssistant, hass_client_no_auth) -> None:
+    entry = await _entry(hass)
+    client = await hass_client_no_auth()
+    url = f"/api/webhook/{entry.data[CONF_WEBHOOK_ID]}"
+    key = entry.data[CONF_KEY]
+    persons = _payload()["persons"]
+    persons[1]["alias"] = "Kim"
+    await client.post(url, json=encrypt(key, _payload(persons=persons)))
+    await hass.async_block_till_done()
+    reg = dr.async_get(hass)
+    names = {d.name for d in dr.async_entries_for_config_entry(reg, entry.entry_id)}
+    assert "Kim (Mia)" in names
+    done = [s for s in hass.states.async_all("sensor") if s.entity_id.endswith(("_gefickt", "_fucked"))][0]
+    assert done.attributes["persons"][0]["name"] == "Kim (Mia)" and done.attributes["persons"][0]["nick"] == "Mia"
+    # set in Home Assistant → device and lists follow at once, the script gets the change
+    lisa_alias = next(s for s in hass.states.async_all("text") if s.entity_id.endswith(("lisa_eigener_name", "lisa_own_name")))
+    await hass.services.async_call("text", "set_value", {"entity_id": lisa_alias.entity_id, "value": "Alexa"}, blocking=True)
+    await hass.async_block_till_done()
+    names = {d.name for d in dr.async_entries_for_config_entry(reg, entry.entry_id)}
+    assert "Alexa (Lisa)" in names
+    ans = decrypt(key, await (await client.post(url, json=encrypt(key, _payload(persons=persons)))).json())
+    assert ans["changes"][0]["alias"] == "Alexa"

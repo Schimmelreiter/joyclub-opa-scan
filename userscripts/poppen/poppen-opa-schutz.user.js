@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – Poppen Edition
 // @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.48
+// @version      2.49
 // @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -32,7 +32,7 @@
 
 (function () {
   'use strict';
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.48';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.49';
   const REPO_URL = 'https://github.com/Schimmelreiter/swinger-companion';
   const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) || window;
   // Eingebaute Funktionen gleich beim Start festhalten (das Skript läuft in der Seitenwelt; spätere Veränderungen
@@ -5399,6 +5399,25 @@
     ]);
     setTimeout(() => ta.focus(), 50);
   }
+  // 2.49: eigener Name (gilt in beiden Skripten und in Home Assistant: „Name (Nick)“)
+  async function setAlias(p, text) {
+    const t = String(text || '').trim().slice(0, 60);
+    if (t === (p.alias || '')) return p;
+    p.alias = t; p.aliasAt = now();
+    p.history = [...(p.history || []), { at: now(), what: t ? `Eigener Name: ${t}` : 'Eigener Name entfernt' }];
+    return Fick.put(p);
+  }
+  function editAlias(p, done) {
+    const m = modal({ title: 'Eigener Name', sub: esc((pm(p) && pm(p).nick) || (p.ext && p.ext.name) || (p.main && p.main.nick) || ''),
+      html: `<input class="vaf-in" data-f="n" maxlength="60" value="${esc(p.alias || '')}" placeholder="z. B. Vorname"><div class="vaf-mini">Erscheint in Home Assistant als „Name (Nick)“. Leer = nur der Nick.</div>` });
+    const inp = m.body.querySelector('[data-f=n]');
+    m.buttons([
+      { label: 'Speichern', primary: true, fn: async () => { if (!(await Fick.get(p.id))) await Fick.put(p); await setAlias(p, inp.value); m.close(); if (done) done(); else refreshProfileFick(); } },
+      { label: 'Abbrechen', focus: true, fn: () => m.close() },
+    ]);
+    setTimeout(() => inp.focus(), 50);
+  }
+  const aliasBlock = (p) => `<div style="margin-bottom:8px"><span style="color:#8c8c8c">Eigener Name</span> <a href="#" data-a="alias" title="Eigenen Namen bearbeiten">✎</a>${p.alias ? ` <b>${esc(p.alias)}</b>` : ''}</div>`;
   const notesBlock = (p) => `<div style="margin-bottom:8px"><span style="color:#8c8c8c">Anmerkungen</span> <a href="#" data-a="notes" title="Anmerkungen bearbeiten">✎</a>${notesOf(p) ? `<div style="white-space:pre-wrap;margin-top:2px">${esc(notesOf(p))}</div>` : ''}</div>`;
 
   // Abschnitt „Fickliste“ unter „Fotos“ und „Videos“
@@ -5425,6 +5444,7 @@
         <div style="margin-bottom:8px">${fickIcon(st ? st.i : 0, 18, true)} <b>${esc(st ? st.label : 'kein Fickstatus')}</b></div>
         ${meets.length ? `<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">${meets.map((t) => meetLine(t)).join('')}</div>` : '<div style="color:#8c8c8c;margin-bottom:8px">Noch keine Treffen eingetragen.</div>'}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px"><a href="#" data-a="add">+ Treffen eintragen</a></div>
+        ${aliasBlock(p)}
         ${notesBlock(p)}
         <div class="vaf-also" style="margin-bottom:6px"><span style="color:#8c8c8c">Auch auf:</span>${(p.profiles || []).filter((x) => !(x.pf === 'poppen' && x.uid === String(uid))).map(profLink).map((h) => `<span class="vaf-also-i">${h}</span>`).join('')}<button type="button" class="vaf-plus" data-a="prof" title="Profil auf einer anderen Plattform zufügen">+</button></div>
         <div style="display:flex;gap:16px"><a href="/setting/profile#archiv=${encodeURIComponent(uid)}" target="_blank">Profil-Archiv</a><a href="/setting/profile#fickliste" target="_blank">Zu meiner Fickliste</a></div>
@@ -5433,6 +5453,7 @@
     sec.querySelector('[data-a=add]').addEventListener('click', (e) => { e.preventDefault(); editMeet(p, null); });
     sec.querySelector('[data-a=prof]').addEventListener('click', (e) => { e.preventDefault(); addProfileDialog(p); });
     sec.querySelector('[data-a=notes]').addEventListener('click', (e) => { e.preventDefault(); editNotes(p); });
+    sec.querySelector('[data-a=alias]').addEventListener('click', (e) => { e.preventDefault(); editAlias(p); });
     sec.querySelectorAll('[data-meet]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); editMeet(p, p.meets.find((t) => t.id === a.dataset.meet)); }));
   }
   function meetLine(t) {
@@ -5642,7 +5663,7 @@
         <div style="margin:10px 0">${fickIcon(p.status ? FSTATES[p.status].i : 0, 18, true)} <select class="vaf-in" data-f="status" style="width:auto">${['', ...Object.keys(FSTATES)].map((k) => `<option value="${k}" ${k === (p.status || '') ? 'selected' : ''}>${k ? FSTATES[k].label : 'Ficken?'}</option>`).join('')}</select></div>
         <div class="vaf-also"><b>Auch auf:</b> ${[...(foreignUrl(p) ? [{ pf: p.main.pf, url: p.main.url, name: p.main.nick }] : []), ...(p.profiles || [])].map(profLink).map((h) => `<span class="vaf-also-i">${h}</span>`).join('')}<button type="button" class="vaf-plus" data-a="prof" title="Profil auf einer anderen Plattform zufügen">+</button></div>
         <h3>Treffen</h3><div>${[...(p.meets || [])].sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(meetLine).join('') || '–'}</div>
-        <div style="margin-top:10px">${notesBlock(p)}</div>
+        <div style="margin-top:10px">${aliasBlock(p)}${notesBlock(p)}</div>
         <div style="margin-top:8px"><a href="#" data-a="add">+ Treffen eintragen</a> · <a href="/setting/profile#archiv=${encodeURIComponent(p.id)}">Profil-Archiv</a> · <a href="#" data-a="del">Eintrag löschen</a></div></div>`;
       const save = async (what) => { await Fick.put(p); await DB.put('archive', { uid: p.id, nick: x.name, at: now(), reason: what, html: el.innerHTML, hash: '' }); };
       el.querySelectorAll('input[data-f]:not([type=file]):not([type=checkbox]), textarea[data-f]').forEach((i) => i.addEventListener('change', () => { x[i.dataset.f] = i.value.trim(); save(`${i.dataset.f} geändert`); }));
@@ -5657,6 +5678,7 @@
       el.querySelector('[data-a=prof]').onclick = (e) => { e.preventDefault(); addProfileDialog(p, draw); };
       el.querySelector('[data-a=add]').onclick = (e) => { e.preventDefault(); editMeet(p, null); };
       el.querySelector('[data-a=notes]').onclick = (e) => { e.preventDefault(); editNotes(p, draw); };
+      el.querySelector('[data-a=alias]').onclick = (e) => { e.preventDefault(); editAlias(p, draw); };
       el.querySelectorAll('[data-meet]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); editMeet(p, p.meets.find((t) => t.id === a.dataset.meet)); }; });
       el.querySelector('[data-a=del]').onclick = async (e) => { e.preventDefault(); if (W.confirm('Diesen externen Eintrag löschen?')) { await Fick.del(p.id); goHash('fickliste'); } };
     };
@@ -5884,6 +5906,8 @@
         }
       }
     }
+    if (typeof b.alias === 'string' && (b.aliasAt || 0) > (a.aliasAt || 0)) { a.alias = b.alias; a.aliasAt = b.aliasAt; }
+    if (b.pics && b.pics.length) { const have = new Set((a.pics || []).map((x) => x.k)); a.pics = [...(a.pics || []), ...b.pics.filter((x) => x && x.k && !have.has(x.k))]; }
     if ((b.statusAt || 0) > (a.statusAt || 0)) { a.status = b.status; a.statusAt = b.statusAt; }
     const mk = (t) => `${t.pf || ''}|${t.uid || ''}|${t.date || ''}|${norm(t.where)}|${norm(t.club)}|${linkKey({ url: t.link })}`;
     const seenM = new Set((a.meets || []).map(mk));

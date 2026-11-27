@@ -155,9 +155,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         now = dt_util.utcnow()
         for a in res["added"]:
             rt.data.add_pic(pid, a["key"], a["type"], a["size"], now, sha=a["sha"], source="local")
+        for a in res["upgraded"]:
+            old = (rt.data.pics.get(pid) or {}).get(a["key"]) or {}
+            rt.data.add_pic(pid, a["key"], a["type"], a["size"], now, sha=a["sha"], source=old.get("source") or "script", upgraded=True)
         rt.store.async_delay_save(rt.data.as_dict, 1)
         async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
-        return {"added": len(res["added"]), "videos": sum(a["type"].startswith("video/") for a in res["added"]),
+        return {"added": len(res["added"]), "upgraded": len(res["upgraded"]), "videos": sum(a["type"].startswith("video/") for a in res["added"]),
                 "duplicates": res["duplicates"], "skipped": res["skipped"]}
 
     dev = {vol.Required("device_id"): cv.string}
@@ -178,6 +181,8 @@ async def async_changed(hass: HomeAssistant, entry: SCConfigEntry, pid: str, **k
     rt.data.change(pid, int(time.time() * 1000), **kw)
     rt.store.async_delay_save(rt.data.as_dict, 1)
     async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
+    if "alias" in kw:
+        async_remove_stale_devices(hass, entry)
 
 
 async def async_remove_config_entry_device(hass: HomeAssistant, entry: SCConfigEntry, device: dr.DeviceEntry) -> bool:

@@ -127,7 +127,9 @@ def summarize(p: dict[str, Any]) -> dict[str, Any] | None:
         return None
     main = p.get("main") if isinstance(p.get("main"), dict) else {}
     ext = p.get("ext") if isinstance(p.get("ext"), dict) else {}
-    name = str(main.get("nick") or main.get("name") or ext.get("name") or p["id"])
+    nick = str(main.get("nick") or main.get("name") or ext.get("name") or p["id"])
+    alias = str(p.get("alias") or "").strip()[:60]
+    name = f"{alias} ({nick})" if alias else nick
     profiles = []
     if main.get("url") or main.get("nick"):
         profiles.append({"pf": main.get("pf") or "other", "name": main.get("nick") or "", "url": main.get("url") or "",
@@ -144,6 +146,8 @@ def summarize(p: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "id": str(p["id"]),
         "name": name,
+        "nick": nick,
+        "alias": alias,
         "type": str(joy.get("type") or ext.get("typ") or ""),
         "status": status,
         "status_at": p.get("statusAt") or None,
@@ -190,6 +194,8 @@ class PersonData:
             c["status"], c["statusAt"] = kw["status"], now_ms
         if "notes" in kw:
             c["notes"], c["notesAt"] = kw["notes"], now_ms
+        if "alias" in kw:
+            c["alias"], c["aliasAt"] = kw["alias"], now_ms
         if "meet" in kw:
             c.setdefault("meets", []).append(kw["meet"])
 
@@ -214,6 +220,10 @@ class PersonData:
         if "notes" in c:
             n = str(c["notes"])
             out["notes_full"], out["notes"] = n, n[:NOTES_MAX] + ("…" if len(n) > NOTES_MAX else "")
+        if "alias" in c:
+            out["alias"] = str(c["alias"] or "").strip()[:60]
+            nick = out.get("nick") or out["name"]
+            out["name"] = f"{out['alias']} ({nick})" if out["alias"] else nick
         if c.get("meets"):
             out["meets"] = int(out.get("meets") or 0) + len(c["meets"])
             last = max(c["meets"], key=_meet_dt)

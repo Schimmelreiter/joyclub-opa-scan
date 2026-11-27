@@ -1,6 +1,10 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.49 (27.11.2026)
+- Neu: Eigener Name je Eintrag der Fickliste (✎ neben „Eigener Name“ auf der Profilseite und in der Ansicht externer Einträge). Gilt auch im JOYclub-Skript (ab 2.18) und in Home Assistant, dort als „Name (Nick)“
+- Zusammenführen beim Import übernimmt eigenen Namen und Bilder
+
 2.48 (27.11.2026)
 - Neu: Fickliste merkt sich alle Bilder einer Person. Öffnest Du die Galerie eines Profils aus der Fickliste, übernimmt das Skript alle Bilder (nur deren Adressen, ohne zusätzliche Abrufe). Neue Bilder kommen bei späteren Besuchen dazu, nichts wird gelöscht. Das JOYclub-Skript (ab 2.13) lädt sie und überträgt sie an Home Assistant
 

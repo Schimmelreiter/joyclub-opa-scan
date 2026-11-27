@@ -36,10 +36,16 @@ def async_remove_stale_devices(hass: HomeAssistant, entry) -> None:
     """Persons no longer in the list: remove their devices (with their entities)."""
     reg = dr.async_get(hass)
     keep = {fick_ident(entry, p["id"])[1] for p in entry.runtime_data.data.persons}
+    names = {fick_ident(entry, p["id"])[1]: entry.runtime_data.data.view(p)["name"] for p in entry.runtime_data.data.persons}
     for dev in dr.async_entries_for_config_entry(reg, entry.entry_id):
         idents = {i for d, i in dev.identifiers if d == DOMAIN}
         if any(i.startswith(f"{entry.entry_id}_p_") for i in idents) and not idents & keep:
             reg.async_update_device(dev.id, remove_config_entry_id=entry.entry_id)
+            continue
+        # own name set or changed: device follows ("Name (Nick)"), unless renamed by hand
+        new = next((names[i] for i in idents if i in names), None)
+        if new and dev.name != new:
+            reg.async_update_device(dev.id, name=new)
 
 
 @callback

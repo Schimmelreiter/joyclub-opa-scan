@@ -15,7 +15,22 @@ MAX = 255
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SCConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
-    async_track_persons(hass, entry, lambda pid: [NoteText(entry, pid, "notes")], async_add_entities)
+    async_track_persons(hass, entry, lambda pid: [NoteText(entry, pid, "notes"), AliasText(entry, pid, "alias")], async_add_entities)
+
+
+class AliasText(FickEntity, TextEntity):
+    """Own name of the person; Home Assistant shows "Name (Nick)"."""
+
+    _attr_native_max = 60
+    _attr_icon = "mdi:account-edit"
+
+    @property
+    def native_value(self) -> str | None:
+        p = self.p
+        return (p.get("alias") or "") if p else None
+
+    async def async_set_value(self, value: str) -> None:
+        await async_changed(self.hass, self.entry, self.pid, alias=value.strip())
 
 
 class NoteText(FickEntity, TextEntity):

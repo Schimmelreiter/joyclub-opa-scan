@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.17
+// @version      2.18
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -12473,6 +12473,9 @@ fragment ImageUIDataFragment on ImageUIData {
       x.history = (prim.hist || []).map((h) => ({ at: h.ts, what: h.why }));
       x.pics = flPicsOut([...ids.map((id) => fl[id].pics), ...ids.map((id) => fl[id].xfer && fl[id].xfer.pics)], new Set(ids.flatMap((id) => fl[id].picsDrop || [])));
       if (!x.pics.length) delete x.pics;
+      // eigener Name (seit 2.18): der zuletzt gesetzte aller Mitglieder
+      const al = ids.map((id) => fl[id]).filter((q) => q.aliasAt || q.alias).sort((a, b) => (b.aliasAt || 0) - (a.aliasAt || 0))[0];
+      if (al) { x.alias = al.alias || ''; x.aliasAt = al.aliasAt || 0; } else { delete x.alias; delete x.aliasAt; }
       // Anmerkungen: allgemeines Feld (seit 1.88), joy.notes bleibt vorerst für ältere Stände
       x.notes = prim.notes || '';
       if (prim.notesAt) x.notesAt = prim.notesAt; else delete x.notesAt;
@@ -12599,7 +12602,7 @@ fragment ImageUIDataFragment on ImageUIData {
   function flMergeIn(X, rootId, isNew = false) {
     const before = flSnap(flMembers(rootId));
     const prim = flPrimaryId(rootId);
-    const KNOWN = ['id', 'status', 'statusAt', 'main', 'profiles', 'meets', 'history', 'ext', 'joy', 'notes', 'notesAt', 'notesBy'];
+    const KNOWN = ['id', 'status', 'statusAt', 'main', 'profiles', 'meets', 'history', 'ext', 'joy', 'notes', 'notesAt', 'notesBy', 'alias', 'aliasAt'];
     // JOYclub-Profile der Person (Hauptprofil und weitere) lokal sicherstellen und verknüpfen
     const joyProfs = [X.main, ...(X.profiles || [])].filter((pr) => pr && pr.pf === 'joyclub' && flJoyIdOf(pr));
     for (const pr of joyProfs) {
@@ -12704,6 +12707,7 @@ fragment ImageUIDataFragment on ImageUIData {
         if (X.notesBy) P2.notesBy = X.notesBy;
       }
     }
+    if (typeof X.alias === 'string' && (X.aliasAt || 0) > (P2.aliasAt || 0) && X.alias !== (P2.alias || '')) { P2.alias = X.alias.slice(0, 60); P2.aliasAt = X.aliasAt; }
     if (X.joy) { if (!P2.notes && X.joy.notes) P2.notes = X.joy.notes; if (!P2.type && X.joy.type) P2.type = X.joy.type; if (!P2.pnote && X.joy.pnote) P2.pnote = X.joy.pnote; }
     flPut(P2);
     flSyncStatus(prim);
@@ -12939,6 +12943,10 @@ fragment ImageUIDataFragment on ImageUIData {
       const add = flEl('a', 'display:inline-block;color:#e2b04a;font-weight:bold;margin-top:8px;cursor:pointer', '+ weiteres Treffen');
       add.addEventListener('click', (e) => { e.preventDefault(); meets.unshift({ id: flNewId(), date: '', time: '', wo: '', url: '', club: '', note: '', as: defAs() }); renderMeets(); });
       box.appendChild(add);
+      // 2.18: eigener Name (gilt in beiden Skripten und in Home Assistant: „Name (Nick)“)
+      box.appendChild(lab('Eigener Name'));
+      const alias = flEl('input', FL_INPUT_CSS + ';width:100%'); alias.value = p.alias || ''; alias.placeholder = 'z. B. Vorname – erscheint in Home Assistant als „Name (Nick)“'; alias.maxLength = 60;
+      box.appendChild(alias);
       // Anmerkungen (allgemein)
       box.appendChild(lab('Anmerkungen'));
       const notes = flEl('textarea', FL_INPUT_CSS + ';width:100%;resize:vertical'); notes.rows = 2; notes.value = p.notes || '';
@@ -13010,6 +13018,8 @@ fragment ImageUIDataFragment on ImageUIData {
             const mine = keep.filter((m) => (m.as || defAs()) === id).map(strip);
             if (JSON.stringify(o.meets || []) !== JSON.stringify(mine)) { o.meets = mine; flPut(o); }
           }
+          const na = alias.value.trim().slice(0, 60);
+          if (na !== (q.alias || '')) { q.alias = na; q.aliasAt = Date.now(); flHist(q, na ? `Eigener Name: ${na}` : 'Eigener Name entfernt'); }
           const nn = notes.value.trim().slice(0, 8000);
           if (nn !== (q.notes || '')) { q.notesAt = Date.now(); q.notesBy = { platform: 'joyclub', account: ownNick() || '' }; }
           q.notes = nn;
@@ -15769,6 +15779,10 @@ fragment ImageUIDataFragment on ImageUIData {
           what.push(`Status: ${q.status ? flLabel(q.status) : '–'} → ${st ? flLabel(st) : '–'}`);
           q.status = st; q.statusAt = c.statusAt || Date.now(); q.__keepStatusAt = true;
         }
+      }
+      if ('alias' in c && (q.alias || '') !== String(c.alias || '')) {
+        q.alias = String(c.alias || '').slice(0, 60); q.aliasAt = c.aliasAt || Date.now();
+        what.push(q.alias ? `Eigener Name: ${q.alias}` : 'Eigener Name entfernt');
       }
       if ('notes' in c && (q.notes || '') !== String(c.notes || '')) {
         q.notes = String(c.notes || '').slice(0, 8000); q.notesAt = c.notesAt || Date.now(); q.notesBy = { pf: 'ha', acc: 'Home Assistant' };
