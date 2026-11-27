@@ -18,7 +18,7 @@ from homeassistant.components import webhook
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState, ConfigSubentry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -46,6 +46,7 @@ from .const import (
 )
 from .data import PersonData, decrypt, encrypt, parse_pic, sign
 from .entity import async_remove_stale_devices
+from .media_import import import_dir
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SELECT, Platform.SENSOR, Platform.TEXT]
@@ -142,7 +143,26 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             meet["time"] = d["time"].strftime("%H:%M")
         await async_changed(hass, entry, pid, meet=meet)
 
+    async def import_files(call: ServiceCall) -> ServiceResponse:
+        entry, pid = await _target(call)
+        src = Path(call.data["path"])
+        cfg = Path(hass.config.config_dir).resolve()
+        ok = await hass.async_add_executor_job(lambda: src.is_dir() and (hass.config.is_allowed_path(str(src)) or src.resolve().is_relative_to(cfg)))
+        if not ok:
+            raise ServiceValidationError(translation_domain=DOMAIN, translation_key="bad_folder")
+        rt = entry.runtime_data
+        res = await hass.async_add_executor_job(import_dir, src, pic_dir(hass, entry), pid, dict(rt.data.pics.get(pid) or {}))
+        now = dt_util.utcnow()
+        for a in res["added"]:
+            rt.data.add_pic(pid, a["key"], a["type"], a["size"], now, sha=a["sha"], source="local")
+        rt.store.async_delay_save(rt.data.as_dict, 1)
+        async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
+        return {"added": len(res["added"]), "videos": sum(a["type"].startswith("video/") for a in res["added"]),
+                "duplicates": res["duplicates"], "skipped": res["skipped"]}
+
     dev = {vol.Required("device_id"): cv.string}
+    hass.services.async_register(DOMAIN, "import_files", import_files, schema=vol.Schema({**dev, vol.Required("path"): cv.string}),
+                                 supports_response=SupportsResponse.OPTIONAL)
     hass.services.async_register(DOMAIN, "set_status", set_status, schema=vol.Schema({**dev, vol.Required("status"): vol.In(STATUS_OPTIONS)}))
     hass.services.async_register(DOMAIN, "set_notes", set_notes, schema=vol.Schema({**dev, vol.Optional("notes", default=""):
                                                                                vol.All(cv.string, vol.Length(max=8000))}))
@@ -314,5 +334,9 @@ def person_view(entry: SCConfigEntry, p: dict[str, Any]) -> dict[str, Any]:
     """A person summary with its signed picture addresses (small picture and all full pictures)."""
     out = {k: v for k, v in entry.runtime_data.data.view(p).items() if k not in ("pic_keys", "notes_full")}
     out["thumb"] = thumb_url(entry, entry.runtime_data.data, p["id"])
-    out["pics"] = [pic_url(entry, p["id"], k) for k in entry.runtime_data.data.pic_list(p["id"])]
+    d = entry.runtime_data.data
+    keys = d.pic_list(p["id"])
+    info = d.pics.get(p["id"]) or {}
+    out["pics"] = [pic_url(entry, p["id"], k) for k in keys if not info[k]["type"].startswith("video/")]
+    out["videos"] = [pic_url(entry, p["id"], k) for k in keys if info[k]["type"].startswith("video/")]
     return out

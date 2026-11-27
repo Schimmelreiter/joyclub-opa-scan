@@ -108,6 +108,9 @@
     },
     "notes_too_long": {
       "message": "Diese Anmerkung ist länger als 255 Zeichen – bitte mit der Aktion „Anmerkung setzen“ ändern."
+    },
+    "bad_folder": {
+      "message": "Diesen Ordner gibt es nicht oder Home Assistant darf ihn nicht lesen (erlaubt: unterhalb des Konfigurationsordners oder in allowlist_external_dirs)."
     }
   },
   "services": {
@@ -170,6 +173,20 @@
         "note": {
           "name": "Notiz",
           "description": "Optionale Notiz zu diesem Treffen."
+        }
+      }
+    },
+    "import_files": {
+      "name": "Bilder und Videos übernehmen",
+      "description": "Übernimmt alle Bilder und Videos eines Ordners für eine Person; Doppelte (auch ähnliche Bilder in anderer Größe) bleiben außen vor.",
+      "fields": {
+        "device_id": {
+          "name": "Person",
+          "description": "Gerät der Person."
+        },
+        "path": {
+          "name": "Ordner",
+          "description": "Ordner auf dem Home-Assistant-Rechner, z. B. /config/swinger_companion/import/alex."
         }
       }
     }

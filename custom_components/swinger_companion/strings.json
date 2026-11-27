@@ -108,6 +108,9 @@
     },
     "notes_too_long": {
       "message": "This note is longer than 255 characters – change it with the action “Set note”."
+    },
+    "bad_folder": {
+      "message": "This folder does not exist or Home Assistant may not read it (allowed: below the configuration folder or in allowlist_external_dirs)."
     }
   },
   "services": {
@@ -170,6 +173,20 @@
         "note": {
           "name": "Note",
           "description": "Optional note on this meeting."
+        }
+      }
+    },
+    "import_files": {
+      "name": "Import pictures and videos",
+      "description": "Takes over all pictures and videos of a folder for a person; duplicates (also similar pictures in another size) are left out.",
+      "fields": {
+        "device_id": {
+          "name": "Person",
+          "description": "Device of the person."
+        },
+        "path": {
+          "name": "Folder",
+          "description": "Folder on the Home Assistant host, e.g. /config/swinger_companion/import/alex."
         }
       }
     }

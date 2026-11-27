@@ -18,7 +18,9 @@ from .const import MAX_PIC, MAX_THUMB, NEED_PICS_MAX, STATUS_DONE, STATUS_NEVER,
 
 STATUSES = (STATUS_WANT, STATUS_DONE, STATUS_NO, STATUS_NEVER)
 NOTES_MAX = 300
-PIC_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif"}
+PIC_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif",
+             "video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm"}
+UPLOAD_TYPES = {k for k in PIC_TYPES if k.startswith("image/")}  # the scripts send pictures only
 _SAFE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 
 
@@ -28,6 +30,10 @@ def safe_name(text: str) -> str:
     if _SAFE.match(text) and text not in (".", ".."):
         return text.replace(":", "_")
     return "h_" + hashlib.sha256(text.encode()).hexdigest()[:32]
+
+
+def pic_rel(pid: str, key: str, ctype: str) -> str:
+    return f"{safe_name(pid)}/{safe_name(key)}.{PIC_TYPES[ctype]}"
 
 
 def pic_keys(p: dict[str, Any]) -> list[str]:
@@ -42,7 +48,7 @@ def pic_keys(p: dict[str, Any]) -> list[str]:
 
 def parse_pic(mime: Any, data: Any) -> tuple[str, bytes] | None:
     """A full picture sent on its own: content type and base64 → (content type, bytes)."""
-    if mime not in PIC_TYPES or not isinstance(data, str):
+    if mime not in UPLOAD_TYPES or not isinstance(data, str):
         return None
     try:
         raw = base64.b64decode(data, validate=False)
@@ -231,10 +237,10 @@ class PersonData:
     def wants_pic(self, pid: str, key: str) -> bool:
         return any(p["id"] == pid and key in (p.get("pic_keys") or []) for p in self.persons)
 
-    def add_pic(self, pid: str, key: str, ctype: str, size: int, now: datetime) -> str:
-        """Register a stored picture, returns its file name relative to the picture folder."""
-        rel = f"{safe_name(pid)}/{safe_name(key)}.{PIC_TYPES[ctype]}"
-        self.pics.setdefault(pid, {})[key] = {"file": rel, "type": ctype, "at": now.isoformat(), "size": size}
+    def add_pic(self, pid: str, key: str, ctype: str, size: int, now: datetime, **extra: Any) -> str:
+        """Register a stored picture or video, returns its file name relative to the picture folder."""
+        rel = pic_rel(pid, key, ctype)
+        self.pics.setdefault(pid, {})[key] = {"file": rel, "type": ctype, "at": now.isoformat(), "size": size, **extra}
         return rel
 
     def drop_pics(self, drops: Any) -> list[str]:

@@ -207,3 +207,38 @@ async def test_person_devices_and_return_path(hass: HomeAssistant, hass_client_n
     await hass.async_block_till_done()
     names = {d.name for d in dr.async_entries_for_config_entry(reg, entry.entry_id)}
     assert "Nein" not in names and "Lisa" in names
+
+
+async def test_import_files(hass: HomeAssistant, hass_client_no_auth, tmp_path) -> None:
+    from PIL import Image
+
+    hass.config.config_dir = str(tmp_path)
+    entry = await _entry(hass)
+    client = await hass_client_no_auth()
+    await client.post(f"/api/webhook/{entry.data[CONF_WEBHOOK_ID]}", json=encrypt(entry.data[CONF_KEY], _payload()))
+    await hass.async_block_till_done()
+    src = tmp_path / "import" / "lisa"
+    (src / "a").mkdir(parents=True)
+    big = Image.new("RGB", (400, 300))
+    for x in range(400):
+        for y in range(0, 300, 10):
+            big.putpixel((x, y), (x % 256, 0, 0))
+    big.save(src / "a" / "big.jpg")
+    big.resize((200, 150)).save(src / "small.jpg")          # same picture, smaller → duplicate
+    (src / "a" / "copy.jpg").write_bytes((src / "a" / "big.jpg").read_bytes())  # exact copy
+    Image.new("RGB", (50, 50), (0, 200, 0)).save(src / "other.png")
+    (src / "clip.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42 fake video")
+    (src / "notes.txt").write_text("x")
+    dev = next(d for d in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id) if d.name == "Lisa")
+    res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(src)}, blocking=True, return_response=True)
+    assert res == {"added": 3, "videos": 1, "duplicates": 2, "skipped": 1}
+    res = await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": str(src)}, blocking=True, return_response=True)
+    assert res["added"] == 0 and res["duplicates"] == 5
+    await hass.async_block_till_done()
+    want = [s for s in hass.states.async_all("sensor") if s.attributes.get("persons") and s.attributes["persons"][0]["name"] == "Lisa"][0]
+    p = want.attributes["persons"][0]
+    assert len(p["pics"]) == 2 and len(p["videos"]) == 1
+    r = await client.get(p["videos"][0])
+    assert r.status == 200 and r.headers["Content-Type"] == "video/mp4"
+    with __import__("pytest").raises(Exception):
+        await hass.services.async_call(DOMAIN, "import_files", {"device_id": dev.id, "path": "/etc"}, blocking=True, return_response=True)

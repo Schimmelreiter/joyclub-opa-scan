@@ -158,4 +158,4 @@ class FickLastMeet(FickEntity, SensorEntity):
         v = person_view(self.entry, p)
         m = v.get("last_meet") or {}
         return {"status": v.get("status"), "meets": v.get("meets") or 0, "where": m.get("where") or "", "club": m.get("club") or "",
-                "profiles": v.get("profiles") or [], "pics": v.get("pics") or [], "pending": bool(v.get("pending"))}
+                "profiles": v.get("profiles") or [], "pics": v.get("pics") or [], "videos": v.get("videos") or [], "pending": bool(v.get("pending"))}

@@ -50,3 +50,14 @@ add_meet:
       selector:
         text:
           multiline: true
+import_files:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: swinger_companion
+    path:
+      required: true
+      selector:
+        text:
