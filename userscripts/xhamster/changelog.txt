@@ -1,6 +1,19 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.10 (27.11.2026)
+- Wie im poppen-Skript heißt es bei Männern „Oma-Schutz“, „Oma-Scan“, „Omas blockieren“ (Ruhrgebiet: „Omma“), bei allen
+  anderen „Opa“/„Oppa“ – nach dem Geschlecht im eigenen xHamster-Profil
+
+0.2.9 (27.11.2026)
+- Einstellungsseite aufgeräumt: eigenes Raster (Bezeichnung links, Wert rechts auf einer Höhe), Tabelle der Grenzen mit
+  Abständen und Linien, Abschnitte mit Überschrift. Fehlt die Einstellungs-Kopie von poppen.de, steht das als Hinweis da
+
+0.2.8 (27.11.2026)
+- Nutzer-Menü: nur noch „Fickliste“, „Opa-Schutz“ und (während ein Lauf läuft) „Anhalten“ – das Menü wurde durch die
+  langen Einträge breiter und franste rechts aus. Opa-Scan und Regeln stehen auf der Einstellungsseite und im
+  Tampermonkey-Menü
+
 0.2.7 (27.11.2026)
 - Einstellungsseite „Opa-Schutz“ in „Edit profile“ (linke Leiste hinter „Privacy“, auch über das Nutzer-Menü):
   Regeln von poppen.de zum Nachsehen (Grenzen, Bezeichnungen, markieren/ignorieren, Whitelist, Moppel-Liebhaber) mit

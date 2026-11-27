@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.7
+// @version      0.2.10
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1135,6 +1135,10 @@
     return r;
   }
   const STAGE_COL = { 1: '#43a047', 2: '#ffb74d', 3: '#ef6c00' };
+  // Wort wie im poppen-Skript: Männer schützen sich vor „Omas“, alle anderen vor „Opas“; Ruhrgebiet „Omma“/„Oppa“
+  // (Geschlecht aus dem eigenen xHamster-Profil)
+  function OW() { const male = gm('xh_me_gender', '') === 'male'; const ruhr = !!(gm(POPK, null) || {}).ruhr; return male ? (ruhr ? 'Omma' : 'Oma') : (ruhr ? 'Oppa' : 'Opa'); }
+  const OWs = () => OW() + 's';
 
   // =====================================================================
   // Personen, die die Seite kennt (Anfangszustand und nachgeladene Antworten) – für die Markierung
@@ -1664,34 +1668,57 @@
   const SET_HASH = '#opa-schutz';
   const setUrl = () => location.origin + '/my/edit/profile' + SET_HASH;
   const onEditPage = () => /^\/my\/edit\/profile\/?$/.test(location.pathname);
+  // eigenes, ruhiges Raster statt xHamsters Formularzeilen (die sind für Eingabefelder gebaut, nicht für Text)
+  const SET_CSS = `.xhsc-set{font-size:14px;line-height:1.45;max-width:900px}
+.xhsc-set section{padding:4px 0 18px;margin-bottom:18px;border-bottom:1px solid rgba(128,128,128,.25)}
+.xhsc-set section:last-child{border-bottom:0}
+.xhsc-set h3{font-size:16px;font-weight:700;margin:0 0 10px}
+.xhsc-set .xs-note{opacity:.75;margin:0 0 12px}
+.xhsc-set .xs-grid{display:grid;grid-template-columns:240px minmax(0,1fr);column-gap:24px;row-gap:12px;align-items:center}
+.xhsc-set .xs-k{font-weight:600}
+.xhsc-set .xs-k small{display:block;font-weight:400;opacity:.6;font-size:12.5px;line-height:1.35;margin-top:2px}
+.xhsc-set table{border-collapse:collapse;margin:0 0 14px;width:100%;max-width:760px}
+.xhsc-set th,.xhsc-set td{text-align:left;padding:6px 14px 6px 0;border-bottom:1px solid rgba(128,128,128,.2);white-space:nowrap}
+.xhsc-set th{font-weight:600;opacity:.7;font-size:12.5px}
+.xhsc-set td:first-child{font-weight:600}
+.xhsc-set input.xs-in{background:transparent;color:inherit;border:1px solid rgba(128,128,128,.5);border-radius:8px;padding:7px 10px;font:inherit;width:100%;max-width:240px;box-sizing:border-box}
+.xhsc-set .xs-btns{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.xhsc-set .xs-warn{color:#ef6c00}`;
   function setRow(label, html, tip) {
-    return `<div class="field-row"><label>${esc(label)}${tip ? `<span class="additional-tip">${esc(tip)}</span>` : ''}</label><div class="field-container">${html}</div></div>`;
+    return `<div class="xs-k">${esc(label)}${tip ? `<small>${esc(tip)}</small>` : ''}</div><div>${html}</div>`;
   }
   function setPanelHtml() {
     const s = rules();
     const o = opa();
     const last = gm('xh_oscan_last', null);
     const lim = (g) => (s.expert.sharedLimits ? g.src.global : g.src.suche) || [];
+    const yes = (v, red) => (v ? `<b${red ? ' style="color:#e53935"' : ''}>ja</b>` : '<span style="opacity:.6">nein</span>');
     const grp = ['m', 'w', 'p'].map((gk) => {
       const g = s.groups[gk]; const l = labelsOf(gk, s); const x = lim(g);
-      return `<tr><td>${{ m: 'Männer', w: 'Frauen', p: 'Paare' }[gk]}</td><td>${esc(l[0])} bis ${x[0]}</td><td>${esc(l[2])} bis ${x[1]}</td><td>${esc(l[4])} ab ${x[2]}</td><td>${g.visual ? 'ja' : 'nein'}</td><td>${g.ignore ? '<b style="color:#e53935">ja</b>' : 'nein'}</td></tr>`;
+      return `<tr><td>${{ m: 'Männer', w: 'Frauen', p: 'Paare' }[gk]}</td><td>${esc(l[0])} bis ${x[0]}</td><td>${esc(l[2])} bis ${x[1]}</td><td>${esc(l[4])} ab ${x[2]}</td><td>${yes(g.visual)}</td><td>${yes(g.ignore, true)}</td></tr>`;
     }).join('');
     const sw = (id, on) => `<input type="checkbox" class="switcher" id="${id}" ${on ? 'checked' : ''}><label for="${id}" class="switcher-visible"></label>`;
-    const lastTxt = last ? `${last.mode === 'dry' ? 'Probelauf' : 'Blockieren'} am ${esc(new Date(last.at).toLocaleString('de-DE'))}: ${esc(last.why)} · ${last.seen} gesehen · ${last.hits} Treffer · ${last.done} blockiert${last.fail ? ` · ${last.fail} Fehler` : ''}` : 'noch keiner';
-    return `<fieldset><legend>Regeln von poppen.de</legend>
-      <p style="margin:0 0 10px">Altersgrenzen, Bezeichnungen und Whitelist kommen aus dem poppen-Skript und werden dort geändert. Stand: ${esc(s.from)}.</p>
-      <table style="border-collapse:collapse;margin-bottom:8px" class="xhsc-set-table"><tr><th></th><th>Stufe 1</th><th>Stufe 2</th><th>Stufe 3 (Grenze)</th><th>markieren</th><th>ignorieren</th></tr>${grp}</table>
+    const lastTxt = last ? `${last.mode === 'dry' ? 'Probelauf' : 'Blockieren'} am ${esc(new Date(last.at).toLocaleString('de-DE'))}: ${esc(last.why)} · ${last.seen} gesehen · ${last.hits} Treffer · ${last.done} blockiert${last.fail ? ` · ${last.fail} Fehler` : ''}` : '<span style="opacity:.6">noch keiner</span>';
+    const fromPoppen = (gm(POPK, null) || {}).src === 'poppen';
+    return `<style>${SET_CSS}</style>
+      <section><h3>Regeln von poppen.de</h3>
+      <p class="xs-note">Altersgrenzen, Bezeichnungen und Whitelist kommen aus dem poppen-Skript und werden dort geändert.</p>
+      <table><tr><th></th><th>Stufe 1</th><th>Stufe 2</th><th>Stufe 3 (Grenze)</th><th>markieren</th><th>ignorieren</th></tr>${grp}</table>
+      <div class="xs-grid">
+      ${setRow('Stand', fromPoppen ? esc(s.from) : '<span class="xs-warn">Vorgaben des poppen-Skripts – keine Einstellungs-Kopie von poppen.de gefunden</span>', fromPoppen ? '' : 'poppen.de einmal mit installiertem xHamster-Skript öffnen, dann „Regeln neu laden“')}
       ${setRow('Whitelist', `${(s.whitelist.names || []).length} Namen · Präfixe: ${esc((s.whitelist.prefixes || []).join(', ') || '–')}`, 'dazu immer: Freunde, Fickliste, Du selbst')}
       ${setRow('Moppel-Liebhaber', s.moppel.on ? `an – Link „${esc((s.moppel.labels || [])[5] || 'XXL')}“ in der Kopfzeile` : 'aus')}
-      <div class="buttons-block" style="text-align:left"><button type="button" class="xh-button black" data-a="reload">Regeln neu laden</button></div></fieldset>
-      <fieldset><legend>Anzeige</legend>
-      ${setRow('Opas in der Dating-Suche ausblenden', sw('xhsc-set-hide', o.hide), 'aus = nur abdunkeln')}
-      </fieldset>
-      <fieldset class="last"><legend>Opa-Scan</legend>
-      ${setRow('Länder', `<input class="input-text" data-k="cty" value="${esc(gm('xh_oscan_cty', 'de,at,ch'))}" style="max-width:220px">`, 'Kürzel, durch Komma getrennt; leer = alle')}
-      ${setRow('Höchstens je Lauf blockieren', `<input class="input-text" data-k="max" type="number" min="1" value="${esc(gm('xh_oscan_max', 200))}" style="max-width:120px">`)}
+      </div>
+      <div class="xs-btns"><button type="button" class="xh-button black" data-a="reload">Regeln neu laden</button></div></section>
+      <section><h3>Anzeige</h3><div class="xs-grid">
+      ${setRow(`${OWs()} in der Dating-Suche ausblenden`, sw('xhsc-set-hide', o.hide), 'aus = nur abdunkeln')}
+      </div></section>
+      <section><h3>${OW()}-Scan</h3><div class="xs-grid">
+      ${setRow('Länder', `<input class="xs-in" data-k="cty" value="${esc(gm('xh_oscan_cty', 'de,at,ch'))}">`, 'Kürzel, durch Komma getrennt; leer = alle')}
+      ${setRow('Höchstens je Lauf blockieren', `<input class="xs-in" data-k="max" type="number" min="1" value="${esc(gm('xh_oscan_max', 200))}" style="max-width:120px">`)}
       ${setRow('Letzter Lauf', lastTxt)}
-      <div class="buttons-block" style="text-align:left;display:flex;gap:8px"><button type="button" class="xh-button black" data-a="dry">Probelauf (zählt nur)</button><button type="button" class="xh-button red" data-a="block">Opas blockieren</button></div></fieldset>`;
+      </div>
+      <div class="xs-btns"><button type="button" class="xh-button black" data-a="dry">Probelauf (zählt nur)</button><button type="button" class="xh-button red" data-a="block">${OWs()} blockieren</button></div></section>`;
   }
   function setBind(box) {
     const q = (sel) => box.querySelector(sel);
@@ -1717,7 +1744,7 @@
     li.classList.add('xhsc-set-li');
     li.setAttribute('aria-current', 'false');
     const lab = li.querySelector('[class*="label-"]') || li;
-    lab.textContent = ' Opa-Schutz ';
+    lab.textContent = ` ${OW()}-Schutz `;
     priv.after(li);
     li.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setOpen(); }, true);
   }
@@ -1851,17 +1878,17 @@
     oscanBusy = true;
     try {
       const lockMine = () => { const l = gm('xh_oscan_lock', null); return !l || l.tab === TAB_ID || now() - l.at > 30000; };
-      if (!lockMine()) { uiStatus('Opa-Scan läuft in einem anderen Tab.'); return; }
+      if (!lockMine()) { uiStatus(`${OW()}-Scan läuft in einem anderen Tab.`); return; }
       await fickAll().catch(() => null);
       for (;;) {
         let st = gm(K.oscan, null);
-        if (!st) { uiStatus('Opa-Scan angehalten.'); break; }
-        if (!lockMine()) { uiStatus('Opa-Scan läuft in einem anderen Tab.'); break; }
+        if (!st) { uiStatus(`${OW()}-Scan angehalten.`); break; }
+        if (!lockMine()) { uiStatus(`${OW()}-Scan läuft in einem anderen Tab.`); break; }
         gs('xh_oscan_lock', { tab: TAB_ID, at: now() });
         if (st.pi >= st.plan.length) { oscanDone(st, 'fertig'); break; }
         const pl = st.plan[st.pi];
         const url = oscanUrl(st);
-        uiStatus(`Opa-Scan (${st.mode === 'dry' ? 'Probelauf' : 'Blockieren'}): ${pl.gender} ab ${pl.minAge}, ${st.countries[st.ci] || 'alle Länder'}, Seite ${st.page} · ${st.hits} Treffer · ${st.done} blockiert`);
+        uiStatus(`${OW()}-Scan (${st.mode === 'dry' ? 'Probelauf' : 'Blockieren'}): ${pl.gender} ab ${pl.minAge}, ${st.countries[st.ci] || 'alle Länder'}, Seite ${st.page} · ${st.hits} Treffer · ${st.done} blockiert`);
         let html = '';
         try {
           const res = await W.fetch(url, { credentials: 'include' });
@@ -1916,7 +1943,7 @@
           gs('xh_oscan_lock', { tab: TAB_ID, at: now() });
           await sleep(2000 + Math.random() * 3000);
         }
-        if (!gm(K.oscan, null)) { uiStatus('Opa-Scan angehalten.'); break; }
+        if (!gm(K.oscan, null)) { uiStatus(`${OW()}-Scan angehalten.`); break; }
         if (st.mode === 'block' && st.done >= st.max) { oscanDone(st, `Höchstzahl ${st.max} erreicht`); break; }
         const next = users.length ? nextPageUrl(html, st.page) : '';
         if (next && st.page < 200) { st.page++; st.url = next; } else {
@@ -1935,7 +1962,7 @@
     gs('xh_oscan_last', sum);
     recEvent('Opa-Scan beendet', { info: `${st.mode}: ${why} · ${st.seen} gesehen · ${st.hits} Treffer · ${st.done} blockiert · ${st.fail} Fehler` });
     const skip = Object.entries(st.skip).map(([k, v]) => `${k} ${v}`).join(', ');
-    uiStatus(`Opa-Scan ${why}: ${st.seen} gesehen, ${st.hits} ${st.mode === 'dry' ? 'würden blockiert' : 'Treffer'}, ${st.done} blockiert${st.fail ? `, ${st.fail} Fehler` : ''}.`);
+    uiStatus(`${OW()}-Scan ${why}: ${st.seen} gesehen, ${st.hits} ${st.mode === 'dry' ? 'würden blockiert' : 'Treffer'}, ${st.done} blockiert${st.fail ? `, ${st.fail} Fehler` : ''}.`);
     uiLog(`Übersprungen: ${skip || '–'}`);
     if (st.mode === 'dry' && st.list.length) uiLog('Beispiele: ' + st.list.slice(0, 15).map((x) => `${x.nick} (${x.age})`).join(', '));
   }
@@ -1950,7 +1977,7 @@
     }
     lines.push(`Whitelist: ${(s.whitelist.names || []).length} Namen, Präfixe ${(s.whitelist.prefixes || []).join(', ') || '–'}`);
     const last = gm('xh_oscan_last', null);
-    if (last) lines.push(`Letzter Opa-Scan (${last.mode === 'dry' ? 'Probelauf' : 'Blockieren'}, ${new Date(last.at).toLocaleString()}): ${last.why}, ${last.hits} Treffer, ${last.done} blockiert`);
+    if (last) lines.push(`Letzter ${OW()}-Scan (${last.mode === 'dry' ? 'Probelauf' : 'Blockieren'}, ${new Date(last.at).toLocaleString()}): ${last.why}, ${last.hits} Treffer, ${last.done} blockiert`);
     alert(lines.join('\n'));
   }
 
@@ -1962,16 +1989,16 @@
   // 0.2.1: eine Liste für beide Menüs – das Tampermonkey-Menü und das Nutzer-Menü von xHamster (Klick auf den eigenen Avatar)
   const running = () => !!(gm(K.scan, null) || gm(K.act, null) || gm(K.oscan, null));
   const stopAll = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs('xh_oscan_lock', null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); };
-  const toggleHide = () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? 'Opas werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).' : 'Opas werden nur abgedunkelt (ab dem nächsten Laden).'); };
+  const toggleHide = () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? `${OWs()} werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).` : `${OWs()} werden nur abgedunkelt (ab dem nächsten Laden).`); };
   const ACTIONS = [
     { g: 'fl', icon: 'heart', label: () => 'Fickliste', fn: flOpen },
-    { g: 'fl', icon: 'shield', label: () => 'Opa-Schutz (Einstellungen)', fn: setOpen },
-    { g: 'opa', icon: 'stop', label: () => '■ Anhalten (Opa-Scan, Scan-Lauf, Aktionstest)', fn: stopAll, dd: running },
-    { g: 'opa', icon: 'scan', label: () => 'Opa-Scan: Probelauf (zählt nur)', fn: () => oscanStart('dry') },
-    { g: 'opa', icon: 'block', label: () => 'Opa-Scan: Opas blockieren', fn: () => oscanStart('block') },
+    { g: 'fl', icon: 'shield', label: () => `${OW()}-Schutz (Einstellungen)`, ddLabel: () => `${OW()}-Schutz`, fn: setOpen },
+    { g: 'fl', icon: 'stop', label: () => `■ Anhalten (${OW()}-Scan, Scan-Lauf, Aktionstest)`, ddLabel: () => 'Anhalten', fn: stopAll, dd: running },
+    { g: 'opa', icon: 'scan', label: () => `${OW()}-Scan: Probelauf (zählt nur)`, fn: () => oscanStart('dry') },
+    { g: 'opa', icon: 'block', label: () => `${OW()}-Scan: ${OWs()} blockieren`, fn: () => oscanStart('block') },
     { g: 'opa', icon: 'rules', label: () => 'Regeln von poppen.de anzeigen', fn: rulesInfo },
     { g: 'opa', icon: 'reload', label: () => 'Regeln von poppen.de neu laden', fn: async () => { await rulesRefresh(true); rulesInfo(); } },
-    { g: 'opa', icon: 'eye', label: () => `Opas in der Dating-Suche ${opa().hide ? 'nur abdunkeln' : 'ausblenden'}`, fn: toggleHide },
+    { g: 'opa', icon: 'eye', label: () => `${OWs()} in der Dating-Suche ${opa().hide ? 'nur abdunkeln' : 'ausblenden'}`, fn: toggleHide },
     { g: 'rec', gate: true, icon: 'rec', label: () => 'Scan-Lauf starten', fn: scanStart },
     { g: 'rec', gate: true, icon: 'rec', label: () => 'Aktionstest starten (mit Partnerkonto)', fn: actStart },
     { g: 'rec', gate: true, icon: 'rec', label: () => 'Freundschaftsanfrage des Partners annehmen', fn: acceptPartner },
@@ -2017,14 +2044,16 @@
     frag.appendChild(head);
     let lastG = '';
     for (const x of ACTIONS) {
-      if (x.g === 'rec') continue;   // 0.2.6: Rekorder-Befehle nur im Tampermonkey-Menü
+      // 0.2.8: im Nutzer-Menü nur Fickliste, Opa-Schutz und (wenn etwas läuft) Anhalten – kurze Namen, damit das
+      // Menü seine Breite behält; alles andere steht auf der Einstellungsseite und im Tampermonkey-Menü
+      if (x.g !== 'fl') continue;
       if (x.dd && !x.dd()) continue;
       if (lastG && x.g !== lastG) sep();
       lastG = x.g;
       const li = document.createElement('li');
       li.className = 'user-dropdown-item with-icon xhsc-dd';
       li.innerHTML = `<a class="${esc(linkCls)}" href="#"><span class="${esc(iconCls)}"><svg viewBox="0 0 20 20" width="20" class="${esc(svgCls)}" fill="currentColor">${ICONS[x.icon] || ''}</svg></span> </a>`;
-      li.querySelector('a').append(x.label().replace(/^■ /, ''));
+      li.querySelector('a').append(x.ddLabel ? x.ddLabel() : x.label());
       li.querySelector('a').addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
         // Menü schließen (Klick neben das Menü), dann ausführen

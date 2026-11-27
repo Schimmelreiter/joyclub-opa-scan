@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.2.7 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.2.10 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -13,11 +13,14 @@ Stand: Version 0.2.7 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Was es tut
 
+Bei Männern heißt es wie im poppen-Skript „Oma-Schutz“ und „Oma-Scan“ (Ruhrgebiet „Omma“), sonst „Opa“/„Oppa“.
+
 - **Einstellungsseite „Opa-Schutz“** in „Edit profile“ (linke Leiste hinter „Privacy“, auch im Nutzer-Menü): Regeln von
   poppen.de zum Nachsehen, Anzeige-Schalter, Opa-Scan (Länder, Höchstzahl, letzter Lauf, Start).
 
-- **Menü:** Alle Befehle stehen im Nutzer-Menü von xHamster (Klick auf den eigenen Avatar oben rechts) unter
-  „Swinger Companion“ und zusätzlich im Tampermonkey-Menü; die Rekorder-Befehle der Testkonten nur im Tampermonkey-Menü.
+- **Menü:** Im Nutzer-Menü von xHamster (Klick auf den eigenen Avatar oben rechts) stehen unter „Swinger Companion“
+  „Fickliste“ und „Opa-Schutz“ (Einstellungsseite), während eines Laufs auch „Anhalten“. Alle Befehle stehen im
+  Tampermonkey-Menü.
 
 - **Regeln von poppen.de:** Altersgrenzen (Stufe 1, Stufe 2, „Ignorieren ab“), Bezeichnungen (Jungspund, Mann, Opa …,
   im Ruhrgebiet „Oppa“), „markieren“/„ignorieren“ je Gruppe und die Whitelist kommen aus der Einstellungs-Kopie, die das
