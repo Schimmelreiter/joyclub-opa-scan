@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.9
+// @version      0.1.10
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -441,6 +441,9 @@
     'Hi! ' + PARTY + 'https://' + EV,
     'https://' + EV + ' - ' + PARTY.replace(/ - $/, ''),
     '>>>>>>>>> Hi! ' + PARTY + 'https://' + EV,
+    // 0.1.10: Vorschlag des Nutzers – Sternchen als Rahmen, die die Maskierung „abfangen“
+    '********** Da findest Du mich: ' + PARTY + 'https://' + EV + ' **********',
+    '********* Da findest Du mich: *********\n' + PARTY + 'https://' + EV,
     'Hi! ' + PARTY + 'www.' + EV,
     'Hi! ' + PARTY + 'http://' + EV,
     'Hallo, ' + PARTY.replace(/ - $/, ''),

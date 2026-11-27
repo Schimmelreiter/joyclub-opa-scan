@@ -1,6 +1,10 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.1.10 (27.11.2026)
+- Zwei weitere Testvarianten: Text mit Sternchen-Rahmen („********** Da findest Du mich: … **********“), einmal mit Link in
+  derselben, einmal in der nächsten Zeile
+
 0.1.9 (27.11.2026)
 - Behoben: Nach einigen Testnachrichten baut xHamster das Eingabefeld neu auf; das Skript schrieb danach ins alte Feld
   (Nachricht 6 und 7 „nicht erschienen“). Das Feld wird jetzt vor jeder Nachricht neu gesucht
