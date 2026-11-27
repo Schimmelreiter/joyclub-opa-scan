@@ -163,6 +163,11 @@ Mit JOYclub-Skript im Browser-Profil ist der JOYclub-Server maßgeblich (Regeln 
   leer (Adressen gelten nur kurz und nur für die eigene IP). `off: true` = nicht synchronisieren (Eintrag bleibt).
   Bilddaten und Videos schickt nur das xHamster-Skript an Home Assistant; das JOYclub-Skript (ab 2.25) meldet sie nur
   in der Liste und lässt `off`-Einträge weg.
+- Seit 0.4.0 bearbeitet das Skript Einträge vollständig (Status, `alias`, `profiles[]` mit `status`/`sync`/`dead`,
+  Hauptprofil-Wechsel ohne neue `id`, `meets[]` mit `pf` aus dem Link, `notes`/`notesAt`/`notesBy`, `ext`) und schreibt
+  nur die im Dialog geänderten Felder. Neue Personen ohne Profil bekommen `id: "x:<zufall>"`; deren `thumb` setzt das
+  xHamster-Skript aus `ext.img` (wie das poppen-Skript). Short Videos sind wie Videos einzeln abschaltbar (`off: true`,
+  Standard an). Ein gelöschtes xHamster-Profil unter `profiles[]` bekommt `dead: true`.
 
 ### `arch`
 Reserviert für ein gemeinsames Profil-Archiv. Das poppen-Skript führt sein Archiv derzeit verschlüsselt lokal.

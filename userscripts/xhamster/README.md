@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.3.2 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.4.0 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -22,7 +22,7 @@ Bei Männern heißt es wie im poppen-Skript „Oma-Schutz“ und „Oma-Scan“ 
 - **Textvorlagen** im Messenger: Knopf rechts neben den Smileys; Smileys werden übersetzt, bei Links kommen 10 Sternchen
   an den Anfang.
 - **Bilder und Videos an Home Assistant** (Personen der Fickliste mit xHamster-Profil): alle Bilder, alle Short Videos,
-  Videos bis 5 je Person, sonst einzeln einschalten (Videoseite, Fickliste). Videos gehen los, sobald der Player beim
+  Videos bis 5 je Person, sonst einzeln einschalten (Videoseite, Fickliste); Short Videos einzeln abschaltbar. Videos gehen los, sobald der Player beim
   Öffnen des Videos die Videoliste geladen hat.
 
 - **Menü:** Im Nutzer-Menü von xHamster (Klick auf den eigenen Avatar oben rechts) stehen unter „Swinger Companion“
@@ -36,17 +36,27 @@ Bei Männern heißt es wie im poppen-Skript „Oma-Schutz“ und „Oma-Scan“ 
   poppen-Skript. Männer = male, Frauen = female, Paare = „Male and female couple“; andere Angaben bleiben ohne Gruppe.
 - **Markierungen** in Dating-Suche, Freundschaftsanfragen, Freunden, Blockierten und der Nachrichtenliste: Bezeichnung in
   der Farbe der Stufe (rot = wird ignoriert), Alter, Ort, online, „bald über der Grenze“, Ausnahme (Whitelist, Freund,
-  Fickliste), blockiert, **gelöscht** („retired“). Ignorierte werden abgedunkelt; in der Dating-Suche auf Wunsch
-  ausgeblendet (Menü *Opas in der Dating-Suche ausblenden*).
-- **Profilkasten** unter dem Nick: Nummer, Bezeichnung, Alter, Ort, Beziehung zu Dir, Galerien, Videos, Website und die
-  Stand in der **Fickliste**. Geändert wird er mit dem Fickliste-Knopf in der Knopfleiste des Profils (hinter
+  Fickliste), blockiert, **gelöscht** („retired“). Ignorierte werden abgedunkelt (nicht auf den eigenen Listen
+  Blockierte, Freunde, Anfragen); in der Dating-Suche auf Wunsch ausgeblendet (Menü *Opas in der Dating-Suche ausblenden*).
+- **Profilkasten** unter dem Nick: Nummer, Bezeichnung, Alter, Ort, Beziehung zu Dir, Galerien, Videos, Website.
+- **Fickliste auf dem Profil:** unter dem Steckbrief „Auf der Fickliste: <Status>“ (mit Hauptprofil und eigenem Namen),
+  rechts ganz oben der Block „Fickliste“ mit Profilen, Treffen, Anmerkung, Bildern, Short Videos und Videos (je mit
+  Schalter), Profil-Archiv und „Bearbeiten“. Geändert wird der Status mit dem Fickliste-Knopf in der Knopfleiste des Profils (hinter
   „Friend/Unfriend“, Symbole wie im JOYclub-Skript): *Will ich ficken*, *Gefickt*, *Nie wieder!*, *Nein, danke!*,
   *Fickstatus zurücksetzen*, *Aus der Fickliste löschen*. Die Fickliste ist dieselbe wie bei poppen.de und JOYclub; steht die Person dort schon mit einem anderen
   Hauptprofil (und dem xHamster-Profil unter „Auch auf …“), wird dieser Eintrag geändert. Neue Personen bekommen das
   xHamster-Profil als Hauptprofil und ein Vorschaubild.
 - **Fickliste als Übersicht:** Reiter „Fickliste“ hinter „Friends“ im eigenen Profil, in der Seitenleiste von „Friends“
   und im Nutzer-Menü. Sie erscheint in „Friends“ an Stelle der Freundesliste, ein Fick je Zeile: links Bild, Name,
-  Status und Profile, rechts Treffen und Anmerkung; Filter nach Status, Suche.
+  Status und Profile, rechts Treffen und Anmerkung; Filter nach Status, Suche, „+ Person hinzufügen“ (xHamster-Link
+  oder Person ohne Profil).
+- **Bearbeiten** (Übersicht und Profil-Block): Status, eigener Name, „Auch auf …“ (Plattform, Link, Name, eigener
+  Status oder „folgt der Person“, gelöscht, Hauptprofil), Treffen mit Datum, Uhrzeit, Wo, Was, Link (auch zu einer
+  JOYclub- oder poppen-Party) und Notiz, Anmerkung, Angaben zu Personen ohne Profil, Bilder und Videos, Verlauf,
+  „Aus der Fickliste löschen“. Geschrieben wird nur, was sich geändert hat.
+- **Profil-Archiv:** Beim Besuch eines Profils der Fickliste werden alle Angaben gespeichert (neuer Stand nur bei
+  Änderungen, höchstens 15). Ist das Profil gelöscht, zeigt das Archiv „gelöscht seit …“ und alle Stände.
+- **Eigenes Profil:** Kasten „Meine Fickliste“ mit Zählern und den letzten Treffen.
 - **Galerien:** Öffnest Du eine Galerie einer Person aus der Fickliste, kommen die Bilder in deren Bilderliste.
 - **Opa-Scan** (Menü): geht die Dating-Suche ab der „Ignorieren ab“-Grenze durch, je Land (Vorgabe de, at, ch).
   - *Opa-Scan: Probelauf (zählt nur)* – blockiert nichts, zeigt Treffer und Gründe fürs Überspringen.

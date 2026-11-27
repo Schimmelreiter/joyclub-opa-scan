@@ -1,6 +1,24 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.4.0 (27.11.2026)
+- Neu: Fickliste-Einträge bearbeiten – Dialog im xHamster-Stil mit Status, eigenem Namen, „Auch auf …“ (je Profil
+  eigener Status oder „folgt der Person“, gelöscht, Hauptprofil wechseln), Treffen (auch mit Link zu einer JOYclub-
+  oder poppen-Party), Anmerkung (8000 Zeichen), Bildern und Videos, Verlauf und „Aus der Fickliste löschen“.
+  Geöffnet über „Bearbeiten“ in der Übersicht und im Block auf dem Profil
+- Neu: „+ Person hinzufügen“ in der Übersicht – xHamster-Profil per Link oder Person ohne Profil (Name, Typ, Ort,
+  Kurzbeschreibung, Bild)
+- Neu: Profilseite – unter dem Steckbrief links „Auf der Fickliste: <Status>“ mit Hauptprofil und eigenem Namen,
+  rechts ganz oben der Block „Fickliste“ (Profile, Treffen, Anmerkung, Bilder und Videos, Archiv, „Bearbeiten“);
+  die Zeile im Profilkasten entfällt
+- Neu: Profil-Archiv – beim Besuch eines Profils der Fickliste werden alle Angaben gespeichert (Bild, Steckbrief,
+  Über mich, Interessen, Website, Zähler, Videos); ein neuer Stand nur bei Änderungen. Gelöschte Profile zeigen
+  „gelöscht seit …“, ältere Stände aufklappbar; in der Übersicht „Archiv (n)“
+- Neu: Short Videos in der Fickliste und im Profil-Block wie die Videos aufgeführt, je Short abschaltbar (Standard
+  an); auf der Seite eines Short Videos derselbe Knopf wie bei Videos
+- Neu: Eigenes Profil – Kasten „Meine Fickliste“ mit Zählern und den letzten Treffen
+- Neu: Gelöschte xHamster-Profile werden im Eintrag als gelöscht markiert
+
 0.3.2 (27.11.2026)
 - Behoben: Auf eigenen Listen (Blockierte, Freunde, Freundschaftsanfragen) wurden Profile über der Grenze
   abgedunkelt – dort steht jetzt nur das Abzeichen, der Grund im Hinweis beim Darüberfahren
