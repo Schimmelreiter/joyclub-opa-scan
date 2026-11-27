@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.1
+// @version      0.1.2
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -243,8 +243,8 @@
     if (p) return p;
     const m = me();
     // erste Fassung: die beiden Testkonten des Nutzers (bewusst öffentlich, siehe Changelog 0.1.0)
-    if (m && /^sizequeenac$/i.test(m.nick)) return 'Wildschwein_AC';
-    if (m && /^wildschwein_ac$/i.test(m.nick)) return 'SizeQueenAC';
+    if (m && /^(sizequeenac|wildschwein_ac)$/i.test(m.nick)) return 'SpaceRat75';
+    if (m && /^spacerat75$/i.test(m.nick)) return 'SizeQueenAC';
     return '';
   }
 
@@ -304,6 +304,8 @@
   const go = (url) => { location.assign(url); };
   const abs = (u) => new URL(u, location.origin).href;
   const profileUrl = (nick) => abs('/users/' + encodeURIComponent(String(nick).toLowerCase()));
+  // 0.1.2: nicht öffentliche Profile leitet xHamster nach /users/profiles/<nick> um – beides gilt als „dort“
+  const onProfile = (nick, sub = '') => new RegExp('^/users/(?:profiles/)?' + String(nick).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + (sub ? '/' + sub : '') + '/?$', 'i').test(decodeURIComponent(location.pathname));
 
   // =====================================================================
   // Scan-Lauf: ruft der Reihe nach Seiten auf, der Rekorder sammelt (liest nur, klickt nichts, was etwas ändert)
@@ -338,14 +340,12 @@
       let nick = s.slice(9);
       if (nick === 'first-friend') { nick = st.ctx.firstFriend || ''; if (!nick) return 'skip'; }
       st.ctx.profile = nick; gs(K.scan, st);
-      const u = profileUrl(nick);
-      if (location.href.split(/[?#]/)[0].toLowerCase() !== u.toLowerCase()) { go(u); return 'nav'; }
+      if (!onProfile(nick)) { if (st.ctx.tried === s) return 'skip'; st.ctx.tried = s; gs(K.scan, st); go(profileUrl(nick)); return 'nav'; }
       return 'here';
     }
     if (s.startsWith('@sub:')) {
       if (!st.ctx.profile) return 'skip';
-      const u = profileUrl(st.ctx.profile) + '/' + s.slice(5);
-      if (location.href.split(/[?#]/)[0].toLowerCase() !== u.toLowerCase()) { go(u); return 'nav'; }
+      if (!onProfile(st.ctx.profile, s.slice(5))) { if (st.ctx.tried === s) return 'skip'; st.ctx.tried = s; gs(K.scan, st); go(profileUrl(st.ctx.profile) + '/' + s.slice(5)); return 'nav'; }
       return 'here';
     }
     if (s === '@gallery') {
@@ -488,8 +488,7 @@
   }
   async function actConv(a) {
     uiStatus('Aktionstest 2/3: Chat mit ' + a.partner + ' öffnen');
-    const u = profileUrl(a.partner);
-    if (location.href.split(/[?#]/)[0].toLowerCase() !== u.toLowerCase()) { go(u); return; }
+    if (!onProfile(a.partner)) { if (a.tried === 'conv') { recEvent('Partnerprofil nicht erreichbar', { info: location.pathname }); next('unfriend'); return; } actSave({ tried: 'conv' }); go(profileUrl(a.partner)); return; }
     await sleep(1500);
     const dm = (initials() || {}).displayUserModel || {};
     recDom('Profil: Knopfleiste', document.querySelector('[data-role="controls-container"]'));
@@ -572,8 +571,7 @@
   const friendState = (b) => { const u = b && b.querySelector('use'); return (u && (u.id || (u.getAttribute('xlink:href') || '').split('#')[1])) || ''; };
   async function actInvite(a) {
     uiStatus('Aktionstest 3/3: neue Freundschaftsanfrage an ' + a.partner);
-    const u = profileUrl(a.partner);
-    if (location.href.split(/[?#]/)[0].toLowerCase() !== u.toLowerCase()) { go(u); return; }
+    if (!onProfile(a.partner)) { if (a.tried === 'invite') { recEvent('Partnerprofil nicht erreichbar', { info: location.pathname }); next('done'); return; } actSave({ tried: 'invite' }); go(profileUrl(a.partner)); return; }
     const b = await waitFor(friendBtn, 10000);
     if (!b) { recDom('Profil: kein Freundschaftsknopf', document.querySelector('[data-role="controls-container"]') || document.body); recEvent('Anfrage: Knopf nicht gefunden'); next('done'); return; }
     const s0 = friendState(b);

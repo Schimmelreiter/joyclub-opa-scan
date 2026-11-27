@@ -1,6 +1,11 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.1.2 (27.11.2026)
+- Aktionstest: Partner ist jetzt das dritte Testkonto (Paarkonto) des Entwicklers; die beiden anderen Testkonten bleiben
+  Absender. Nicht öffentliche Profile (/users/profiles/<nick>) werden erkannt – vorher hätte die Umleitung dorthin
+  ein ständiges Neuladen ausgelöst
+
 0.1.1 (27.11.2026)
 - Rekorder: Anfragen über /x-api und /api/front/batch werden nach dem Vorgang unterschieden (Name im Rumpf bzw. im
   Parameter r, Adressen im Batch). Bisher verdrängte die ständige Nutzerabfrage alle anderen Beispiele
