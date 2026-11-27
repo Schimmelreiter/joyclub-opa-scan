@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.20 (27.11.2026)
+- Neu: Videos von poppen.de (vom poppen-Skript ab 2.50 gemerkt) schickt dieses Skript ebenfalls an Home Assistant; ihre Adresse gilt nur etwa einen Tag, danach kommt eine neue beim nächsten Besuch des Profils auf poppen.de
+
 2.19 (27.11.2026)
 - Neu: Videos der Fickliste. Auf der Fotos-Seite einer Person aus der Fickliste merkt sich das Skript ihre Videos; beim Senden an Home Assistant (Swinger Companion ab 0.6.0) lädt es jedes Video in bester Qualität und schickt es in Teilen, Home Assistant macht daraus eine MP4-Datei
 - Geändert: Das Album „Aktuelles“ wird nur noch standardmäßig nicht gesichert; der Knopf neben dem Albumnamen schaltet es je Person ein

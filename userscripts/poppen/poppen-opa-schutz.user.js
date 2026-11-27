@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – Poppen Edition
 // @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.49
+// @version      2.50
 // @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -5245,6 +5245,59 @@
     await Fick.put(q);
   }
   if (ON_POPPEN) onApi(/^v3\/profile\/gallery$/, (d, info) => { fickPicsFromGallery(d, info).catch((e) => warn('Fickliste-Bilder', e)); });
+
+  // 2.50: Videos der Personen aus der Fickliste – aus der Video-Vorschau des Profils (video/user/preview-list). Gemerkt
+  // wird die signierte HLS-Adresse (gilt etwa einen Tag, exp in ms); das JOYclub-Skript lädt das Video und überträgt
+  // es an Home Assistant. Gesperrte Videos (ohne Adresse) bleiben weg. p.pics += [{ k, src, pf, at, v: 1, vid, exp }]
+  const fickVideoExp = (src) => {
+    try {
+      const r = new URL(src).searchParams.get('resource') || '';
+      const j = JSON.parse(atob(r.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((r.length + 3) % 4)));
+      const e = Number(j.e) || 0;
+      return e > 1e11 ? e : e * 1000;
+    } catch { return 0; }
+  };
+  let fickVideosOwn = false;
+  async function fickVideosFrom(d, info) {
+    if (fickVideosOwn) return;
+    const nick = String((info.query && info.query.nickname) || (info.body && info.body.nickname) || '').trim();
+    let items = (d && (d.items || d.list)) || [];
+    if (!nick || !items.length) return;
+    const nl = norm(nick);
+    const p = (await Fick.all()).find((q) => !q.deleted && ((pm(q) && norm(pm(q).nick || '') === nl) ||
+      (q.profiles || []).some((x) => x.pf === 'poppen' && !x.dead && norm(x.name || x.nick || '') === nl)));
+    if (!p) return;
+    // die Seite fragt nur die ersten 6 ab: den Rest selbst holen
+    if (Number(d.total) > items.length) {
+      fickVideosOwn = true;
+      try {
+        items = [];
+        for (let page = 1; page <= 10; page++) {
+          const g = await apiGet('video/user/preview-list', { _version: 2, nickname: nick.toLowerCase(), page, limit: 50 });
+          items.push(...((g && g.items) || []));
+          if (!g || !g.next_page) break;
+        }
+      } finally { fickVideosOwn = false; }
+    }
+    const list = (p.pics || []).slice();
+    let n = 0;
+    for (const it of items) {
+      const md = it.media_data || {};
+      const src = md.source_url || '';
+      if (it.media_type !== 'video' || !/^https:\/\//.test(src) || !it.media_id) continue;
+      const k = 'poppen-v' + String(it.media_id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+      const exp = fickVideoExp(src);
+      const old = list.find((x) => x.k === k);
+      if (old) { if ((old.exp || 0) < exp || old.src !== src && !old.exp) { old.src = src; old.exp = exp; n++; } continue; }
+      list.push({ k, src, pf: 'poppen', at: now(), v: 1, vid: String(it.media_id), exp });
+      n++;
+    }
+    if (!n) return;
+    const q = (await Fick.get(p.id)) || p;
+    q.pics = list;
+    await Fick.put(q);
+  }
+  if (ON_POPPEN) onApi(/^video\/user\/preview-list$/, (d, info) => { fickVideosFrom(d, info).catch((e) => warn('Fickliste-Videos', e)); });
 
   // ---------- Profil-Fakten (Persönliche Details) ----------
   function detailsFrom(doc = document) {

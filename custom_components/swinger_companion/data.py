@@ -58,8 +58,8 @@ def parse_pic(mime: Any, data: Any) -> tuple[str, bytes] | None:
 
 
 def parse_part(mime: Any, data: Any) -> bytes | None:
-    """One part of a video sent in pieces (MPEG-TS from an HLS stream)."""
-    if mime != "video/mp2t" or not isinstance(data, str):
+    """One part of a video sent in pieces (MPEG-TS or fragmented MP4 from an HLS stream)."""
+    if mime not in ("video/mp2t", "video/mp4") or not isinstance(data, str):
         return None
     try:
         raw = base64.b64decode(data, validate=False)

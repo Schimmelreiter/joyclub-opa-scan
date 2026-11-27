@@ -328,7 +328,8 @@ async def test_video_parts(hass: HomeAssistant, hass_client_no_auth, tmp_path) -
 
     assert (await send(0, raw, k="nope"))["ok"] is False
     assert (await send(0, raw, mime="image/jpeg"))["ok"] is False
-    assert (await send(1, raw))["error"] == "order"  # must start with 0
+    assert (await send(0, b"\x00\x00\x00\x18ftypiso5", mime="video/mp4", k="joyclub-v5"))["ok"]  # fMP4 accepted (then restarted below)
+    assert (await send(2, raw))["error"] == "order"  # out of order → starts over
     half = len(raw) // 2
     assert (await send(0, raw[:half])) == {"ok": True, "next": 1}
     assert (await send(2, raw[half:]))["error"] == "order"  # gap → starts over

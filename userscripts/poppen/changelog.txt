@@ -1,6 +1,9 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.50 (27.11.2026)
+- Neu: Fickliste merkt sich auch die Videos einer Person, sobald Du ihr Profil öffnest (alle, nicht nur die ersten 6 der Vorschau). Das JOYclub-Skript (ab 2.20) lädt sie in bester Qualität und überträgt sie an Home Assistant. Die Video-Adressen gelten nur etwa einen Tag; jeder Profilbesuch erneuert sie. Gesperrte Videos bleiben weg
+
 2.49 (27.11.2026)
 - Neu: Eigener Name je Eintrag der Fickliste (✎ neben „Eigener Name“ auf der Profilseite und in der Ansicht externer Einträge). Gilt auch im JOYclub-Skript (ab 2.18) und in Home Assistant, dort als „Name (Nick)“
 - Zusammenführen beim Import übernimmt eigenen Namen und Bilder

@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.19
+// @version      2.20
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -11368,6 +11368,10 @@ fragment ImageUIDataFragment on ImageUIData {
       const c = ((await (await fetch(location.origin + '/aws/aws_signed_cookies?mode=' + encodeURIComponent(cfg.modus || 'user') + '&payload=' + encodeURIComponent(cfg.payload_json), { credentials: 'include' })).json()) || {}).content || {};
       for (const [k, v] of Object.entries(c.cookie_list || {})) document.cookie = `${k}=${v}; domain=${c.domain}; path=${c.path || '/'}${c.expires ? '; expires=' + c.expires : ''}; secure`;
     }
+    return flHlsParts(src, onPart);
+  }
+  // HLS-Video (beste Qualität) in Teilen laden: MPEG-TS-Stücke oder fMP4 (Init-Stück zuerst); gibt den Typ zurück
+  async function flHlsParts(src, onPart) {
     const get = (u, type) => new Promise((resolve, reject) => GM_xmlhttpRequest({ method: 'GET', url: u, responseType: type, timeout: 120000,
       onload: (x) => (x.status >= 200 && x.status < 300 ? resolve(x.response) : reject(new Error('Video: HTTP ' + x.status))),
       onerror: () => reject(new Error('Video nicht erreichbar')), ontimeout: () => reject(new Error('Video: Zeitüberschreitung')) }));
@@ -11380,8 +11384,11 @@ fragment ImageUIDataFragment on ImageUIData {
     if (/#EXT-X-KEY:METHOD=(?!NONE)/.test(list)) throw new Error('Video ist verschlüsselt');
     const segs = list.split(/\r?\n/).filter((l) => l && !l.startsWith('#')).map((l) => new URL(l.trim(), pl).href);
     if (!segs.length) throw new Error('Video ohne Inhalt');
-    for (let i = 0; i < segs.length; i++) await onPart(new Uint8Array(await get(segs[i], 'arraybuffer')), i, i === segs.length - 1);
-    return segs.length;
+    const init = /#EXT-X-MAP:[^\n]*URI="([^"]+)"/.exec(list);
+    const mime = init || /\.(m4s|mp4)(\?|$)/i.test(segs[0]) ? 'video/mp4' : 'video/mp2t';
+    if (init) segs.unshift(new URL(init[1], pl).href);
+    for (let i = 0; i < segs.length; i++) await onPart(new Uint8Array(await get(segs[i], 'arraybuffer')), i, i === segs.length - 1, mime);
+    return mime;
   }
   let flPicsAt = 0, flPicsBusy = false;
   // auf jeder Seite mit Profilbildern (Profil, Fotoalbum): Bilder aller Personen aus der Fickliste übernehmen
@@ -11475,9 +11482,15 @@ fragment ImageUIDataFragment on ImageUIData {
   function flPicsOut(lists, drop = new Set()) {
     const out = [], seen = new Set(drop);
     for (const l of lists) for (const x of l || []) {
-      if (!x || !x.k || seen.has(x.k)) continue;
+      if (!x || !x.k) continue;
+      if (seen.has(x.k)) {
+        // Video von poppen: die Adresse mit der spätesten Gültigkeit gewinnt
+        const o = x.v && x.exp && out.find((y) => y.k === x.k);
+        if (o && (o.exp || 0) < x.exp) Object.assign(o, { src: x.src || '', exp: x.exp });
+        continue;
+      }
       seen.add(x.k);
-      out.push(Object.assign({ k: x.k, src: x.src || '', pf: x.pf || '', at: x.at || 0 }, x.v ? { v: 1, vid: x.vid, vuid: x.vuid } : {}));
+      out.push(Object.assign({ k: x.k, src: x.src || '', pf: x.pf || '', at: x.at || 0 }, x.v ? { v: 1, vid: x.vid, vuid: x.vuid, exp: x.exp || 0 } : {}));
     }
     return out;
   }
@@ -15884,11 +15897,13 @@ fragment ImageUIDataFragment on ImageUIData {
         let ok = false;
         try {
           let part = 0;
-          await flVideoParts(pic.vid, pic.vuid, async (seg, si, segLast) => {
+          if (pic.pf === 'poppen' && (!pic.src || (pic.exp && pic.exp < Date.now() + 600000))) continue; // Adresse abgelaufen: beim nächsten Profilbesuch auf poppen.de neu
+          const load = pic.pf === 'poppen' ? (cb) => flHlsParts(pic.src, cb) : (cb) => flVideoParts(pic.vid, pic.vuid, cb);
+          await load(async (seg, si, segLast, mime) => {
            for (let off = 0; off < seg.length; off += 5 << 20) {
             const bytes = seg.subarray(off, off + (5 << 20)), i = part++, last = segLast && off + (5 << 20) >= seg.length;
             GM_setValue(K_HA_LOCK, Date.now());
-            const r = await haPost(a.url, await enc({ format: 'swinger-companion', v: 1, kind: 'vidpart', pid, k, i, last, mime: 'video/mp2t', data: b64(bytes) }));
+            const r = await haPost(a.url, await enc({ format: 'swinger-companion', v: 1, kind: 'vidpart', pid, k, i, last, mime: mime || 'video/mp2t', data: b64(bytes) }));
             if (r.status < 200 || r.status >= 300) throw new Error('Home Assistant antwortet mit ' + r.status);
             const env = JSON.parse(r.responseText || '{}');
             const res = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data))));
