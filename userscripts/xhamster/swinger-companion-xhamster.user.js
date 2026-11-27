@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.7
+// @version      0.1.8
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -524,9 +524,11 @@
     actGo(abs(dm.messagesURL));
   }
   const composer = () => document.querySelector('.xh-editable-content[contenteditable="true"]');
+  const inPartnerChat = (a) => /^\/my\/messages\//.test(location.pathname) && decodeURIComponent(location.pathname).toLowerCase().split('/').includes(String(a.partner).toLowerCase());
   const mineIds = () => new Set([...document.querySelectorAll('.message.mine[id^="message-"]')].map((e) => e.id));
   async function actMsg(a) {
-    if (a.conv && !location.pathname.startsWith(new URL(a.conv, location.origin).pathname.split('/').slice(0, 4).join('/'))) { actGo(abs(a.conv)); return; }
+    // 0.1.8: xHamster leitet die Chat-Adresse um (z. B. neue Unterhaltung) – jede Chatseite mit dem Partner im Pfad gilt
+    if (!inPartnerChat(a)) { recEvent('Chat: Umleitung', { info: location.pathname }); actGo(abs(a.conv)); return; }
     const ed = await waitFor(composer, 15000);
     if (!ed) { recDom('Chat: kein Eingabefeld', document.querySelector('.messages-main-view') || document.body); recEvent('Chat: Eingabefeld nicht gefunden'); next('unfriend'); return; }
     for (let i = a.i; i < MSG_VARIANTS.length; i++) {
@@ -581,7 +583,7 @@
   }
   async function actDel(a) {
     uiStatus('Aktionstest 2/3: Testnachrichten löschen');
-    if (a.conv && location.pathname.indexOf('/my/messages') !== 0) { actGo(abs(a.conv)); return; }
+    if (!inPartnerChat(a)) { actGo(abs(a.conv)); return; }
     await waitFor(composer, 15000);
     let n = 0;
     for (const s of a.sent || []) {
