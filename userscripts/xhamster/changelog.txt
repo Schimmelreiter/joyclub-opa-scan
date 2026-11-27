@@ -1,6 +1,12 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.4 (27.11.2026)
+- Fickliste-Knopf in der Knopfleiste fremder Profile hinter „Friend/Unfriend“, mit den Symbolen des JOYclub-Skripts
+  (Umriss = nicht eingetragen, gefüllt = Will ich, rot = Gefickt, durchgestrichen = Nie wieder!/Nein, danke!).
+  Menü: Will ich ficken, Gefickt, Nie wieder!, Nein, danke!, Fickstatus zurücksetzen, Aus der Fickliste löschen.
+  Im Profilkasten steht nur noch der Stand
+
 0.2.3 (27.11.2026)
 - Fickliste: steht jetzt in „Friends“ an Stelle der Freundesliste (Eintrag „Fickliste“ in der Seitenleiste wird aktiv),
   ein Fick je Zeile: links Bild, Name, Status und Profile, rechts Treffen (Datum, Uhrzeit, Club, Anlass, Link, Notiz)

@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.2.3 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.2.4 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -26,8 +26,9 @@ Stand: Version 0.2.3 – Änderungen siehe [changelog.txt](changelog.txt)
   Fickliste), blockiert, **gelöscht** („retired“). Ignorierte werden abgedunkelt; in der Dating-Suche auf Wunsch
   ausgeblendet (Menü *Opas in der Dating-Suche ausblenden*).
 - **Profilkasten** unter dem Nick: Nummer, Bezeichnung, Alter, Ort, Beziehung zu Dir, Galerien, Videos, Website und die
-  **Fickliste** mit Knöpfen *Will ich*, *Gefickt*, *Nein, danke!*, *Nie wieder!*, *Status entfernen*, *Aus Fickliste
-  löschen*. Die Fickliste ist dieselbe wie bei poppen.de und JOYclub; steht die Person dort schon mit einem anderen
+  Stand in der **Fickliste**. Geändert wird er mit dem Fickliste-Knopf in der Knopfleiste des Profils (hinter
+  „Friend/Unfriend“, Symbole wie im JOYclub-Skript): *Will ich ficken*, *Gefickt*, *Nie wieder!*, *Nein, danke!*,
+  *Fickstatus zurücksetzen*, *Aus der Fickliste löschen*. Die Fickliste ist dieselbe wie bei poppen.de und JOYclub; steht die Person dort schon mit einem anderen
   Hauptprofil (und dem xHamster-Profil unter „Auch auf …“), wird dieser Eintrag geändert. Neue Personen bekommen das
   xHamster-Profil als Hauptprofil und ein Vorschaubild.
 - **Fickliste als Übersicht:** Reiter „Fickliste“ hinter „Friends“ im eigenen Profil, in der Seitenleiste von „Friends“

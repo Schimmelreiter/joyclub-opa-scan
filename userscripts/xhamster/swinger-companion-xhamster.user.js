@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.3
+// @version      0.2.4
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1367,24 +1367,110 @@
     h.after(d);
     if (cl.white === 'ich') return;
     const f = document.createElement('div');
-    f.style.cssText = 'margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center';
+    f.className = 'xhsc-fl-state';
+    f.style.cssText = 'margin-top:2px';
     d.appendChild(f);
-    const btn = (label, col, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.style.cssText = `background:${col};color:#fff;border:0;border-radius:6px;padding:2px 9px;cursor:pointer;font:12px system-ui,sans-serif`; b.onclick = fn; f.appendChild(b); return b; };
-    const draw = async (msg) => {
-      f.innerHTML = '<span style="color:#999">Fickliste …</span>';
-      let cur = null;
-      try { cur = fickFind(await fickAll(), p); } catch (e) { f.innerHTML = `<span style="color:#ff7875">Fickliste: ${esc(e.message)}</span>`; return; }
-      f.innerHTML = '';
-      const lab = document.createElement('span');
-      lab.innerHTML = 'Fickliste: ' + (cur ? `<b style="color:${FCOL[cur.status] || '#ccc'}">${esc(FSTAT[cur.status] || 'ohne Status')}</b>${cur.main && cur.main.pf !== 'xhamster' ? ` (Hauptprofil ${esc(cur.main.pf)}: ${esc(cur.main.nick || cur.alias || '')})` : ''}` : 'nicht eingetragen');
-      f.appendChild(lab);
-      const set = (st) => async () => { try { await fickSetStatus(p, st); draw(); } catch (e) { draw(); uiToast(esc(e.message)); } };
-      for (const [k, v] of Object.entries(FSTAT)) if (!cur || cur.status !== k) btn(v, FCOL[k], set(k));
-      if (cur && cur.status) btn('Status entfernen', '#555', set(null));
-      if (cur && cur.main && cur.main.pf === 'xhamster' && !(cur.profiles || []).length) btn('Aus Fickliste löschen', '#555', async () => { if (!confirm(`${p.nick} aus der Fickliste löschen?`)) return; try { await fickDelete(p); draw(); } catch (e) { uiToast(esc(e.message)); } });
-      if (msg) uiToast(msg);
-    };
-    draw();
+    flStateLine(p);
+  }
+  // Zeile „Fickliste: …“ im Profilkasten (geändert wird über den Knopf in der Knopfleiste)
+  async function flStateLine(p, cur) {
+    const f = document.querySelector('#xhsc-prof .xhsc-fl-state');
+    if (!f) return;
+    if (cur === undefined) { try { cur = fickFind(await fickAll(), p); } catch (e) { f.innerHTML = `<span style="color:#ff7875">Fickliste: ${esc(e.message)}</span>`; return; } }
+    f.innerHTML = 'Fickliste: ' + (cur ? `<b style="color:${FCOL[cur.status] || '#ccc'}">${esc(FSTAT[cur.status] || 'ohne Status')}</b>${cur.main && cur.main.pf !== 'xhamster' ? ` (Hauptprofil ${esc(PF_NAME[cur.main.pf] || cur.main.pf)}: ${esc(cur.main.nick || cur.alias || '')})` : ''}` : 'nicht eingetragen');
+  }
+
+  // =====================================================================
+  // Fickliste-Knopf in der Knopfleiste fremder Profile (ab 0.2.4), hinter „Friend/Unfriend“, mit den Symbolen
+  // des JOYclub-Skripts: Will ich (Umriss gefüllt), Gefickt (rot), Nie wieder!, Nein, danke! (durchgestrichen)
+  // =====================================================================
+  const FL_D = 'M65.9,26.7c0-13.6,11-24.6,24.6-24.6s24.6,11,24.6,24.6s-11,24.6-24.6,24.6S65.9,40.3,65.9,26.7z M254,191.2c0,8.7-7.1,15.8-15.8,15.8h-78.8c-8.7,0-15.8-7.1-15.8-15.8v-27.5H74.8v30.4c0,7.1-5.7,12.8-12.8,12.8H14.8c-7.1,0-12.8-5.7-12.8-12.8s5.7-12.8,12.8-12.8h34.5c0,0,0.1-36.7,0.1-37.3c-0.4-7.9,5.2-14.9,13.1-16.3l45.9-7.7c0,0,0-59.2,0-59.2c0-11.7,9.5-21.3,21.3-21.3c3.7,0,7.2,0.9,10.2,2.6c8.4,4.5,41.9,29.7,61.1,44c8.8,6.6,13.9,16.9,13.9,27.8l0.1,61.4h23.3C246.9,175.4,254,182.5,254,191.2z M183.5,175.4l-0.2-36c0-10.4-4.8-20.1-13-26.5L134,84.7v31.1l10.9-1.8c0,0,0.1,0,0.1,0c7.5-1.2,15.2,0.9,21,5.8c5.8,4.9,9.2,12.1,9.3,19.7c0,0.1,0,0.1,0,0.2v35.7h7.9H183.5z M16.5,140.3c12.4,5.6,26.3-0.3,32.6-12.3c8-15.5,4.5-33.1-2.4-42.9c0,0,0,0,0,0c-4.8,5.8-12.2,7.6-19.6,8.1C15.3,94,8.4,98.4,4.2,107.7C-1.4,120.1,4.1,134.7,16.5,140.3z';
+  const FL_RED = '#e01b1b';
+  // gemeinsamer Status ↔ Symbol
+  const FL_KIND = { want: 'will', done: 'gef', never: 'nie', no: 'nein' };
+  const FL_ORDER = ['want', 'done', 'never', 'no'];
+  const FL_MENU = { want: 'Will ich ficken', done: 'Gefickt', never: 'Nie wieder!', no: 'Nein, danke!' };
+  function flIcon(kind, opt = {}) {
+    const size = opt.size || 20;
+    const st = `width:${size}px;height:${size}px;flex:none;vertical-align:middle;`;
+    if (kind === 'trash') return `<svg viewBox="0 0 24 24" style="${st}" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9zm4 2v9h1.6v-9H10zm3.4 0v9H15v-9h-1.6z"/></svg>`;
+    const fill = `<path fill="currentColor" d="${FL_D}"/>`;
+    const line = `<path fill="none" stroke="currentColor" stroke-width="${kind === 'nein' ? 12 : 9}" stroke-linejoin="round" d="${FL_D}"/>`;
+    const col = opt.color || (kind === 'gef' && opt.redGef ? FL_RED : 'currentColor');
+    if (kind === 'nein' || kind === 'nie') {
+      return `<svg viewBox="-48 -71.5 352 352" style="${st}color:${col}" aria-hidden="true"><g transform="translate(128 104.5) scale(.78) translate(-128 -104.5)">${kind === 'nein' ? line : fill}</g>` +
+        `<circle cx="128" cy="104.5" r="158" fill="none" stroke="${FL_RED}" stroke-width="22"/><line x1="16.3" y1="216.2" x2="239.7" y2="-7.2" stroke="${FL_RED}" stroke-width="22" stroke-linecap="round"/></svg>`;
+    }
+    return `<svg viewBox="${kind ? '-4 -4 264 217' : '-8 -8 272 225'}" style="${st}color:${col}" aria-hidden="true">${kind ? fill : line}</svg>`;
+  }
+  let flBtnCur = null;
+  function flBtnRender(wrap, cur) {
+    const stt = cur && cur.status;
+    const b = wrap.querySelector('button');
+    const k = stt ? FL_KIND[stt] : '';
+    if (b.getAttribute('data-k') !== (k || '-')) { b.setAttribute('data-k', k || '-'); b.querySelector('.xhsc-fl-ico').innerHTML = flIcon(k, { size: 20 }); }
+    b.style.background = stt === 'done' ? '#c71b1b' : '';
+    b.style.color = stt === 'done' ? '#fff' : '';
+    wrap.setAttribute('data-tooltip', stt ? 'Fickliste: ' + FSTAT[stt] : 'Fickliste');
+    b.title = wrap.getAttribute('data-tooltip');
+  }
+  function flMenu(anchor, p, cur) {
+    const old = document.getElementById('xhsc-fl-dd');
+    if (old) { old.remove(); return; }
+    const r = anchor.getBoundingClientRect();
+    const dd = document.createElement('div');
+    dd.id = 'xhsc-fl-dd';
+    dd.style.cssText = `position:fixed;z-index:2147483646;left:${Math.max(8, r.left - 80)}px;top:${r.bottom + 6}px;background:#25272b;border:1px solid #3a3d43;border-radius:10px;padding:6px 0;min-width:240px;box-shadow:0 8px 24px rgba(0,0,0,.6);font:14px system-ui,sans-serif;color:#fff`;
+    const stt = cur && cur.status;
+    const rows = FL_ORDER.filter((k) => k !== stt).map((k) => ({ k, html: flIcon(FL_KIND[k], { size: 20, redGef: true }), text: FL_MENU[k] }));
+    if (stt) rows.push({ k: 'reset', html: flIcon('trash', { size: 20 }), text: 'Fickstatus zurücksetzen' });
+    if (cur && cur.main && cur.main.pf === 'xhamster' && isXh(cur.main, p) && !(cur.profiles || []).length) rows.push({ k: 'del', html: flIcon('trash', { size: 20 }), text: 'Aus der Fickliste löschen' });
+    for (const e of rows) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:9px 16px;cursor:pointer';
+      row.innerHTML = `${e.html}<span>${esc(e.text)}</span>`;
+      row.addEventListener('mouseenter', () => { row.style.background = '#33363c'; });
+      row.addEventListener('mouseleave', () => { row.style.background = ''; });
+      row.addEventListener('click', async (ev) => {
+        ev.stopPropagation(); dd.remove();
+        try {
+          if (e.k === 'del') { if (!confirm(`${p.nick} aus der Fickliste löschen?`)) return; await fickDelete(p); }
+          else await fickSetStatus(p, e.k === 'reset' ? null : e.k);
+        } catch (er) { uiToast(esc(er.message)); }
+        flButton(true);
+      });
+      dd.appendChild(row);
+    }
+    document.body.appendChild(dd);
+    setTimeout(() => document.addEventListener('click', function off(ev) { if (!dd.contains(ev.target)) { dd.remove(); document.removeEventListener('click', off, true); } }, true), 0);
+  }
+  async function flButton(refresh = false) {
+    if (!/^\/users\/(profiles\/)?[^/]+\/?$/.test(location.pathname)) return;
+    const ctr = document.querySelector('[data-role="controls-container"]');
+    if (!ctr) return;
+    const p = profilePerson();
+    const m = me();
+    if (!p || (m && m.id === p.id)) return;
+    let wrap = ctr.querySelector('.xhsc-fl-btn');
+    if (!wrap) {
+      const grow = ctr.querySelector('button[class*="growButton-"]');
+      const inv = grow && (grow.closest('[class*="invite-"]') || grow.parentElement);
+      const proto = grow || ctr.querySelector('a[class*="primary-"], button');
+      if (!inv || !proto) return;
+      wrap = document.createElement('div');
+      wrap.className = 'xhsc-fl-btn';
+      wrap.style.cssText = 'display:inline-flex';
+      const cls = String(proto.className).replace(/\S*(growButton|disabled|active)\S*/g, '').replace(/\S*primary-\S*/g, (x) => x.replace('primary-', 'secondary-'));
+      wrap.innerHTML = `<button type="button" class="${esc(cls)}"><span class="xhsc-fl-ico" style="display:inline-flex;align-items:center"></span></button>`;
+      inv.after(wrap);
+      wrap.querySelector('button').addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); flMenu(wrap.querySelector('button'), p, flBtnCur); });
+      flBtnRender(wrap, null);
+      refresh = true;
+    }
+    if (!refresh) return;
+    try { flBtnCur = fickFind(await fickAll(refresh), p); } catch (e) { flBtnCur = null; wrap.setAttribute('data-tooltip', 'Fickliste nicht erreichbar'); return; }
+    flBtnRender(wrap, flBtnCur);
+    flStateLine(p, flBtnCur);
   }
 
   // =====================================================================
@@ -1831,7 +1917,7 @@
     if (gm(K.scan, null)) setTimeout(scanTick, 2500);
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
-    const tick = () => { try { profileBox(); decorate(); flTab(); } catch (e) { /* egal */ } };
+    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); } catch (e) { /* egal */ } };
     // Nutzer-Menü: entsteht erst beim Öffnen – sofort ergänzen
     try { new MutationObserver(() => { try { ddInsert(); } catch (e) { /* egal */ } }).observe(document.body, { childList: true, subtree: true }); } catch (e) { /* egal */ }
     tick();
