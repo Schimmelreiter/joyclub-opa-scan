@@ -22,6 +22,10 @@ STATUS_NEVER = "never"
 PAYLOAD_FORMAT = "swinger-companion"
 MAX_BODY = 32 * 1024 * 1024
 MAX_THUMB = 200 * 1024
+MAX_PIC = 8 * 1024 * 1024  # one full picture; Home Assistant accepts at most 16 MB per request (twice base64)
+NEED_PICS_MAX = 50  # missing pictures asked for per answer
 
 SIGNAL_UPDATE = f"{DOMAIN}_update_{{}}"
 THUMB_URL = "/api/swinger_companion/thumb/{entry_id}/{pid}"
+PIC_URL = "/api/swinger_companion/pic/{entry_id}/{pid}/{key}"
+PIC_DIR = "swinger_companion"  # below the configuration directory

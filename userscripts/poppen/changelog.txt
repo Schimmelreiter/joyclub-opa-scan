@@ -1,6 +1,9 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.48 (27.11.2026)
+- Neu: Fickliste merkt sich alle Bilder einer Person. Öffnest Du die Galerie eines Profils aus der Fickliste, übernimmt das Skript alle Bilder (nur deren Adressen, ohne zusätzliche Abrufe). Neue Bilder kommen bei späteren Besuchen dazu, nichts wird gelöscht. Das JOYclub-Skript (ab 2.13) lädt sie und überträgt sie an Home Assistant
+
 2.47 (27.11.2026)
 - Behoben: Personen mit gelöschtem JOYclub-Profil öffneten die Archiv-Ansicht für poppen-Profile. Sie öffnen jetzt ihr Profil-Archiv auf joyclub.de (dafür JOYclub-Skript ab 2.12)
 - Die Whitelist im Quelltext ist leer. Selbst eingetragene Namen bleiben erhalten; ein Name, der nur als Voreinstellung drinstand, muss bei Bedarf neu eingetragen werden

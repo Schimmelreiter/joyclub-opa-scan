@@ -80,6 +80,7 @@ Eine Person je Eintrag. Alle Felder sind optional außer `id`.
 | `notes`, `notesAt`, `notesBy` | Anmerkungen (bis 8000 Zeichen), Zeitpunkt, `{ pf, acc }` |
 | `history[]` | `{ at, what }`: Verlauf als Klartext |
 | `ext` | Person ohne Plattform-Profil: `{ name, typ, city, short, texts, img (data-URL), gone }` |
+| `pics[]` | alle Bilder der Person: `{ k, src, pf, at }` – `k` stabile Kennung (`joyclub-<Bild-ID>`, `poppen-<uid>-<hash>`), `src` Adresse in voller Auflösung, `pf` Plattform, `at` gefunden am (ms). Nie entfernen; gleiche `k` nur einmal. Bilddaten liegen nur lokal bzw. in Home Assistant (seit JOYclub 2.13 / poppen 2.48) |
 | `imported` | Herkunft beim Import (Text) |
 | `created` | Anlagezeitpunkt |
 | `updated` | **veraltet**, Ersatz: `updatedAt` |
@@ -113,7 +114,7 @@ Eine Person je Eintrag. Alle Felder sind optional außer `id`.
 | `imported` | Nick des Exporteurs, wenn aus einer fremden Fickliste übernommen |
 
 **Felder, die das JOYclub-Skript bisher evtl. nicht kennt** (mitführen, nie entfernen): `meets[].pf`, `meets[].imported`,
-`profiles[].sync`, `profiles[].dead`, `profiles[].pfName`, `profiles[].text`, `notesBy`, `ext.*`, `imported`, `history[]` und die
+`profiles[].sync`, `profiles[].dead`, `profiles[].pfName`, `profiles[].text`, `notesBy`, `ext.*`, `imported`, `history[]`, `pics[]` und die
 Versionsfelder `rev`, `updatedAt`, `updatedBy`, `deleted`.
 
 ### `tpl` – gemeinsame Textvorlagen
@@ -196,4 +197,4 @@ Smileys: 😁 = breit grinsend, 😳 = große, ungläubige Augen.
 ## Änderungsliste
 | schema | Änderung |
 |---|---|
-| 1 | erste Fassung (poppen 2.32); Ergänzungen 2.33: IDs `j:`, Plattform-Codes, `updatedBy`-Felder, Feldlisten, Fallliste des Imports; 2.34: Textvorlagen-Regelwerk (JOYclub-Schreibweise, `x:`-IDs, `pfIds`, `owner`, `base`/`hash` in der Sicherungsdatei), Kontobindung (keine Formatänderung); 2.38: poppen-Profil darf unter `profiles[]` stehen, wenn ein anderes Skript `main` belegt (keine Formatänderung) |
+| 1 | erste Fassung (poppen 2.32); Ergänzungen 2.33: IDs `j:`, Plattform-Codes, `updatedBy`-Felder, Feldlisten, Fallliste des Imports; 2.34: Textvorlagen-Regelwerk (JOYclub-Schreibweise, `x:`-IDs, `pfIds`, `owner`, `base`/`hash` in der Sicherungsdatei), Kontobindung (keine Formatänderung); 2.38: poppen-Profil darf unter `profiles[]` stehen, wenn ein anderes Skript `main` belegt (keine Formatänderung); 2.48 / JOYclub 2.13: `pics[]` (keine Formatänderung, neues optionales Feld) |

@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.12
+// @version      2.13
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -11226,6 +11226,100 @@ fragment ImageUIDataFragment on ImageUIData {
     GM_setValue(K_FLI + id, data);
     return id;
   }
+  // ---- 2.13: alle Bilder der Personen aus der Fickliste ----
+  // Gesammelt beim Besuch des Profils (keine zusätzlichen Abrufe), nie gelöscht, gleiche Bilder nur einmal.
+  // p.pics = [{ k, src, pf, at, h, full, ha }]; Bilddaten in jaf_flp_<k>: zuerst immer das Original; sobald
+  // Home Assistant ein Bild hat, bleibt ab dem 6. Bild nur eine Vorschau.
+  const K_FLP = 'jaf_flp_';
+  const FL_PICS_FULL = 5;
+  const FL_PIC_PREVIEW = 480;
+  const flPicKey = (pf, id) => `${pf}-${String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64)}`;
+  async function flPicHash(data) {
+    try { const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(data))); return [...new Uint8Array(d)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join(''); } catch (e) { return ''; }
+  }
+  // Bilder der Person auf der aktuellen Seite (Profilbild und Galerie), ohne Bilder anderer Mitglieder
+  function flPagePics(pid, doc = document) {
+    const main = doc.querySelector('main.profile-container:not(.jaf-fl-tpl)') || doc.querySelector('main');
+    if (!main) return [];
+    const out = [], seen = new Set();
+    for (const el of main.querySelectorAll('[data-img_id]')) {
+      if (el.closest('[class*="jaf-"]')) continue;
+      const a = el.closest('a[href]');
+      if (a) { const m = (a.getAttribute('href') || '').match(/\/profile\/(\d+)/); if (m && m[1] !== String(pid)) continue; }
+      const id = el.getAttribute('data-img_id');
+      if (!id || seen.has(id)) continue;
+      const box = el.closest('j-avatar, picture') || el;
+      const srcs = [...box.querySelectorAll('source')];
+      const webp = srcs.find((x) => /webp/.test(x.getAttribute('type') || '')) || srcs[0];
+      let u = webp ? flBestSrc(webp.getAttribute('srcset') || webp.getAttribute('data-srcset')) : '';
+      if (!u) { const img = box.querySelector('img'); u = (img && (img.currentSrc || img.getAttribute('data-src') || img.src)) || ''; }
+      if (!u || /^data:|\/_\.gif/.test(u)) continue;
+      seen.add(id);
+      out.push({ k: flPicKey('joyclub', id), src: new URL(u, location.href).href, pf: 'joyclub' });
+    }
+    return out;
+  }
+  // neue Bilder übernehmen (Original laden); gibt die Zahl neuer Bilder zurück
+  async function flAddPics(pid, found) {
+    const p0 = flGet(pid);
+    if (!p0 || !found.length) return 0;
+    const list = (p0.pics || []).slice(), byK = new Set(list.map((x) => x.k)), byH = new Set(list.map((x) => x.h).filter(Boolean));
+    let n = 0;
+    for (const f of found) {
+      if (byK.has(f.k)) continue;
+      const data = await flFetchImage(f.src);
+      const h = data ? await flPicHash(data) : '';
+      byK.add(f.k);
+      if (h && byH.has(h)) continue; // dasselbe Bild unter neuer Kennung
+      if (data) GM_setValue(K_FLP + f.k, data);
+      list.push({ k: f.k, src: f.src, pf: f.pf, at: Date.now(), h, full: data ? 1 : 0 });
+      if (h) byH.add(h);
+      n++;
+    }
+    if (!n) return 0;
+    const q = flGet(pid) || p0;
+    q.pics = list;
+    flPut(q);
+    haSoon();
+    return n;
+  }
+  let flPicsAt = 0, flPicsBusy = false;
+  function flPicsTick(pid) {
+    if (flPicsBusy || Date.now() - flPicsAt < 5000) return;
+    flPicsAt = Date.now();
+    flPicsBusy = true;
+    flAddPics(pid, flPagePics(pid)).catch((e) => console.warn('[Alter-Filter] Fickliste-Bilder', e)).finally(() => { flPicsBusy = false; });
+  }
+  // lokale Kennzeichen setzen, ohne „geändert“ (kein erneuter Abgleich)
+  function flPicFlag(k, patch) {
+    const fl = getFl();
+    let hit = null;
+    for (const q of Object.values(fl)) {
+      const i = (q.pics || []).findIndex((x) => x.k === k);
+      if (i < 0) continue;
+      Object.assign(q.pics[i], patch);
+      hit = { q, i };
+    }
+    if (hit) setFl(fl);
+    return hit;
+  }
+  // Home Assistant hat das Bild: ab dem 6. Bild der Person nur noch eine Vorschau behalten
+  async function flPicStored(k) {
+    const hit = flPicFlag(k, { ha: 1 });
+    if (!hit || hit.i < FL_PICS_FULL || !hit.q.pics[hit.i].full) return;
+    const prev = await haShrink(GM_getValue(K_FLP + k, ''), FL_PIC_PREVIEW);
+    if (prev) { GM_setValue(K_FLP + k, prev); flPicFlag(k, { full: 0 }); }
+  }
+  // Bilder aller Mitglieder einer Person zusammen (Austauschformat: nur k, src, pf, at)
+  function flPicsOut(lists) {
+    const out = [], seen = new Set();
+    for (const l of lists) for (const x of l || []) {
+      if (!x || !x.k || seen.has(x.k)) continue;
+      seen.add(x.k);
+      out.push({ k: x.k, src: x.src || '', pf: x.pf || '', at: x.at || 0 });
+    }
+    return out;
+  }
   const flCmpData = (d) => JSON.stringify(Object.assign({}, d, { imgUrl: flImgKey(d.imgUrl) }));
   // neuen Archiv-Stand anlegen; force = auch ohne Änderung (z. B. Statuswechsel)
   async function flSnapshot(pid, why, force = false) {
@@ -12282,6 +12376,8 @@ fragment ImageUIDataFragment on ImageUIData {
       x.meets = [];
       for (const id of ids) for (const m of fl[id].meets || []) x.meets.push(flMeetOut(m, fl[id]));
       x.history = (prim.hist || []).map((h) => ({ at: h.ts, what: h.why }));
+      x.pics = flPicsOut([...ids.map((id) => fl[id].pics), ...ids.map((id) => fl[id].xfer && fl[id].xfer.pics)]);
+      if (!x.pics.length) delete x.pics;
       // Anmerkungen: allgemeines Feld (seit 1.88), joy.notes bleibt vorerst für ältere Stände
       x.notes = prim.notes || '';
       if (prim.notesAt) x.notesAt = prim.notesAt; else delete x.notesAt;
@@ -14222,6 +14318,8 @@ fragment ImageUIDataFragment on ImageUIData {
               } catch (e) { console.warn('[Alter-Filter] Fickliste-Archiv', e); }
             }, 2500);
           }
+          // Bilder: auch nachgeladene (Galerie beim Scrollen) – höchstens alle 5 Sekunden
+          if (profileAges().length) flPicsTick(pid);
         }
       }
     }
@@ -15529,7 +15627,7 @@ fragment ImageUIDataFragment on ImageUIData {
     if (!a) return 'Nicht eingerichtet – die Adresse steht in Home Assistant unter Swinger Companion › Konfigurieren.';
     const s = GM_getValue(K_HA_STAT, {}) || {};
     if (s.errAt && (!s.at || s.errAt > s.at)) return `Fehler um ${fmtTs(s.errAt)}: ${s.err}`;
-    return s.at ? `Zuletzt gesendet ${fmtTs(s.at)} · ${s.count || 0} Personen in Home Assistant` : 'Noch nichts gesendet.';
+    return s.at ? `Zuletzt gesendet ${fmtTs(s.at)} · ${s.count || 0} Personen in Home Assistant${s.pics ? ` · ${s.pics} Bilder übertragen` : ''}` : 'Noch nichts gesendet.';
   }
   let haTimer = 0;
   function haSoon() {
@@ -15539,13 +15637,13 @@ fragment ImageUIDataFragment on ImageUIData {
   }
   const haB64Url = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
   async function haKey(k) { return crypto.subtle.importKey('raw', haB64Url(k), 'AES-GCM', false, ['encrypt', 'decrypt']); }
-  function haShrink(dataUrl) {
+  function haShrink(dataUrl, max = 160) {
     return new Promise((resolve) => {
       if (!dataUrl || !/^data:image\//.test(dataUrl)) { resolve(''); return; }
       const im = new Image();
       im.onload = () => {
         try {
-          const f = Math.min(1, 160 / Math.max(im.naturalWidth || 1, im.naturalHeight || 1));
+          const f = Math.min(1, max / Math.max(im.naturalWidth || 1, im.naturalHeight || 1));
           const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.naturalWidth * f)); c.height = Math.max(1, Math.round(im.naturalHeight * f));
           c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
           resolve(c.toDataURL('image/jpeg', 0.8));
@@ -15559,6 +15657,32 @@ fragment ImageUIDataFragment on ImageUIData {
     return new Promise((resolve, reject) => GM_xmlhttpRequest({
       method: 'POST', url, headers: { 'Content-Type': 'application/json' }, data: JSON.stringify(body), timeout: 60000,
       onload: (r) => resolve(r), onerror: () => reject(new Error('Home Assistant nicht erreichbar')), ontimeout: () => reject(new Error('Zeitüberschreitung')) }));
+  }
+  // Bilder einzeln senden (je Anfrage ein Bild in voller Auflösung), höchstens 3 Minuten je Lauf
+  async function haSendPics(a, key, persons, need) {
+    const tried = new Set(), t0 = Date.now();
+    let sent = 0;
+    const enc = async (obj) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(obj))); return { v: 1, iv: b64(iv), data: b64(ct) }; };
+    while (need.length && Date.now() - t0 < 180000) {
+      const [pid, k] = need.shift();
+      if (tried.has(pid + '|' + k)) continue;
+      tried.add(pid + '|' + k);
+      const x = persons.find((y) => y.id === pid);
+      const pic = x && (x.pics || []).find((y) => y.k === k);
+      if (!pic) continue;
+      const loc = Object.values(getFl()).flatMap((q) => q.pics || []).find((y) => y.k === k);
+      let data = loc && loc.full ? GM_getValue(K_FLP + k, '') : '';
+      if (!data && pic.src) data = await flFetchImage(pic.src);
+      const m = /^data:(image\/[a-z+.-]+);base64,(.+)$/.exec(data || '');
+      if (!m) continue;
+      const r = await haPost(a.url, await enc({ format: 'swinger-companion', v: 1, kind: 'pic', pid, k, mime: m[1], data: m[2] }));
+      if (r.status < 200 || r.status >= 300) break;
+      const env = JSON.parse(r.responseText || '{}');
+      const res = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data))));
+      if (res.ok) { sent++; await flPicStored(k); }
+      if (Array.isArray(res.needPics)) need = res.needPics.filter(([p2, k2]) => !tried.has(p2 + '|' + k2));
+    }
+    return sent;
   }
   let haBusy = false;
   async function haSend(force) {
@@ -15601,7 +15725,8 @@ fragment ImageUIDataFragment on ImageUIData {
         need = need.filter((pid) => { const x = persons.find((y) => y.id === pid); return x && fl[x.__lid] && GM_getValue(K_FLI + fl[x.__lid].img, ''); });
         if (!need.length || sentNow.length === 0 && round > 0) break;
       }
-      GM_setValue(K_HA_STAT, { at: started, count: ans ? ans.count : 0 });
+      const pics = ans ? await haSendPics(a, key, persons, ans.needPics || []) : 0;
+      GM_setValue(K_HA_STAT, { at: started, count: ans ? ans.count : 0, pics: pics + ((GM_getValue(K_HA_STAT, {}) || {}).pics || 0) });
     } catch (e) {
       GM_setValue(K_HA_STAT, Object.assign({}, GM_getValue(K_HA_STAT, {}) || {}, { err: e.message || String(e), errAt: Date.now() }));
     } finally { haBusy = false; GM_setValue(K_HA_LOCK, 0); }

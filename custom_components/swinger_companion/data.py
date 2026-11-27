@@ -7,16 +7,48 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .const import MAX_THUMB, STATUS_DONE, STATUS_NEVER, STATUS_NO, STATUS_WANT
+from .const import MAX_PIC, MAX_THUMB, NEED_PICS_MAX, STATUS_DONE, STATUS_NEVER, STATUS_NO, STATUS_WANT
 
 STATUSES = (STATUS_WANT, STATUS_DONE, STATUS_NO, STATUS_NEVER)
 NOTES_MAX = 300
+PIC_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif"}
+_SAFE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def safe_name(text: str) -> str:
+    """A file or directory name for a person id or picture key (ids that do not fit are hashed)."""
+    text = str(text)
+    if _SAFE.match(text) and text not in (".", ".."):
+        return text.replace(":", "_")
+    return "h_" + hashlib.sha256(text.encode()).hexdigest()[:32]
+
+
+def pic_keys(p: dict[str, Any]) -> list[str]:
+    """Keys of the pictures a script reports for a person (order kept, duplicates removed)."""
+    out: list[str] = []
+    for x in p.get("pics") or []:
+        k = x.get("k") if isinstance(x, dict) else x
+        if isinstance(k, str) and _SAFE.match(k) and k not in out:
+            out.append(k)
+    return out
+
+
+def parse_pic(mime: Any, data: Any) -> tuple[str, bytes] | None:
+    """A full picture sent on its own: content type and base64 → (content type, bytes)."""
+    if mime not in PIC_TYPES or not isinstance(data, str):
+        return None
+    try:
+        raw = base64.b64decode(data, validate=False)
+    except ValueError:
+        return None
+    return (mime, raw) if 0 < len(raw) <= MAX_PIC else None
 
 
 def b64u(raw: bytes) -> str:
@@ -115,6 +147,7 @@ def summarize(p: dict[str, Any]) -> dict[str, Any] | None:
                        "link": last.get("link") or ""} if last else None),
         "notes": notes[:NOTES_MAX] + ("…" if len(notes) > NOTES_MAX else ""),
         "thumb": None,
+        "pic_keys": pic_keys(p),
     }
 
 
@@ -125,14 +158,45 @@ class PersonData:
     persons: list[dict[str, Any]] = field(default_factory=list)
     accounts: dict[str, dict[str, Any]] = field(default_factory=dict)  # "<pf>:<uid|nick>" → {at, script, count}
     thumbs: dict[str, dict[str, str]] = field(default_factory=dict)  # person id → {key, type, data (base64)}
+    # person id → picture key → {file (relative to the picture folder), type, at, size}; never removed automatically
+    pics: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"persons": self.persons, "accounts": self.accounts, "thumbs": self.thumbs}
+        return {"persons": self.persons, "accounts": self.accounts, "thumbs": self.thumbs, "pics": self.pics}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> PersonData:
         d = d or {}
-        return cls(list(d.get("persons") or []), dict(d.get("accounts") or {}), dict(d.get("thumbs") or {}))
+        return cls(list(d.get("persons") or []), dict(d.get("accounts") or {}), dict(d.get("thumbs") or {}),
+                   dict(d.get("pics") or {}))
+
+    def need_pics(self) -> list[list[str]]:
+        """[person id, key] of reported pictures that are not stored yet (at most NEED_PICS_MAX)."""
+        out: list[list[str]] = []
+        for p in self.persons:
+            have = self.pics.get(p["id"]) or {}
+            for k in p.get("pic_keys") or []:
+                if k not in have:
+                    out.append([p["id"], k])
+                    if len(out) >= NEED_PICS_MAX:
+                        return out
+        return out
+
+    def wants_pic(self, pid: str, key: str) -> bool:
+        return any(p["id"] == pid and key in (p.get("pic_keys") or []) for p in self.persons)
+
+    def add_pic(self, pid: str, key: str, ctype: str, size: int, now: datetime) -> str:
+        """Register a stored picture, returns its file name relative to the picture folder."""
+        rel = f"{safe_name(pid)}/{safe_name(key)}.{PIC_TYPES[ctype]}"
+        self.pics.setdefault(pid, {})[key] = {"file": rel, "type": ctype, "at": now.isoformat(), "size": size}
+        return rel
+
+    def pic_list(self, pid: str) -> list[str]:
+        """Stored picture keys of a person: in the script's order, then older ones it no longer reports."""
+        have = self.pics.get(pid) or {}
+        p = next((x for x in self.persons if x["id"] == pid), None)
+        order = [k for k in (p.get("pic_keys") if p else None) or [] if k in have]
+        return order + [k for k in have if k not in order]
 
     def apply(self, payload: dict[str, Any], account_key: str, now: datetime) -> list[str]:
         """Take over a complete list from one script. Returns the person ids whose picture is still missing."""

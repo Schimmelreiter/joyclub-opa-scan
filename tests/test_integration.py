@@ -46,7 +46,7 @@ async def test_flow_webhook_sensors(hass: HomeAssistant, hass_client_no_auth) ->
     r = await client.post(url, json=encrypt(key, _payload()))
     assert r.status == 200
     ans = decrypt(key, await r.json())
-    assert ans == {"ok": True, "count": 3, "need": ["j:1"]}
+    assert ans == {"ok": True, "count": 3, "need": ["j:1"], "needPics": []}
     await hass.async_block_till_done()
     entry = hass.config_entries.async_get_entry(entry.entry_id)
     subs = [s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_ACCOUNT]
@@ -116,3 +116,40 @@ async def test_manual_account_matches_later_data(hass: HomeAssistant, hass_clien
     assert len(entry.subentries) == 1  # the hand-made one, found by nick
     st = [s for s in hass.states.async_all("sensor") if s.entity_id.endswith(("letzte_ubertragung", "last_transfer"))]
     assert st and st[0].state not in ("unknown", "unavailable")
+
+
+async def test_full_pictures(hass: HomeAssistant, hass_client_no_auth, tmp_path) -> None:
+    hass.config.config_dir = str(tmp_path)
+    entry = await _entry(hass)
+    client = await hass_client_no_auth()
+    url = f"/api/webhook/{entry.data[CONF_WEBHOOK_ID]}"
+    key = entry.data[CONF_KEY]
+    persons = _payload()["persons"]
+    persons[0]["pics"] = [{"k": "a1"}, {"k": "a2"}, {"k": "a1"}, {"k": "../bad"}]
+    r = await client.post(url, json=encrypt(key, _payload(persons=persons)))
+    ans = decrypt(key, await r.json())
+    assert ans["needPics"] == [["j:1", "a1"], ["j:1", "a2"]]
+    await hass.async_block_till_done()
+
+    def pic(k, data=b"\xff\xd8\xff full", pid="j:1"):
+        return encrypt(key, {"format": "swinger-companion", "v": 1, "kind": "pic", "pid": pid, "k": k, "mime": "image/jpeg",
+                             "data": base64.b64encode(data).decode()})
+
+    assert decrypt(key, await (await client.post(url, json=pic("zz"))).json())["ok"] is False  # not reported
+    assert decrypt(key, await (await client.post(url, json=pic("a1", pid="p:7"))).json())["ok"] is False
+    ans = decrypt(key, await (await client.post(url, json=pic("a2"))).json())
+    assert ans["ok"] and ans["needPics"] == [["j:1", "a1"]]
+    assert (tmp_path / "swinger_companion" / entry.entry_id / "j_1" / "a2.jpg").read_bytes().startswith(b"\xff\xd8")
+    await hass.async_block_till_done()
+    want = [s for s in hass.states.async_all("sensor") if s.attributes.get("persons") and s.attributes["persons"][0]["name"] == "Lisa"][0]
+    pics = want.attributes["persons"][0]["pics"]
+    assert len(pics) == 1 and "pic_keys" not in want.attributes["persons"][0]
+    r = await client.get(pics[0])
+    assert r.status == 200 and (await r.read()).startswith(b"\xff\xd8")
+    assert (await client.get(pics[0].replace("?s=", "?s=0"))).status == 404
+    # list without pictures later: stored pictures stay
+    r = await client.post(url, json=encrypt(key, _payload()))
+    assert decrypt(key, await r.json())["needPics"] == []
+    await hass.async_block_till_done()
+    want = [s for s in hass.states.async_all("sensor") if s.attributes.get("persons") and s.attributes["persons"][0]["name"] == "Lisa"][0]
+    assert len(want.attributes["persons"][0]["pics"]) == 1

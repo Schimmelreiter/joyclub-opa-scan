@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – Poppen Edition
 // @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.47
+// @version      2.48
 // @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -32,7 +32,7 @@
 
 (function () {
   'use strict';
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.47';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.48';
   const REPO_URL = 'https://github.com/Schimmelreiter/swinger-companion';
   const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) || window;
   // Eingebaute Funktionen gleich beim Start festhalten (das Skript läuft in der Seitenwelt; spätere Veränderungen
@@ -5215,6 +5215,36 @@
     return 'https://www.joyclub.de/edit/homepage/?fickliste&' + q.toString();
   };
   const extUrl = (p) => (p && p.main && p.main.dead ? '' : foreignUrl(p)) || joyArchUrl(p) || '/setting/profile#extern=' + encodeURIComponent(p.id);
+
+  // 2.48: alle Bilder der Personen aus der Fickliste – aus den Galerie-Abfragen der Seite selbst (kein zusätzlicher
+  // Abruf), nie gelöscht, gleiche Bilder nur einmal. p.pics = [{ k, src, pf, at }]; das JOYclub-Skript lädt sie und
+  // überträgt sie an Home Assistant.
+  async function fickPicsFromGallery(d, info) {
+    const nick = String((info.query && info.query.nickname) || (info.body && info.body.nickname) || '').trim();
+    const items = (d && (d.items || d.list)) || [];
+    if (!nick || !items.length) return;
+    const nl = norm(nick);
+    const p = (await Fick.all()).find((q) => !q.deleted && ((pm(q) && norm(pm(q).nick || '') === nl) ||
+      (q.profiles || []).some((x) => x.pf === 'poppen' && !x.dead && norm(x.name || x.nick || '') === nl)));
+    if (!p) return;
+    const list = (p.pics || []).slice(), have = new Set(list.map((x) => x.k));
+    let n = 0;
+    for (const it of items) {
+      const md = it.media_data || {};
+      const src = md.source_url || md.preview_url || '';
+      if (it.media_type !== 'image' || !realPhoto(src)) continue;
+      const k = 'poppen-' + String(grPhotoKey(src)).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+      if (have.has(k)) continue;
+      have.add(k);
+      list.push({ k, src, pf: 'poppen', at: now() });
+      n++;
+    }
+    if (!n) return;
+    const q = (await Fick.get(p.id)) || p;
+    q.pics = list;
+    await Fick.put(q);
+  }
+  if (ON_POPPEN) onApi(/^v3\/profile\/gallery$/, (d, info) => { fickPicsFromGallery(d, info).catch((e) => warn('Fickliste-Bilder', e)); });
 
   // ---------- Profil-Fakten (Persönliche Details) ----------
   function detailsFrom(doc = document) {

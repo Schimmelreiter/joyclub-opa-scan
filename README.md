@@ -14,7 +14,7 @@ Plattform lesbar). Das gemeinsame Datenformat steht in [docs/FORMAT.md](docs/FOR
 
 ## Home-Assistant-Integration
 
-`custom_components/swinger_companion` (Installation über HACS als benutzerdefiniertes Repository vom Typ *Integration*, oder den Ordner kopieren). Je Person ein Eintrag; jedes Konto auf jeder Seite wird ein eigenes Gerät unter der Person, sobald sein Skript zum ersten Mal sendet. Sensoren je Person: *Zu ficken*, *Gefickt* (Anzahl, Personen als Attribut mit Profil-Links, Treffen, Anmerkung und signierter Bildadresse) und *Letztes Treffen*; je Konto: *Letzte Übertragung*. Einrichtung im Skript: siehe [JOYclub-Anleitung](userscripts/joyclub/README.md#home-assistant).
+`custom_components/swinger_companion` (Installation über HACS als benutzerdefiniertes Repository vom Typ *Integration*, oder den Ordner kopieren). Je Person ein Eintrag; jedes Konto auf jeder Seite wird ein eigenes Gerät unter der Person, sobald sein Skript zum ersten Mal sendet. Sensoren je Person: *Zu ficken*, *Gefickt* (Anzahl, Personen als Attribut mit Profil-Links, Treffen, Anmerkung, signierter Adresse des Vorschaubilds und `pics` mit den signierten Adressen aller Bilder in voller Auflösung) und *Letztes Treffen*; die Bilder liegen unter `<config>/swinger_companion/<Eintrag>/`; je Konto: *Letzte Übertragung*. Einrichtung im Skript: siehe [JOYclub-Anleitung](userscripts/joyclub/README.md#home-assistant).
 
 Updates holt Tampermonkey automatisch. Das Repo hieß früher `joyclub-opa-scan`, das
 poppen-Skript lag in `poppen-opa-scan`; beide sind hierher umgezogen.

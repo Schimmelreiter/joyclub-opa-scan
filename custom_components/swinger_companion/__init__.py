@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import base64
 import logging
+from pathlib import Path
 from dataclasses import dataclass
 from http import HTTPStatus
+from urllib.parse import quote
 from typing import Any
 
 from aiohttp import web
@@ -29,12 +31,14 @@ from .const import (
     DOMAIN,
     MAX_BODY,
     PAYLOAD_FORMAT,
+    PIC_DIR,
+    PIC_URL,
     PLATFORM_NAMES,
     SIGNAL_UPDATE,
     SUBENTRY_ACCOUNT,
     THUMB_URL,
 )
-from .data import PersonData, decrypt, encrypt, sign
+from .data import PersonData, decrypt, encrypt, parse_pic, sign
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR]
@@ -67,6 +71,22 @@ def subentry_for(entry: ConfigEntry, platform: str, uid: str, nick: str) -> Conf
     return None
 
 
+def pic_dir(hass: HomeAssistant, entry: ConfigEntry) -> Path:
+    return Path(hass.config.path(PIC_DIR, entry.entry_id))
+
+
+def pic_url(entry: ConfigEntry, pid: str, key: str) -> str:
+    path = PIC_URL.format(entry_id=entry.entry_id, pid=quote(pid, safe=""), key=quote(key, safe=""))
+    return f"{path}?s={sign(entry.data[CONF_SIGN], entry.entry_id, 'pic', pid, key)}"
+
+
+def _write(path: Path, raw: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".part")
+    tmp.write_bytes(raw)
+    tmp.replace(path)
+
+
 def thumb_url(entry: ConfigEntry, data: PersonData, pid: str) -> str | None:
     t = data.thumbs.get(pid)
     if not t:
@@ -80,6 +100,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SCConfigEntry) -> bool:
     entry.runtime_data = Runtime(store, PersonData.from_dict(await store.async_load()))
     if not hass.data.get(f"{DOMAIN}_view"):
         hass.http.register_view(ThumbView())
+        hass.http.register_view(PicView())
         hass.data[f"{DOMAIN}_view"] = True
     webhook.async_register(hass, DOMAIN, f"Swinger Companion {entry.title}", entry.data[CONF_WEBHOOK_ID],
                            _handle_webhook, allowed_methods=["POST"], local_only=False)
@@ -127,6 +148,8 @@ async def _handle_webhook(hass: HomeAssistant, webhook_id: str, request: web.Req
         return web.json_response({"error": "key"}, status=HTTPStatus.FORBIDDEN)
     if payload.get("format") != PAYLOAD_FORMAT or payload.get("v") != 1:
         return web.json_response({"error": "format"}, status=HTTPStatus.BAD_REQUEST)
+    if payload.get("kind") == "pic":
+        return await _handle_pic(hass, entry, payload)
     platform = str(payload.get("platform") or "")
     acc = payload.get("account") if isinstance(payload.get("account"), dict) else {}
     uid, nick = str(acc.get(CONF_UID) or ""), str(acc.get(CONF_NICK) or "").strip()
@@ -148,7 +171,24 @@ async def _handle_webhook(hass: HomeAssistant, webhook_id: str, request: web.Req
     else:
         rt.store.async_delay_save(rt.data.as_dict, 2)
         async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
-    return web.json_response(encrypt(key, {"ok": True, "count": len(rt.data.persons), "need": need}))
+    return web.json_response(encrypt(key, {"ok": True, "count": len(rt.data.persons), "need": need, "needPics": rt.data.need_pics()}))
+
+
+async def _handle_pic(hass: HomeAssistant, entry: SCConfigEntry, payload: dict[str, Any]) -> web.Response:
+    """One full picture of a person (sent one by one after the list, when Home Assistant asked for it)."""
+    key = entry.data[CONF_KEY]
+    pid, pkey = str(payload.get("pid") or ""), str(payload.get("k") or "")
+    rt = entry.runtime_data
+    if not rt.data.wants_pic(pid, pkey):
+        return web.json_response(encrypt(key, {"ok": False, "error": "unknown picture"}))
+    pic = parse_pic(payload.get("mime"), payload.get("data"))
+    if pic is None:
+        return web.json_response(encrypt(key, {"ok": False, "error": "bad picture"}))
+    rel = rt.data.add_pic(pid, pkey, pic[0], len(pic[1]), dt_util.utcnow())
+    await hass.async_add_executor_job(_write, pic_dir(hass, entry) / rel, pic[1])
+    rt.store.async_delay_save(rt.data.as_dict, 5)
+    async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
+    return web.json_response(encrypt(key, {"ok": True, "stored": pkey, "needPics": rt.data.need_pics()}))
 
 
 class ThumbView(HomeAssistantView):
@@ -170,7 +210,33 @@ class ThumbView(HomeAssistantView):
                             headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
+class PicView(HomeAssistantView):
+    """Full pictures of the Fickliste, reachable only with a signed address."""
+
+    url = "/api/swinger_companion/pic/{entry_id}/{pid}/{key}"
+    name = "api:swinger_companion:pic"
+    requires_auth = False
+
+    async def get(self, request: web.Request, entry_id: str, pid: str, key: str) -> web.StreamResponse:
+        hass: HomeAssistant = request.app["hass"]
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None or entry.domain != DOMAIN or not hasattr(entry, "runtime_data"):
+            return web.Response(status=HTTPStatus.NOT_FOUND)
+        if request.query.get("s") != sign(entry.data[CONF_SIGN], entry_id, "pic", pid, key):
+            return web.Response(status=HTTPStatus.NOT_FOUND)
+        info = (entry.runtime_data.data.pics.get(pid) or {}).get(key)
+        if not info:
+            return web.Response(status=HTTPStatus.NOT_FOUND)
+        path = pic_dir(hass, entry) / info["file"]
+        if not await hass.async_add_executor_job(path.is_file):
+            return web.Response(status=HTTPStatus.NOT_FOUND)
+        return web.FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable", "Content-Type": info["type"]})
+
+
 @callback
 def person_view(entry: SCConfigEntry, p: dict[str, Any]) -> dict[str, Any]:
-    """A person summary with its signed picture address."""
-    return dict(p, thumb=thumb_url(entry, entry.runtime_data.data, p["id"]))
+    """A person summary with its signed picture addresses (small picture and all full pictures)."""
+    out = {k: v for k, v in p.items() if k != "pic_keys"}
+    out["thumb"] = thumb_url(entry, entry.runtime_data.data, p["id"])
+    out["pics"] = [pic_url(entry, p["id"], k) for k in entry.runtime_data.data.pic_list(p["id"])]
+    return out
