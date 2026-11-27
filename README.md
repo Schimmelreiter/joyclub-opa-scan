@@ -7,6 +7,7 @@ Tampermonkey-Userscripts für Dating- und Swinger-Seiten, die zusammenarbeiten �
 |---|---|---|
 | JOYclub | [userscripts/joyclub](userscripts/joyclub/README.md) | [installieren](https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/joyclub/joyclub-mitglieder-alter-blockieren.user.js) |
 | poppen.de | [userscripts/poppen](userscripts/poppen/README.md) | [installieren](https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/poppen/poppen-opa-schutz.user.js) |
+| xHamster (Vorversion) | [userscripts/xhamster](userscripts/xhamster/README.md) | [installieren](https://raw.githubusercontent.com/Schimmelreiter/swinger-companion/main/userscripts/xhamster/swinger-companion-xhamster.user.js) |
 
 Die Skripte teilen Fickliste, Textvorlagen und Termin-Datei über eine gemeinsame Ablage
 (`https://schimmelreiter.github.io/briefkasten.html`, nur lokal im Browser, für keine

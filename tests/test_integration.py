@@ -350,3 +350,22 @@ async def test_video_parts(hass: HomeAssistant, hass_client_no_auth, tmp_path) -
     assert p["pics"] == [] and len(p["videos"]) == 1
     r = await client.get(p["videos"][0])
     assert r.status == 200 and r.headers["Content-Type"] == "video/mp4"
+
+
+async def test_recorder_upload(hass: HomeAssistant, hass_client_no_auth, tmp_path) -> None:
+    import json
+    hass.config.config_dir = str(tmp_path)
+    entry = await _entry(hass)
+    client = await hass_client_no_auth()
+    url = f"/api/webhook/{entry.data[CONF_WEBHOOK_ID]}"
+    key = entry.data[CONF_KEY]
+    msg = {"format": "swinger-companion", "v": 1, "kind": "rec", "platform": "xhamster", "script": "0.1.0",
+           "account": {"uid": "5", "nick": "Some/../Nick"}, "data": {"pages": {"/users/[username]": {"a": 1}}, "req": []}}
+    res = decrypt(key, await (await client.post(url, json=encrypt(key, msg))).json())
+    assert res["ok"] and res["file"].endswith("_xhamster_Some_Nick.json")
+    files = list((tmp_path / "swinger_companion" / entry.entry_id / ".rekorder").glob("*.json"))
+    assert len(files) == 1 and json.loads(files[0].read_text())["data"]["pages"]["/users/[username]"] == {"a": 1}
+    bad = decrypt(key, await (await client.post(url, json=encrypt(key, {**msg, "data": "x"}))).json())
+    assert bad == {"ok": False, "error": "no data"}
+    # recorder data is no person list: the entry keeps no account device for it
+    assert not entry.subentries

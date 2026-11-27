@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
+import re
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -261,6 +264,8 @@ async def _handle_webhook(hass: HomeAssistant, webhook_id: str, request: web.Req
         return await _handle_vidpart(hass, entry, payload)
     if payload.get("kind") == "vidresume":
         return await _handle_vidresume(hass, entry, payload)
+    if payload.get("kind") == "rec":
+        return await _handle_rec(hass, entry, payload)
     platform = str(payload.get("platform") or "")
     acc = payload.get("account") if isinstance(payload.get("account"), dict) else {}
     uid, nick = str(acc.get(CONF_UID) or ""), str(acc.get(CONF_NICK) or "").strip()
@@ -288,6 +293,27 @@ async def _handle_webhook(hass: HomeAssistant, webhook_id: str, request: web.Req
         async_remove_stale_devices(hass, entry)
     return web.json_response(encrypt(key, {"ok": True, "count": len(rt.data.persons), "need": need, "needPics": rt.data.need_pics(),
                                             "changes": rt.data.pending()}))
+
+
+def rec_file(hass: HomeAssistant, entry: ConfigEntry, platform: str, nick: str, now: datetime) -> Path:
+    """File of a recorder upload: <picture folder>/.rekorder/<time>_<platform>_<nick>.json (names reduced to safe characters)."""
+    safe = lambda v: re.sub(r"[^A-Za-z0-9_-]+", "_", v)[:40] or "x"  # noqa: E731
+    return pic_dir(hass, entry) / ".rekorder" / f"{now.strftime('%Y%m%d-%H%M%S')}_{safe(platform)}_{safe(nick)}.json"
+
+
+async def _handle_rec(hass: HomeAssistant, entry: SCConfigEntry, payload: dict[str, Any]) -> web.Response:
+    """Recorder data of a script (page structures and requests, already reduced by the script), kept as a file for analysis."""
+    key = entry.data[CONF_KEY]
+    data = payload.get("data")
+    if not isinstance(data, (dict, list)):
+        return web.json_response(encrypt(key, {"ok": False, "error": "no data"}))
+    acc = payload.get("account") if isinstance(payload.get("account"), dict) else {}
+    path = rec_file(hass, entry, str(payload.get("platform") or ""), str(acc.get(CONF_NICK) or acc.get(CONF_UID) or ""), dt_util.utcnow())
+    raw = json.dumps({"script": str(payload.get("script") or ""), "platform": str(payload.get("platform") or ""), "account": acc, "data": data},
+                     ensure_ascii=False, indent=1).encode()
+    await hass.async_add_executor_job(_write, path, raw)
+    _LOGGER.info("Swinger Companion %s: recorder data stored (%d KB)", entry.title, len(raw) // 1024)
+    return web.json_response(encrypt(key, {"ok": True, "file": path.name, "size": len(raw)}))
 
 
 async def _handle_pic(hass: HomeAssistant, entry: SCConfigEntry, payload: dict[str, Any]) -> web.Response:

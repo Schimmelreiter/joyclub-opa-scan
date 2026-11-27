@@ -1,0 +1,10 @@
+Changelog – Swinger Companion xHamster (Userscript)
+Neueste Version oben.
+
+0.1.0 (27.11.2026)
+- Erste Fassung: Rekorder (Seitenstand und Anfragen, gekürzt und geschwärzt), Scan-Lauf, Aktionstest (entblocken und
+  wieder blockieren, Testnachrichten an das Partnerkonto mit Zensur-Vergleich und Löschen, entfreunden und neu
+  anfragen, Anfrage im anderen Konto annehmen), Export als Datei oder an Home Assistant (Swinger Companion ab 0.6.3)
+- Profilkasten, Markierungen (Alter, Ort, online, Freund, blockiert, gelöscht) mit Altersgrenzen
+- Fehler 503: Neuladen mit steigendem Abstand
+- Für den Aktionstest sind die beiden Testkonten des Entwicklers als Partner vorbelegt (bewusst, nur in dieser Fassung)
