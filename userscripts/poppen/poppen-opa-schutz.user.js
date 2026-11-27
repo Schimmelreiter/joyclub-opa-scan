@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – Poppen Edition
 // @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.53
+// @version      2.54
 // @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -7917,7 +7917,8 @@
 
   // ---------- Briefkasten-Instanz (läuft im iframe auf github.io) ----------
   function bkIframeMain() {
-    try { const mt = /tab=([^&]+)/.exec(location.hash || ''); bkServer(mt ? decodeURIComponent(mt[1]) : ''); } catch (e) { warn('Briefkasten-Ablage', e); }
+    // 2.54: Rahmen anderer Skripte (JOYclub „jaf=1“, xHamster „xh=“) nicht bedienen – sonst bleiben Lebenszeichen fremder Tabs liegen
+    try { const h = location.hash || ''; const mt = /[#&]tab=([^&]+)/.exec(h); bkServer(mt && !/[#&](jaf=1|xh=)/.test(h) ? decodeURIComponent(mt[1]) : ''); } catch (e) { warn('Briefkasten-Ablage', e); }
     const LS = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); return true; } catch { return false; } } };
     const mine = PLAT === 'bk' ? bkIframeHost() : 'poppen';
     function bkIframeHost() { const m = /host=([^&]+)/.exec(location.hash || ''); const h = m ? decodeURIComponent(m[1]) : ''; return /joyclub/.test(h) ? 'joyclub' : 'poppen'; }
@@ -7972,6 +7973,8 @@
     bkEmbed();
     tplPurgeTrash();
     for (const k of ['bk_out', 'bk_in', 'bk_out_acked', 'bk_full_sent', 'bk_test', 'bk_test_at']) { try { G.del(k); } catch {} }
+    // 2.54: Reste geschlossener Tabs (Lebenszeichen älter als ein Tag) aufräumen
+    try { for (const k of GM_listValues()) { const m = /^vaf2_rpca_(.+)$/.exec(k); if (m && now() - (GM_getValue(k, 0) || 0) > DAY) for (const p of ['rpca_', 'rpcq_', 'rpcr_']) G.del(p + m[1]); } } catch {}
   }
 
   // =====================================================================================

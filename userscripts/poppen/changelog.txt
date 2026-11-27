@@ -1,6 +1,11 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.54 (27.11.2026)
+- Der Briefkasten-Rahmen bedient nur noch die eigenen Tabs; bisher hinterließen die Rahmen des JOYclub-Skripts (und ab
+  xHamster 0.2.0 dessen Rahmen) Lebenszeichen im Tampermonkey-Speicher. Alte Reste (älter als ein Tag) werden beim
+  Start aufgeräumt
+
 2.53 (27.11.2026)
 - Für die Testkonten des Entwicklers: API-Rekorder läuft immer mit, sein Stand geht alle 30 Minuten (nur bei
   Änderungen) an Home Assistant (Swinger Companion ab 0.6.3; Adresse über das Tampermonkey-Menü); Menü
