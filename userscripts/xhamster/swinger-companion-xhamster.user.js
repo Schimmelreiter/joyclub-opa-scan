@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.10
+// @version      0.2.11
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1309,7 +1309,7 @@
     const src = srcOfPage();
     const items = document.querySelectorAll('.item.friend, [class*="card"], [class*="Card"], li');
     for (const it of items) {
-      if (it.querySelector('.xhsc-badge') || it.closest('#xhsc-box, header, .user-dropdown, [data-role="header"]')) continue;
+      if (it.querySelector('.xhsc-badge') || it.closest('#xhsc-box, header, .user-dropdown, [data-role="header"], .xhsc-fl-list')) continue;
       // 0.2.0: in der Dating-Suche ist die Karte selbst der Link
       const a = it.matches('a[href*="/users/"]') ? it : it.querySelector('a[href*="/users/"]');
       const r = it.querySelector('.retired');
@@ -1508,7 +1508,7 @@
       const u = profUrl(p);
       const lab = esc(p.pf === 'other' ? (p.pfName || 'Sonstige') : (PF_NAME[p.pf] || p.pf)) + (p !== r.main && (p.name || p.nick) && norm(p.name || p.nick) !== norm(nick) ? ': ' + esc(p.name || p.nick) : '');
       return u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${lab}</a>` : `<span>${lab}${p.text ? ': ' + esc(p.text) : ''}</span>`;
-    }).join(' · ');
+    }).map((x) => `<div>${x}</div>`).join('');
     const st = r.status ? `<b style="color:${FCOL[r.status] || 'inherit'}">${esc(FSTAT[r.status] || r.status)}</b>` : '<span style="opacity:.6">ohne Status</span>';
     const meets = (r.meets || []).filter((m) => m && (m.date || m.club || m.where)).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
     const meetHtml = meets.length ? `<div style="font-weight:600;margin-bottom:2px">Treffen (${meets.length})</div>` + meets.slice(0, 8).map((m) => {
@@ -1520,8 +1520,8 @@
     const noteHtml = notes ? `<div style="font-weight:600;margin:6px 0 2px">Anmerkung</div><div class="xhsc-fl-note" style="white-space:pre-wrap;max-height:7.5em;overflow:hidden;cursor:pointer" title="Klicken: ganz anzeigen">${esc(notes)}</div>` : '';
     const right = meetHtml || noteHtml ? meetHtml + noteHtml : '<span style="opacity:.5">Keine Treffen, keine Anmerkung.</span>';
     return `<div class="item friend xhsc-fl-item" style="float:none;width:auto;display:flex;gap:16px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(128,128,128,.25)">
-      <div style="display:flex;gap:12px;flex:0 0 300px;min-width:0"><div class="image-container avatar-container normal">${mainUrl ? `<a href="${esc(mainUrl)}" target="_blank" rel="noopener">${img}</a>` : img}</div>
-      <div class="info" style="min-width:0"><div class="info-line">${mainUrl ? `<a href="${esc(mainUrl)}" target="_blank" rel="noopener">${name}</a>` : name}</div><div>${st}</div><div style="font-size:12px;opacity:.85">${links}</div></div></div>
+      <div style="display:flex;gap:12px;flex:0 0 340px;min-width:0"><div class="image-container avatar-container normal">${mainUrl ? `<a href="${esc(mainUrl)}" target="_blank" rel="noopener">${img}</a>` : img}</div>
+      <div class="info" style="min-width:0;overflow-wrap:anywhere"><div class="info-line">${mainUrl ? `<a href="${esc(mainUrl)}" target="_blank" rel="noopener">${name}</a>` : name}</div><div>${st}</div><div style="font-size:12px;opacity:.85;line-height:1.4;margin-top:2px">${links}</div></div></div>
       <div style="flex:1 1 auto;min-width:0;font-size:13px;line-height:1.45">${right}</div></div>`;
   }
   // Liste mit Filter und Suche in einen Behälter zeichnen

@@ -1,6 +1,10 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.11 (27.11.2026)
+- Fickliste: Profil-Links untereinander, linke Spalte etwas breiter; behoben: bei Personen mit xHamster-Profil hängte die
+  Markierung („32 J. · Freund“) sich in die Zeile und schob Treffen und Anmerkung nach unten
+
 0.2.10 (27.11.2026)
 - Wie im poppen-Skript heißt es bei Männern „Oma-Schutz“, „Oma-Scan“, „Omas blockieren“ (Ruhrgebiet: „Omma“), bei allen
   anderen „Opa“/„Oppa“ – nach dem Geschlecht im eigenen xHamster-Profil
