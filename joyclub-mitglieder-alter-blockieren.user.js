@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.16
+// @version      2.17
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -11333,7 +11333,6 @@ fragment ImageUIDataFragment on ImageUIData {
         if (skip.some((k) => have.has(k))) flDropPics(uid, skip.filter((k) => have.has(k)));
         await flAddPics(uid, l.filter((x) => !skip.includes(x.k)));
       }
-      flAlbumButton();
     })()
       .catch((e) => console.warn('[Alter-Filter] Fickliste-Bilder', e)).finally(() => { flPicsBusy = false; });
   }
@@ -14376,7 +14375,7 @@ fragment ImageUIDataFragment on ImageUIData {
     if (flExternPage() && flOwnPath()) { location.replace(flCarrierUrl('x-' + flExternSlug(), flArchivParam(), /[?&]flnav=1/.test(location.search) || flNavOn('x-' + flExternSlug()))); return; }
     if (flViewerPid()) { flViewerRender(); flInsertButtons(); }
     // Bilder der Personen aus der Fickliste (Profil und Fotoalbum, auch nachgeladene) – höchstens alle 5 Sekunden
-    if (!flViewerPid() && /^\/profile\//.test(location.pathname)) flPicsTick();
+    if (!flViewerPid() && /^\/profile\//.test(location.pathname)) { flPicsTick(); try { flAlbumButton(); } catch (e) { /* egal */ } }
     flOwnPills();
     flOwnBox();
     if (isProfilePage() && !isOwnProfile()) {
