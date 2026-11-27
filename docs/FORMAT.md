@@ -81,7 +81,7 @@ Eine Person je Eintrag. Alle Felder sind optional außer `id`.
 | `history[]` | `{ at, what }`: Verlauf als Klartext |
 | `ext` | Person ohne Plattform-Profil: `{ name, typ, city, short, texts, img (data-URL), gone }` |
 | `alias`, `aliasAt` | eigener Name des Nutzers für diese Person (bis 60 Zeichen) und Zeitpunkt; der neuere gewinnt. Home Assistant zeigt „alias (Nick)“ (seit poppen 2.49 / JOYclub 2.18) |
-| `pics[]` | alle Bilder der Person: `{ k, src, pf, at }` – `k` stabile Kennung (`joyclub-<Bild-ID>`, `poppen-<uid>-<hash>`), `src` Adresse in voller Auflösung, `pf` Plattform, `at` gefunden am (ms). Nie entfernen; gleiche `k` nur einmal. Bilddaten liegen nur lokal bzw. in Home Assistant (seit JOYclub 2.13 / poppen 2.48) |
+| `pics[]` | alle Bilder der Person: `{ k, src, pf, at }` – `k` stabile Kennung (`joyclub-<Bild-ID>`, `poppen-<uid>-<hash>`), `src` Adresse in voller Auflösung, `pf` Plattform, `at` gefunden am (ms); Videos zusätzlich `v: 1, vid, vuid` (Video-ID und Profil-ID, ab JOYclub 2.19, `src` leer). Nie entfernen; gleiche `k` nur einmal. Bilddaten liegen nur lokal bzw. in Home Assistant (seit JOYclub 2.13 / poppen 2.48) |
 | `imported` | Herkunft beim Import (Text) |
 | `created` | Anlagezeitpunkt |
 | `updated` | **veraltet**, Ersatz: `updatedAt` |
@@ -198,4 +198,4 @@ Smileys: 😁 = breit grinsend, 😳 = große, ungläubige Augen.
 ## Änderungsliste
 | schema | Änderung |
 |---|---|
-| 1 | erste Fassung (poppen 2.32); Ergänzungen 2.33: IDs `j:`, Plattform-Codes, `updatedBy`-Felder, Feldlisten, Fallliste des Imports; 2.34: Textvorlagen-Regelwerk (JOYclub-Schreibweise, `x:`-IDs, `pfIds`, `owner`, `base`/`hash` in der Sicherungsdatei), Kontobindung (keine Formatänderung); 2.38: poppen-Profil darf unter `profiles[]` stehen, wenn ein anderes Skript `main` belegt (keine Formatänderung); 2.48 / JOYclub 2.13: `pics[]` (keine Formatänderung, neues optionales Feld) |
+| 1 | erste Fassung (poppen 2.32); Ergänzungen 2.33: IDs `j:`, Plattform-Codes, `updatedBy`-Felder, Feldlisten, Fallliste des Imports; 2.34: Textvorlagen-Regelwerk (JOYclub-Schreibweise, `x:`-IDs, `pfIds`, `owner`, `base`/`hash` in der Sicherungsdatei), Kontobindung (keine Formatänderung); 2.38: poppen-Profil darf unter `profiles[]` stehen, wenn ein anderes Skript `main` belegt (keine Formatänderung); 2.48 / JOYclub 2.13: `pics[]` (keine Formatänderung, neues optionales Feld); JOYclub 2.19: Videos in `pics[]` (`v`, `vid`, `vuid`) |

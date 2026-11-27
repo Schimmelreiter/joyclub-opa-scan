@@ -6,7 +6,7 @@ import base64
 import logging
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -28,6 +28,7 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    MAX_VIDEO,
     CONF_KEY,
     CONF_NICK,
     CONF_PLATFORM,
@@ -44,9 +45,9 @@ from .const import (
     SUBENTRY_ACCOUNT,
     THUMB_URL,
 )
-from .data import PersonData, decrypt, encrypt, parse_pic, sign
+from .data import PersonData, decrypt, encrypt, parse_part, parse_pic, pic_rel, sign
 from .entity import async_remove_stale_devices
-from .media_import import import_dir
+from .media_import import _remux_ts, import_dir
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SELECT, Platform.SENSOR, Platform.TEXT]
@@ -57,6 +58,7 @@ STORE_VERSION = 1
 class Runtime:
     store: Store
     data: PersonData
+    parts: dict[tuple[str, str], int] = field(default_factory=dict)  # video being received: (pid, key) → next part
 
 
 type SCConfigEntry = ConfigEntry[Runtime]
@@ -93,6 +95,21 @@ def _write(path: Path, raw: bytes) -> None:
     tmp = path.with_suffix(path.suffix + ".part")
     tmp.write_bytes(raw)
     tmp.replace(path)
+
+
+def _append(path: Path, raw: bytes, first: bool) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb" if first else "ab") as f:
+        f.write(raw)
+    return path.stat().st_size
+
+
+def _finish_video(part: Path, target: Path) -> int:
+    """Received MPEG-TS → MP4 under its final name; returns its size (0 when it failed)."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part.replace(target)
+    _remux_ts(target)
+    return target.stat().st_size if target.is_file() else 0
 
 
 def _unlink(base: Path, files: list[str]) -> None:
@@ -246,6 +263,8 @@ async def _handle_webhook(hass: HomeAssistant, webhook_id: str, request: web.Req
         return web.json_response({"error": "format"}, status=HTTPStatus.BAD_REQUEST)
     if payload.get("kind") == "pic":
         return await _handle_pic(hass, entry, payload)
+    if payload.get("kind") == "vidpart":
+        return await _handle_vidpart(hass, entry, payload)
     platform = str(payload.get("platform") or "")
     acc = payload.get("account") if isinstance(payload.get("account"), dict) else {}
     uid, nick = str(acc.get(CONF_UID) or ""), str(acc.get(CONF_NICK) or "").strip()
@@ -287,6 +306,41 @@ async def _handle_pic(hass: HomeAssistant, entry: SCConfigEntry, payload: dict[s
         return web.json_response(encrypt(key, {"ok": False, "error": "bad picture"}))
     rel = rt.data.add_pic(pid, pkey, pic[0], len(pic[1]), dt_util.utcnow())
     await hass.async_add_executor_job(_write, pic_dir(hass, entry) / rel, pic[1])
+    rt.store.async_delay_save(rt.data.as_dict, 5)
+    async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
+    return web.json_response(encrypt(key, {"ok": True, "stored": pkey, "needPics": rt.data.need_pics()}))
+
+
+async def _handle_vidpart(hass: HomeAssistant, entry: SCConfigEntry, payload: dict[str, Any]) -> web.Response:
+    """One part of a video (HLS pieces in order, i = 0, 1, …; last = True ends it), stored as MP4 at the end."""
+    key = entry.data[CONF_KEY]
+    pid, pkey = str(payload.get("pid") or ""), str(payload.get("k") or "")
+    rt = entry.runtime_data
+    if not rt.data.wants_pic(pid, pkey):
+        return web.json_response(encrypt(key, {"ok": False, "error": "unknown picture"}))
+    raw = parse_part(payload.get("mime"), payload.get("data"))
+    i = payload.get("i")
+    if raw is None or not isinstance(i, int) or i < 0:
+        return web.json_response(encrypt(key, {"ok": False, "error": "bad part"}))
+    if i != rt.parts.get((pid, pkey), 0):
+        rt.parts.pop((pid, pkey), None)
+        return web.json_response(encrypt(key, {"ok": False, "error": "order"}))
+    base = pic_dir(hass, entry)
+    part = base / ".parts" / pic_rel(pid, pkey, "video/mp4")
+    size = await hass.async_add_executor_job(_append, part, raw, i == 0)
+    if size > MAX_VIDEO:
+        rt.parts.pop((pid, pkey), None)
+        await hass.async_add_executor_job(part.unlink, True)
+        return web.json_response(encrypt(key, {"ok": False, "error": "too large"}))
+    if not payload.get("last"):
+        rt.parts[(pid, pkey)] = i + 1
+        return web.json_response(encrypt(key, {"ok": True, "next": i + 1}))
+    rt.parts.pop((pid, pkey), None)
+    rel = pic_rel(pid, pkey, "video/mp4")
+    size = await hass.async_add_executor_job(_finish_video, part, base / rel)
+    if not size:
+        return web.json_response(encrypt(key, {"ok": False, "error": "bad video"}))
+    rt.data.add_pic(pid, pkey, "video/mp4", size, dt_util.utcnow())
     rt.store.async_delay_save(rt.data.as_dict, 5)
     async_dispatcher_send(hass, SIGNAL_UPDATE.format(entry.entry_id))
     return web.json_response(encrypt(key, {"ok": True, "stored": pkey, "needPics": rt.data.need_pics()}))

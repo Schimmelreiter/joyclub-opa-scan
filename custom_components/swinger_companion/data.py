@@ -14,7 +14,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .const import MAX_PIC, MAX_THUMB, NEED_PICS_MAX, STATUS_DONE, STATUS_NEVER, STATUS_NO, STATUS_WANT
+from .const import MAX_PART, MAX_PIC, MAX_THUMB, NEED_PICS_MAX, STATUS_DONE, STATUS_NEVER, STATUS_NO, STATUS_WANT
 
 STATUSES = (STATUS_WANT, STATUS_DONE, STATUS_NO, STATUS_NEVER)
 NOTES_MAX = 300
@@ -55,6 +55,17 @@ def parse_pic(mime: Any, data: Any) -> tuple[str, bytes] | None:
     except ValueError:
         return None
     return (mime, raw) if 0 < len(raw) <= MAX_PIC else None
+
+
+def parse_part(mime: Any, data: Any) -> bytes | None:
+    """One part of a video sent in pieces (MPEG-TS from an HLS stream)."""
+    if mime != "video/mp2t" or not isinstance(data, str):
+        return None
+    try:
+        raw = base64.b64decode(data, validate=False)
+    except ValueError:
+        return None
+    return raw if 0 < len(raw) <= MAX_PART else None
 
 
 def b64u(raw: bytes) -> str:

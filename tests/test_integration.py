@@ -297,3 +297,53 @@ async def test_own_name(hass: HomeAssistant, hass_client_no_auth) -> None:
     assert "Alexa (Lisa)" in names
     ans = decrypt(key, await (await client.post(url, json=encrypt(key, _payload(persons=persons)))).json())
     assert ans["changes"][0]["alias"] == "Alexa"
+
+
+async def test_video_parts(hass: HomeAssistant, hass_client_no_auth, tmp_path) -> None:
+    import shutil
+    import subprocess
+    hass.config.config_dir = str(tmp_path)
+    entry = await _entry(hass)
+    client = await hass_client_no_auth()
+    url = f"/api/webhook/{entry.data[CONF_WEBHOOK_ID]}"
+    key = entry.data[CONF_KEY]
+    persons = _payload()["persons"]
+    persons[0]["pics"] = [{"k": "joyclub-v5", "v": 1, "vid": "5", "vuid": "1"}]
+    ans = decrypt(key, await (await client.post(url, json=encrypt(key, _payload(persons=persons)))).json())
+    assert ans["needPics"] == [["j:1", "joyclub-v5"]]
+    ts = tmp_path / "in.ts"
+    if shutil.which("ffmpeg"):
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=d=1:s=64x48:r=10", "-f", "lavfi", "-i", "sine=d=1",
+                        "-c:v", "libx264", "-c:a", "aac", "-f", "mpegts", str(ts)], check=True)
+        raw = ts.read_bytes()
+    else:
+        raw = b"\x47" + b"\x00" * 2000
+
+    def part(i, data, last=False, k="joyclub-v5", mime="video/mp2t"):
+        return encrypt(key, {"format": "swinger-companion", "v": 1, "kind": "vidpart", "pid": "j:1", "k": k, "i": i, "last": last,
+                             "mime": mime, "data": base64.b64encode(data).decode()})
+
+    async def send(*a, **kw):
+        return decrypt(key, await (await client.post(url, json=part(*a, **kw))).json())
+
+    assert (await send(0, raw, k="nope"))["ok"] is False
+    assert (await send(0, raw, mime="image/jpeg"))["ok"] is False
+    assert (await send(1, raw))["error"] == "order"  # must start with 0
+    half = len(raw) // 2
+    assert (await send(0, raw[:half])) == {"ok": True, "next": 1}
+    assert (await send(2, raw[half:]))["error"] == "order"  # gap → starts over
+    assert (await send(0, raw[:half]))["ok"]
+    ans = await send(1, raw[half:], last=True)
+    assert ans["ok"] and ans["stored"] == "joyclub-v5" and ans["needPics"] == []
+    f = tmp_path / "swinger_companion" / entry.entry_id / "j_1" / "joyclub-v5.mp4"
+    data = f.read_bytes()
+    if shutil.which("ffmpeg"):
+        assert data[4:8] == b"ftyp"  # remuxed to MP4
+    else:
+        assert data == raw
+    await hass.async_block_till_done()
+    want = [s for s in hass.states.async_all("sensor") if s.attributes.get("persons") and s.attributes["persons"][0]["name"] == "Lisa"][0]
+    p = want.attributes["persons"][0]
+    assert p["pics"] == [] and len(p["videos"]) == 1
+    r = await client.get(p["videos"][0])
+    assert r.status == 200 and r.headers["Content-Type"] == "video/mp4"

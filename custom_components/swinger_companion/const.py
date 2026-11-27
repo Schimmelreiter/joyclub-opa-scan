@@ -23,6 +23,8 @@ PAYLOAD_FORMAT = "swinger-companion"
 MAX_BODY = 32 * 1024 * 1024
 MAX_THUMB = 200 * 1024
 MAX_PIC = 8 * 1024 * 1024  # one full picture; Home Assistant accepts at most 16 MB per request (twice base64)
+MAX_PART = 6 * 1024 * 1024  # one part of a video (the script sends at most 5 MB, about one HLS piece)
+MAX_VIDEO = 4 * 1024 * 1024 * 1024  # one whole video
 NEED_PICS_MAX = 50  # missing pictures asked for per answer
 
 SIGNAL_UPDATE = f"{DOMAIN}_update_{{}}"

@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.18
+// @version      2.19
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -11270,9 +11270,13 @@ fragment ImageUIDataFragment on ImageUIData {
     const h = main.querySelector('.profile-album-detail-page .profile-segmented-row__center-container h2, .profile-album-detail-page h2');
     return h ? (h.textContent || '').replace(/\s+/g, ' ').trim() : '';
   }
-  // Alben, deren Bilder nicht gesichert werden: bei allen Profilen „Aktuelles“ (meist Sprüche als Bild), dazu je Person gewählte
+  // Alben, deren Bilder nicht gesichert werden: „Aktuelles“ (von JOYclub aus dem Newsfeed erzeugt) standardmäßig nicht,
+  // je Person einschaltbar (picAlbumsOn); dazu je Person abgewählte Alben (picAlbumsSkip)
   const FL_PIC_SKIP_ALBUMS = ['Aktuelles'];
-  const flAlbumSkipped = (q, album) => !!album && [...FL_PIC_SKIP_ALBUMS, ...(q.picAlbumsSkip || [])].some((x) => norm(x) === norm(album));
+  const flAlbumDefaultOff = (album) => FL_PIC_SKIP_ALBUMS.some((x) => norm(x) === norm(album));
+  const flAlbumSkipped = (q, album) => !!album && (flAlbumDefaultOff(album)
+    ? !(q.picAlbumsOn || []).some((x) => norm(x) === norm(album))
+    : (q.picAlbumsSkip || []).some((x) => norm(x) === norm(album)));
   // Bilder entfernen: aus der Person, aus dem lokalen Speicher und (mit der nächsten Übertragung) aus Home Assistant.
   // Die Kennungen bleiben als „entfernt“ vermerkt, damit sie nicht über den Abgleich zurückkommen.
   const K_HA_DROP = 'jaf_ha_droppics';
@@ -11317,12 +11321,75 @@ fragment ImageUIDataFragment on ImageUIData {
     haSoon();
     return n;
   }
+  // 2.19: Videos auf der Fotos-Übersicht (/profile/fotos/…): Karten mit data-lightbox { id, user_id, title } (Stand 11/2026).
+  // Das Video selbst wird erst beim Senden an Home Assistant geladen (flVideoParts).
+  function flPageVideos(doc = document) {
+    const out = new Map();
+    if (!/^\/profile\/fotos\//.test(location.pathname)) return out;
+    for (const c of doc.querySelectorAll('.profile-video-card [data-lightbox]')) {
+      let d = null;
+      try { d = JSON.parse(c.getAttribute('data-lightbox') || ''); } catch (e) { continue; }
+      if (!d || !d.id || !d.user_id || (d.source_type != null && Number(d.source_type) !== 4)) continue;
+      const uid = String(d.user_id);
+      if (!out.has(uid)) out.set(uid, []);
+      out.get(uid).push({ k: flPicKey('joyclub', 'v' + d.id), vid: String(d.id), vuid: uid, title: String(d.title || '').slice(0, 120) });
+    }
+    return out;
+  }
+  function flAddVideos(pid, found) {
+    const q = flGet(pid);
+    if (!q || !found.length) return 0;
+    const have = new Set([...(q.pics || []).map((x) => x.k), ...(q.picsDrop || [])]);
+    const add = found.filter((f) => !have.has(f.k)).map((f) => ({ k: f.k, src: '', pf: 'joyclub', at: Date.now(), v: 1, vid: f.vid, vuid: f.vuid, title: f.title, m: 1 }));
+    if (!add.length) return 0;
+    q.pics = [...(q.pics || []), ...add];
+    flPut(q);
+    haSoon();
+    return add.length;
+  }
+  // Ein JOYclub-Video in Teilen (Uint8Array, je ein HLS-Stück in bester Qualität) – onPart(bytes, index, last)
+  async function flVideoParts(vid, vuid, onPart) {
+    let ck = (unsafeWindow.joy && unsafeWindow.joy.my && unsafeWindow.joy.my.cache_killer) || '';
+    const ckIn = (html) => { const m = /data-cache-killer="([0-9a-f]{20,64})"/.exec(html || ''); return m ? m[1] : ''; };
+    if (!ck) ck = ckIn(document.documentElement.outerHTML) || ckIn(await (await fetch(location.origin + '/', { credentials: 'include' })).text());
+    const body = 'cache_killer=' + encodeURIComponent(ck) + '&data=' + encodeURIComponent(JSON.stringify({ media_id_list: [Number(vid)], media_set_id: 0, media_source: 4, media_user_id: Number(vuid) }));
+    const r = await fetch(location.origin + '/video/lightbox/data', { method: 'POST', credentials: 'include', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' } });
+    if (!r.ok) throw new Error('Video-Angaben: HTTP ' + r.status);
+    const it = ((await r.json()).content || {}).lightbox_data_list || {};
+    const html = (it[vid] || Object.values(it)[0] || {}).media_html || '';
+    const box = document.createElement('div');
+    box.innerHTML = html;
+    const el = box.querySelector('[data-video]');
+    if (!el) throw new Error('kein Video gefunden');
+    const src = JSON.parse(el.getAttribute('data-video') || '{}').video_source;
+    // Zugang zu uservideo.joyclub.de: signierte Cookies holen und setzen (wie der Player)
+    const cfg = JSON.parse(el.getAttribute('data-cookie-config') || 'null');
+    if (cfg && cfg.payload_json) {
+      const c = ((await (await fetch(location.origin + '/aws/aws_signed_cookies?mode=' + encodeURIComponent(cfg.modus || 'user') + '&payload=' + encodeURIComponent(cfg.payload_json), { credentials: 'include' })).json()) || {}).content || {};
+      for (const [k, v] of Object.entries(c.cookie_list || {})) document.cookie = `${k}=${v}; domain=${c.domain}; path=${c.path || '/'}${c.expires ? '; expires=' + c.expires : ''}; secure`;
+    }
+    const get = (u, type) => new Promise((resolve, reject) => GM_xmlhttpRequest({ method: 'GET', url: u, responseType: type, timeout: 120000,
+      onload: (x) => (x.status >= 200 && x.status < 300 ? resolve(x.response) : reject(new Error('Video: HTTP ' + x.status))),
+      onerror: () => reject(new Error('Video nicht erreichbar')), ontimeout: () => reject(new Error('Video: Zeitüberschreitung')) }));
+    const master = String(await get(src, 'text'));
+    const lines = master.split(/\r?\n/);
+    let best = '', bw = -1;
+    for (let i = 0; i < lines.length; i++) { const m = /BANDWIDTH=(\d+)/.exec(lines[i]); if (m && +m[1] > bw && lines[i + 1]) { bw = +m[1]; best = lines[i + 1].trim(); } }
+    const pl = best ? new URL(best, src).href : src;
+    const list = best ? String(await get(pl, 'text')) : master;
+    if (/#EXT-X-KEY:METHOD=(?!NONE)/.test(list)) throw new Error('Video ist verschlüsselt');
+    const segs = list.split(/\r?\n/).filter((l) => l && !l.startsWith('#')).map((l) => new URL(l.trim(), pl).href);
+    if (!segs.length) throw new Error('Video ohne Inhalt');
+    for (let i = 0; i < segs.length; i++) await onPart(new Uint8Array(await get(segs[i], 'arraybuffer')), i, i === segs.length - 1);
+    return segs.length;
+  }
   let flPicsAt = 0, flPicsBusy = false;
   // auf jeder Seite mit Profilbildern (Profil, Fotoalbum): Bilder aller Personen aus der Fickliste übernehmen
   function flPicsTick() {
     if (flPicsBusy || Date.now() - flPicsAt < 5000) return;
     flPicsAt = Date.now();
     const found = [...flPagePics()].filter(([uid]) => flGet(uid));
+    for (const [uid, l] of flPageVideos()) if (flGet(uid)) flAddVideos(uid, l);
     if (!found.length) return;
     flPicsBusy = true;
     (async () => {
@@ -11347,9 +11414,8 @@ fragment ImageUIDataFragment on ImageUIData {
     const q = uid && flGet(uid[1]);
     let b = h.parentElement.querySelector('.jaf-fl-albumbtn');
     if (!q) { if (b) b.remove(); return; }
-    const fixed = FL_PIC_SKIP_ALBUMS.some((x) => norm(x) === norm(album));
     const off = flAlbumSkipped(q, album);
-    const label = fixed ? '📷 Wird nie gesichert' : off ? '📷 Nicht gesichert – wieder sichern' : '📷 Gesichert – nicht mehr sichern';
+    const label = off ? '📷 Nicht gesichert – sichern' : '📷 Gesichert – nicht mehr sichern';
     if (b && b.__sig === album + '|' + off) return;
     if (!b) {
       b = document.createElement('button');
@@ -11359,19 +11425,19 @@ fragment ImageUIDataFragment on ImageUIData {
       b.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
         const q2 = flGet(uid[1]), al = flAlbumName(main);
-        if (!q2 || FL_PIC_SKIP_ALBUMS.some((x) => norm(x) === norm(al))) return;
-        const l = q2.picAlbumsSkip || [];
-        const now = l.some((x) => norm(x) === norm(al));
-        q2.picAlbumsSkip = now ? l.filter((x) => norm(x) !== norm(al)) : [...l, al];
-        if (now) { const back = new Set((flPagePics().get(uid[1]) || []).map((x) => x.k)); q2.picsDrop = (q2.picsDrop || []).filter((k) => !back.has(k)); }
+        if (!q2) return;
+        const wasOff = flAlbumSkipped(q2, al);
+        const field = flAlbumDefaultOff(al) ? 'picAlbumsOn' : 'picAlbumsSkip';
+        const l = q2[field] || [];
+        q2[field] = l.some((x) => norm(x) === norm(al)) ? l.filter((x) => norm(x) !== norm(al)) : [...l, al];
+        if (wasOff) { const back = new Set((flPagePics().get(uid[1]) || []).map((x) => x.k)); q2.picsDrop = (q2.picsDrop || []).filter((k) => !back.has(k)); }
         flPut(q2);
         flPicsAt = 0; flPicsTick();
       });
     }
     b.__sig = album + '|' + off;
-    b.disabled = fixed;
     b.textContent = label;
-    b.title = fixed ? 'Bilder aus diesem Album sichert die Fickliste bei keinem Profil.' : 'Bilder dieses Albums in der Fickliste und in Home Assistant sichern oder entfernen.';
+    b.title = (flAlbumDefaultOff(album) ? 'Dieses Album sichert die Fickliste standardmäßig nicht. ' : '') + 'Bilder dieses Albums in der Fickliste und in Home Assistant sichern oder entfernen.';
   }
   // 2.16: Bilder aus 2.13/2.14 (ohne Bild-Link erkannt, teils fremde Bilder) einmalig entfernen
   if (window.top === window && /(^|\.)joyclub\.de$/.test(location.hostname) && !GM_getValue('jaf_pics_mig216', 0)) {
@@ -11411,7 +11477,7 @@ fragment ImageUIDataFragment on ImageUIData {
     for (const l of lists) for (const x of l || []) {
       if (!x || !x.k || seen.has(x.k)) continue;
       seen.add(x.k);
-      out.push({ k: x.k, src: x.src || '', pf: x.pf || '', at: x.at || 0 });
+      out.push(Object.assign({ k: x.k, src: x.src || '', pf: x.pf || '', at: x.at || 0 }, x.v ? { v: 1, vid: x.vid, vuid: x.vuid } : {}));
     }
     return out;
   }
@@ -15813,6 +15879,27 @@ fragment ImageUIDataFragment on ImageUIData {
       const x = persons.find((y) => y.id === pid);
       const pic = x && (x.pics || []).find((y) => y.k === k);
       if (!pic) continue;
+      if (pic.v) {
+        // Video in Teilen (je Anfrage ein Stück); ein angefangenes Video wird fertig gesendet
+        let ok = false;
+        try {
+          let part = 0;
+          await flVideoParts(pic.vid, pic.vuid, async (seg, si, segLast) => {
+           for (let off = 0; off < seg.length; off += 5 << 20) {
+            const bytes = seg.subarray(off, off + (5 << 20)), i = part++, last = segLast && off + (5 << 20) >= seg.length;
+            GM_setValue(K_HA_LOCK, Date.now());
+            const r = await haPost(a.url, await enc({ format: 'swinger-companion', v: 1, kind: 'vidpart', pid, k, i, last, mime: 'video/mp2t', data: b64(bytes) }));
+            if (r.status < 200 || r.status >= 300) throw new Error('Home Assistant antwortet mit ' + r.status);
+            const env = JSON.parse(r.responseText || '{}');
+            const res = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data))));
+            if (!res.ok) throw new Error(res.error || 'Video abgelehnt');
+            if (last) { ok = true; if (Array.isArray(res.needPics)) need = res.needPics.filter(([p2, k2]) => !tried.has(p2 + '|' + k2)); }
+           }
+          });
+        } catch (e) { console.warn('[Alter-Filter] Video an Home Assistant', e); }
+        if (ok) { sent++; await flPicStored(k); }
+        continue;
+      }
       const loc = Object.values(getFl()).flatMap((q) => q.pics || []).find((y) => y.k === k);
       let data = loc && loc.full ? GM_getValue(K_FLP + k, '') : '';
       if (!data && pic.src) data = await flFetchImage(pic.src);
