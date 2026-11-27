@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 const src = fs.readFileSync(new URL('../swinger-companion-xhamster.user.js', import.meta.url), 'utf8');
 const a = src.indexOf('  const SECRET_K'), b = src.indexOf('  // =====================================================================\n  // Rekorder');
-const H = new Function('location', 'now', src.slice(a, b) + '; return { shrink, maskStr, maskUrl, pathPattern, ageOf, personOf, censorDiff, retryDelay };')({ origin: 'https://xhamster.com' }, () => Date.UTC(2026, 10, 27));
+const o0 = src.indexOf('  function opNames('), o1 = src.indexOf('  function hookNetwork(');
+const H = new Function('location', 'now', src.slice(a, b) + src.slice(o0, o1) + '; return { shrink, maskStr, maskUrl, pathPattern, ageOf, personOf, censorDiff, retryDelay, opNames };')({ origin: 'https://xhamster.com' }, () => Date.UTC(2026, 10, 27));
 
 test('shrink: lists cut to 3, secrets and message texts masked, own test text kept', () => {
   const v = H.shrink({ list: [1, 2, 3, 4, 5], stats_tkn: 'abc', body: 'geheim', text: 'TEST', mail: 'a.b@example.org', ip: '88.1.2.3', layout: { big: 1 } }, (x) => x === 'TEST');
@@ -44,4 +45,12 @@ test('retryDelay: doubling, capped at 5 minutes', () => {
   assert.equal(H.retryDelay(3, 0.5), 20000);
   assert.equal(H.retryDelay(20, 0.5), 300000);
   assert.ok(H.retryDelay(2, 0) >= 9000 && H.retryDelay(2, 1) <= 11000);
+});
+test('opNames: x-api operation names and batch urls', () => {
+  assert.equal(H.opNames('https://xhamster.com/x-api', JSON.stringify([{ name: 'userBlock', requestData: {} }])), ' userBlock');
+  assert.equal(H.opNames('/x-api?r=' + encodeURIComponent(JSON.stringify([{ name: 'conversationCollectionFetch' }])), undefined), ' conversationCollectionFetch');
+  const b = Buffer.from(JSON.stringify([{ id: 'a', url: '/api/front/user/authorized/160640851' }])).toString('base64');
+  assert.equal(H.opNames('/api/front/batch/' + b, undefined), ' → /api/front/user/authorized/{n}');
+  assert.equal(H.pathPattern('/api/front/batch/' + b), '/api/front/batch/{b64}');
+  assert.equal(H.opNames('/api/front/messages/collection', undefined), '');
 });

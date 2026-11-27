@@ -1,6 +1,10 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.1.1 (27.11.2026)
+- Rekorder: Anfragen über /x-api und /api/front/batch werden nach dem Vorgang unterschieden (Name im Rumpf bzw. im
+  Parameter r, Adressen im Batch). Bisher verdrängte die ständige Nutzerabfrage alle anderen Beispiele
+
 0.1.0 (27.11.2026)
 - Erste Fassung: Rekorder (Seitenstand und Anfragen, gekürzt und geschwärzt), Scan-Lauf, Aktionstest (entblocken und
   wieder blockieren, Testnachrichten an das Partnerkonto mit Zensur-Vergleich und Löschen, entfreunden und neu

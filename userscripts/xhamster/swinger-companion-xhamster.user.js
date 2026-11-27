@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.0
+// @version      0.1.1
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -57,7 +57,7 @@
   function pathPattern(u) {
     let p = '';
     try { p = new URL(u, location.origin).pathname; } catch (e) { p = String(u || ''); }
-    return p.replace(/\/[0-9a-f]{20,}(?=\/|$)/gi, '/{id}').replace(/\/\d+(?=\/|$)/g, '/{n}').replace(/-\d{4,}(?=\/|$)/g, '-{n}');
+    return p.replace(/\/api\/front\/batch\/[^/]+/, '/api/front/batch/{b64}').replace(/\/[0-9a-f]{20,}(?=\/|$)/gi, '/{id}').replace(/\/\d+(?=\/|$)/g, '/{n}').replace(/-\d{4,}(?=\/|$)/g, '-{n}');
   }
   function shrink(v, keep, d = 0) {
     if (d > 14) return '[…]';
@@ -160,8 +160,29 @@
       else if (typeof FormData !== 'undefined' && body instanceof W.FormData) { try { req = shrink(Object.fromEntries([...body.entries()].map(([k, v]) => [k, typeof v === 'string' ? v : '(Datei)'])), keepText); } catch (e) { req = '(FormData)'; } }
       else req = '(' + (body.constructor && body.constructor.name) + ')';
     }
-    const key = `${String(method || 'GET').toUpperCase()} ${host === location.hostname ? '' : host}${pathPattern(url)}`;
+    const key = `${String(method || 'GET').toUpperCase()} ${host === location.hostname ? '' : host}${pathPattern(url)}${opNames(url, body)}`;
     recPush('req', key, { at: now(), page: location.pathname, url: maskUrl(url), status, ctype: ctype || '', req, resp });
+  }
+  // 0.1.1: xHamster bündelt viele Vorgänge über /x-api (Name im Rumpf oder im Parameter r) und /api/front/batch/<base64> –
+  // dort nach dem Vorgang unterscheiden, sonst verdrängt die ständige Nutzerabfrage alle anderen Beispiele
+  function opNames(url, body) {
+    try {
+      const x = new URL(url, location.origin);
+      let list = null;
+      if (/\/x-api\/?$/.test(x.pathname)) {
+        const raw = typeof body === 'string' && body ? body : x.searchParams.get('r');
+        if (raw) list = JSON.parse(raw);
+        const names = (Array.isArray(list) ? list : [list]).map((o) => o && o.name).filter(Boolean);
+        return names.length ? ' ' + [...new Set(names)].join('+') : '';
+      }
+      const m = /\/api\/front\/batch\/([^/?#]+)/.exec(x.pathname);
+      if (m) {
+        list = JSON.parse(atob(decodeURIComponent(m[1]).replace(/-/g, '+').replace(/_/g, '/')));
+        const urls = (Array.isArray(list) ? list : []).map((o) => o && o.url && pathPattern(o.url)).filter(Boolean);
+        return urls.length ? ' → ' + [...new Set(urls)].join('+') : '';
+      }
+    } catch (e) { /* egal */ }
+    return '';
   }
   function hookNetwork() {
     try {
