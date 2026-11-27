@@ -1,6 +1,11 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.24 (27.11.2026)
+- Für die Testkonten des Entwicklers: API-Rekorder läuft immer mit, sein Stand geht alle 30 Minuten (nur bei
+  Änderungen) an Home Assistant (Swinger Companion ab 0.6.3); Menü „Rekorder: Scan-Lauf starten“ ruft die wichtigsten
+  Seitenarten auf. Für alle anderen Konten ändert sich nichts
+
 2.23 (27.11.2026)
 - Neu: Vorschaubilder in der gemeinsamen Fickliste. Für Personen mit JOYclub-Profil legt das Skript ein kleines Bild (aus dem Profil-Archiv) in die gemeinsame Ablage; Personen von poppen.de bekommen ihr Bild vom poppen-Skript (ab 2.51) und zeigen es hier statt des Anfangsbuchstabens. Home Assistant bekommt dieses Bild ebenfalls als Vorschaubild
 

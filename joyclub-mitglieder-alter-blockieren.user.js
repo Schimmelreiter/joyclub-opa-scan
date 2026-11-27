@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.23
+// @version      2.24
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -453,7 +453,8 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
   function apiRecState() {
     let on = false, forced = [];
     try {
-      on = !!GM_getValue(K_API_REC, false);
+      // 2.24: auch für die Testkonten des Entwicklers (siehe recGateUpdate), unabhängig vom Schalter
+      on = !!GM_getValue(K_API_REC, false) || !!GM_getValue('jaf_rec_gate', false);
       const fb = GM_getValue(K_API_FB, {}) || {};
       forced = Object.entries(fb).filter(([, x]) => x && x.rec && x.rec > Date.now()).map(([f]) => f);
     } catch (e) { /* egal */ }
@@ -7345,6 +7346,91 @@ fragment ImageUIDataFragment on ImageUIData {
     apiFlush();
     await sleep(1200);
     flDownload(`joyclub-api-rekorder-${isoDay(new Date())}.json`, apiRecExport());
+  }
+  // ---------- 2.24: Rekorder für die Testkonten des Entwicklers ----------
+  // Läuft nur, wenn eines dieser Konten angemeldet ist (Nicks als SHA-256-Kürzel, nicht im Klartext), schickt seinen Stand
+  // regelmäßig an Home Assistant (Swinger Companion ab 0.6.3, Nachrichtenart „rec“) und bietet einen Scan-Lauf an.
+  const REC_ACC = ['f3b089c35fe3edb1', '3335eb505cd61f71', '70f6d322f35464f9'];
+  const recGate = () => !!GM_getValue('jaf_rec_gate', false);
+  async function recSha16(t) { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(h)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join(''); }
+  let recMenuDone = false;
+  async function recGateUpdate() {
+    const n = ownNick();
+    if (!n) return;
+    const on = REC_ACC.includes(await recSha16(String(n).toLowerCase()));
+    if (on !== recGate()) GM_setValue('jaf_rec_gate', on); // wirkt ab dem nächsten Seitenaufruf (Mitschnitt startet beim Laden)
+    if (on && !recMenuDone) {
+      recMenuDone = true;
+      try {
+        GM_registerMenuCommand('Rekorder: Scan-Lauf starten', () => recScanStart());
+        GM_registerMenuCommand('Rekorder: Scan-Lauf anhalten', () => { GM_setValue('jaf_rec_scan', null); flToast('Scan-Lauf angehalten.'); });
+        GM_registerMenuCommand('Rekorder: jetzt an Home Assistant senden', () => recToHa(true));
+      } catch (e) { /* egal */ }
+    }
+  }
+  async function recToHa(manual = false) {
+    if (!recGate() || IN_FRAME) return;
+    const a = haParse(GM_getValue(K_HA_URL, ''));
+    if (!a) { if (manual) alert('Zuerst in den Einstellungen die Home-Assistant-Adresse eintragen.'); return; }
+    if (!manual && Date.now() - (GM_getValue('jaf_rec_ha_at', 0) || 0) < 25 * 60000) return;
+    GM_setValue('jaf_api_flushreq', Date.now());
+    apiFlush();
+    await sleep(1200);
+    const log = GM_getValue(K_API_LOG, {}) || {};
+    const sig = `${Object.keys(log).length}:${Object.values(log).reduce((n, e) => n + (e.n || 0), 0)}:${(GM_getValue(K_API_TL, []) || []).length}:${(GM_getValue('jaf_rec_scan_log', []) || []).length}`;
+    if (!manual && sig === GM_getValue('jaf_rec_ha_sig', '')) return;
+    GM_setValue('jaf_rec_ha_at', Date.now());
+    try {
+      const data = JSON.parse(apiRecExport());
+      data.scanLog = GM_getValue('jaf_rec_scan_log', []) || [];
+      const key = await haKey(a.key);
+      const payload = { format: 'swinger-companion', v: 1, kind: 'rec', platform: 'joyclub', script: (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '', account: { uid: String(tplMe() || ''), nick: ownNick() || '' }, data };
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
+      const r = await haPost(a.url, { v: 1, iv: b64(iv), data: b64(ct) });
+      if (r.status < 200 || r.status >= 300) throw new Error('Home Assistant antwortet mit ' + r.status);
+      GM_setValue('jaf_rec_ha_sig', sig);
+      if (manual) flToast('Rekorder an Home Assistant gesendet.');
+    } catch (e) { console.warn('[Alter-Filter] Rekorder an HA', e); if (manual) alert('Senden fehlgeschlagen: ' + (e && e.message || e)); }
+  }
+  // Scan-Lauf: ruft die wichtigsten Seitenarten auf (liest nur), der Rekorder schneidet mit
+  function recScanStart() {
+    const own = navUserLink(document);
+    const steps = [own ? new URL(own.href, location.origin).pathname : '', '/my_joy/visitors/', '/clubmail/', '/edit/homepage/?fickliste', '@fick', '@fickFotos', '@fickAlbum'].filter(Boolean);
+    GM_setValue('jaf_rec_scan', { steps, i: 0, tried: '', started: Date.now() });
+    GM_setValue('jaf_rec_scan_log', []);
+    recScanTick();
+  }
+  const recScanLog = (t) => { const l = GM_getValue('jaf_rec_scan_log', []) || []; l.push(`${new Date().toLocaleTimeString()} ${t}`); GM_setValue('jaf_rec_scan_log', l.slice(-200)); };
+  let recScanBusy = false;
+  async function recScanTick() {
+    const st = GM_getValue('jaf_rec_scan', null);
+    if (!st || recScanBusy || IN_FRAME) return;
+    recScanBusy = true;
+    try {
+      if (st.i >= st.steps.length) { GM_setValue('jaf_rec_scan', null); recScanLog('Scan-Lauf fertig'); flToast('Scan-Lauf fertig.'); setTimeout(() => recToHa(true), 3000); return; }
+      let s = st.steps[st.i];
+      if (/^@fick/.test(s)) {
+        const p = Object.values(getFl()).find((q) => q && !flIsExt(q.id) && /^\/profile\/\d+\.[^/]+\.html$/.test(q.path || ''));
+        s = !p ? '' : s === '@fick' ? p.path : p.path.replace(/^\/profile\//, s === '@fickFotos' ? '/profile/fotos/' : '/profile/fotoalbum/');
+        if (!s) { recScanLog('übersprungen ' + st.steps[st.i]); st.i++; GM_setValue('jaf_rec_scan', st); setTimeout(recScanTick, 500); return; }
+      }
+      const here = location.pathname + location.search === s;
+      if (!here && st.tried !== s) { st.tried = s; GM_setValue('jaf_rec_scan', st); recScanLog('lade ' + s); location.assign(s); return; }
+      flToast(`Scan-Lauf: ${st.i + 1}/${st.steps.length} – ${s}`, 4000);
+      await sleep(5000);
+      for (let k = 0; k < 6; k++) { window.scrollTo(0, document.body.scrollHeight); await sleep(700); }
+      window.scrollTo(0, 0);
+      await sleep(3000);
+      recScanLog(`gesammelt ${s}${here ? '' : ' (gelandet auf ' + location.pathname + ')'}`);
+      st.i++; st.tried = ''; GM_setValue('jaf_rec_scan', st);
+      setTimeout(recScanTick, 800);
+    } catch (e) { recScanLog('Fehler: ' + (e && e.message || e)); } finally { recScanBusy = false; }
+  }
+  if (!IN_FRAME && /(^|\.)joyclub\.de$/.test(location.hostname)) {
+    setTimeout(() => { recGateUpdate().catch(() => {}); if (GM_getValue('jaf_rec_scan', null)) setTimeout(recScanTick, 2500); }, 3000);
+    setTimeout(() => recToHa().catch(() => {}), 120000);
+    setInterval(() => recToHa().catch(() => {}), 30 * 60000);
   }
   function apiRecClear() {
     GM_setValue('jaf_api_clr', Date.now());

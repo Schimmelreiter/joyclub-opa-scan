@@ -1,6 +1,12 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.53 (27.11.2026)
+- Für die Testkonten des Entwicklers: API-Rekorder läuft immer mit, sein Stand geht alle 30 Minuten (nur bei
+  Änderungen) an Home Assistant (Swinger Companion ab 0.6.3; Adresse über das Tampermonkey-Menü); Menü
+  „Rekorder: Scan-Lauf starten“ ruft die wichtigsten Seitenarten auf. In der Moppel-Ansicht hält der Rekorder je Karte
+  fest, woher das Bild käme (leere Kästen statt poppens Platzhalter). Für alle anderen Konten ändert sich nichts
+
 2.52 (27.11.2026)
 - Behoben: Personen mit Hauptprofil auf JOYclub (z. B. mit verknüpftem poppen-Profil) standen in „Meine Fickliste“ unter ihrem poppen-Nick, ohne sichtbare Verbindung zum JOYclub-Profil. Sie stehen wieder unter dem JOYclub-Nick mit Link dorthin; das poppen-Profil ist das poppen-Zeichen daneben (verlinkt). Als Bild dient das von JOYclub
 

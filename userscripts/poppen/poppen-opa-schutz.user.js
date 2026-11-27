@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – Poppen Edition
 // @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.52
+// @version      2.53
 // @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -817,6 +817,121 @@
   const apiGet = (path, query) => api(path, { method: 'GET', query });
   const apiPost = (path, body, query) => api(path, { method: 'POST', body, query });
 
+  // ---------- 2.53: Rekorder für die Testkonten des Entwicklers ----------
+  // Läuft (unabhängig vom Experten-Schalter) nur, wenn eines dieser Konten angemeldet ist – Nicks als SHA-256-Kürzel,
+  // nicht im Klartext. Schickt seinen Stand regelmäßig an Home Assistant (Swinger Companion ab 0.6.3, Nachrichtenart „rec“)
+  // und bietet einen Scan-Lauf an, der die wichtigsten Seitenarten aufruft.
+  const REC_ACC = ['f3b089c35fe3edb1', '3335eb505cd61f71'];
+  const K_SC_HA = 'sc_ha_url'; // bewusst ohne vaf2_: wird nicht in den Briefkasten gespiegelt (enthält den Schlüssel)
+  const recGate = () => !!G.get('rec_gate', false);
+  async function sha16(t) { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(h)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join(''); }
+  async function recGateUpdate() {
+    const me = Me.get();
+    if (!me || !me.nick) return;
+    const on = REC_ACC.includes(await sha16(String(me.nick).toLowerCase()));
+    if (on !== recGate()) G.set('rec_gate', on);
+    if (on) recGateMenu();
+  }
+  let recMenuDone = false;
+  function recGateMenu() {
+    if (recMenuDone) return; recMenuDone = true;
+    try {
+      GM_registerMenuCommand('Rekorder: Scan-Lauf starten', () => recScanStart());
+      GM_registerMenuCommand('Rekorder: Scan-Lauf anhalten', () => { G.set('rec_scan', null); toast('Scan-Lauf angehalten.'); });
+      GM_registerMenuCommand('Rekorder: jetzt an Home Assistant senden', () => recToHa(true));
+      GM_registerMenuCommand('Rekorder: Home-Assistant-Adresse', () => {
+        const v = W.prompt('Adresse aus Home Assistant (Swinger Companion › Konfigurieren), Form https://…/api/webhook/…#Schlüssel:', '');
+        if (v == null) return;
+        if (!scHaParse(v)) { W.alert('Das ist keine gültige Adresse.'); return; }
+        GM_setValue(K_SC_HA, v.trim()); toast('Gespeichert.');
+      });
+    } catch (e) { warn('Rekorder-Menü', e); }
+  }
+  function scHaParse(v) { const m = /^(https?:\/\/[^#\s]+\/api\/webhook\/[A-Za-z0-9_-]+)#([A-Za-z0-9_-]{43})$/.exec(String(v || '').trim()); return m ? { url: m[1], key: m[2] } : null; }
+  function scHaPost(url, body) {
+    return new Promise((resolve, reject) => GM_xmlhttpRequest({ method: 'POST', url, headers: { 'Content-Type': 'application/json' }, data: JSON.stringify(body), timeout: 120000,
+      onload: resolve, onerror: () => reject(new Error('Home Assistant nicht erreichbar')), ontimeout: () => reject(new Error('Zeitüberschreitung')) }));
+  }
+  // an HA: höchstens alle 25 Minuten, nur bei Änderungen (außer von Hand)
+  async function recToHa(manual = false) {
+    if (!recGate()) return;
+    const a = scHaParse(GM_getValue(K_SC_HA, ''));
+    if (!a) { if (manual) W.alert('Zuerst im Menü die Home-Assistant-Adresse eintragen.'); return; }
+    if (!manual && now() - G.get('rec_ha_at', 0) < 25 * 60000) return;
+    const exp = await Recorder.export();
+    const sig = `${exp.entries.length}:${exp.entries.reduce((n, e) => n + (e.n || 0), 0)}:${JSON.stringify(exp.xxlDiag || {}).length}:${(exp.scanLog || []).length}`;
+    if (!manual && sig === G.get('rec_ha_sig', '')) return;
+    G.set('rec_ha_at', now());
+    try {
+      const b64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
+      const b64 = (u8) => { let x = ''; const v = new Uint8Array(u8); for (let i = 0; i < v.length; i += 0x8000) x += String.fromCharCode.apply(null, v.subarray(i, i + 0x8000)); return btoa(x); };
+      const key = await crypto.subtle.importKey('raw', b64u(a.key), 'AES-GCM', false, ['encrypt', 'decrypt']);
+      const me = Me.get() || {};
+      const payload = { format: 'swinger-companion', v: 1, kind: 'rec', platform: 'poppen', script: VERSION, account: { uid: String(me.uid || ''), nick: me.nick || '' }, data: exp };
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
+      const r = await scHaPost(a.url, { v: 1, iv: b64(iv), data: b64(ct) });
+      if (r.status < 200 || r.status >= 300) throw new Error('Home Assistant antwortet mit ' + r.status);
+      G.set('rec_ha_sig', sig);
+      if (manual) toast('Rekorder an Home Assistant gesendet.');
+    } catch (e) { warn('Rekorder an HA', e); if (manual) W.alert('Senden fehlgeschlagen: ' + (e && e.message || e)); }
+  }
+  // Scan-Lauf: ruft der Reihe nach Seitenarten auf (liest nur), der Rekorder schneidet mit
+  function recScanStart() {
+    const me = Me.get() || {};
+    const steps = ['/setting/profile', me.nick ? pathOfName(me.nick) : '', '/connection/visitors', '/inbox', '/notifications', '/search/member', XXL_PATH + '#' + XXL_HASH, '/search/event', '/groups/feed', '/dating/my-dates', '@fick'].filter(Boolean);
+    G.set('rec_scan', { steps, i: 0, tried: '', started: now() });
+    G.set('rec_scan_log', []);
+    recScanTick();
+  }
+  const recScanLog = (t) => { const l = G.get('rec_scan_log', []) || []; l.push(`${new Date().toLocaleTimeString()} ${t}`); G.set('rec_scan_log', l.slice(-200)); };
+  let recScanBusy = false;
+  async function recScanTick() {
+    const st = G.get('rec_scan', null);
+    if (!st || recScanBusy) return;
+    recScanBusy = true;
+    try {
+      if (st.i >= st.steps.length) { G.set('rec_scan', null); recScanLog('Scan-Lauf fertig'); toast('Scan-Lauf fertig – geht mit dem nächsten Senden an Home Assistant.'); setTimeout(() => recToHa(true), 3000); return; }
+      let s = st.steps[st.i];
+      if (s === '@fick') {
+        const p = (await Fick.all()).find((q) => q && !q.deleted && pm(q) && pm(q).nick);
+        s = p ? pathOfName(pm(p).nick) : '';
+        if (!s) { recScanLog('übersprungen: Fickliste'); st.i++; G.set('rec_scan', st); setTimeout(recScanTick, 500); return; }
+      }
+      const here = (location.pathname.replace(/\/+$/, '') + location.hash) === s.replace(/\/+$/, '') || (location.pathname + location.hash) === s;
+      if (!here && st.tried !== s) { st.tried = s; G.set('rec_scan', st); recScanLog('lade ' + s); location.assign(s); if (s.includes('#')) setTimeout(() => location.reload(), 800); return; }
+      toast(`Scan-Lauf: ${st.i + 1}/${st.steps.length} – ${s}`);
+      await sleep(5000);
+      for (let k = 0; k < 6; k++) { W.scrollTo(0, document.body.scrollHeight); await sleep(700); }
+      W.scrollTo(0, 0);
+      await sleep(3000);
+      recScanLog(`gesammelt ${s}${here ? '' : ' (gelandet auf ' + location.pathname + ')'}`);
+      st.i++; st.tried = ''; G.set('rec_scan', st);
+      setTimeout(recScanTick, 800);
+    } catch (e) { recScanLog('Fehler: ' + (e && e.message || e)); } finally { recScanBusy = false; }
+  }
+  // Moppel-Ansicht (Entdecken › Quellen): leere Kästen statt poppens Platzhalter aufklären – je Karte festhalten, woher das Bild käme
+  async function xxlDiag(grid) {
+    const cards = [...grid.querySelectorAll('.card[data-uid]')].slice(0, 300);
+    const out = { at: now(), page: location.pathname + location.hash, total: cards.length, cases: {}, urls: {} };
+    const testUrl = (u) => new Promise((res) => { const im = new Image(); const t = setTimeout(() => res('timeout'), 8000); im.onload = () => { clearTimeout(t); res('ok ' + im.naturalWidth + 'x' + im.naturalHeight); }; im.onerror = () => { clearTimeout(t); res('fehler'); }; im.src = u; });
+    for (const c of cards) {
+      const pic = c.querySelector('.pic');
+      const bg = pic ? (pic.style.backgroundImage || '') : '';
+      const ini = !!(pic && pic.querySelector('.ini'));
+      const m = await Members.get(c.dataset.uid).catch(() => null) || {};
+      const data = await Images.get(c.dataset.uid).catch(() => '');
+      const av = !m.avatar ? 'keins' : isPlaceholderAvatar(m.avatar) ? 'Platzhalter' : avatarExpired(m.avatar) ? 'abgelaufen' : 'gültig';
+      const kind = bg ? (/^url\("?data:/.test(bg) ? 'Kopie' : /image_null_/.test(bg) ? 'Platzhalter' : 'Adresse') : ini ? 'Buchstabe' : 'LEER';
+      const k = `${kind} | img-Merker ${m.img ? 'ja' : 'nein'} | Kopie ${data ? 'da' : 'fehlt'} | Avatar ${av} | avatarPh ${m.avatarPh ? 'ja' : 'nein'}`;
+      const x = out.cases[k] || (out.cases[k] = { n: 0, examples: [] });
+      x.n++;
+      if (x.examples.length < 5) x.examples.push({ uid: c.dataset.uid, avatar: m.avatar ? String(m.avatar).replace(/[?#].*$/, '').slice(-90) : '', avatarPh: m.avatarPh || '', bg: bg.slice(0, 140) });
+      const u = (bg.match(/url\("?([^")]+)"?\)/) || [])[1];
+      if (u && !/^data:/.test(u) && Object.keys(out.urls).length < 12 && !(u in out.urls)) out.urls[u] = await testUrl(u);
+    }
+    G.set('xxl_diag', out);
+  }
   // ---------- API-Rekorder ----------
   // Schneidet Abfragen der Seite mit (nur neue Muster, je 2 Beispiele, Listen gekürzt, Sensibles geschwärzt).
   const KNOWN_API = ['v2/ignore/list', 'ignore/uid/list', 'ignore/add', 'ignore/delete', 'ignore/comment/add', 'user/search', 'rates',
@@ -890,7 +1005,7 @@
     const load = async () => { if (data) return data; if (!loading) loading = KV.get('recorder', {}).then((d) => (data = d || {})); return loading; };
     return {
       add(info, json) {
-        if (!S().expert.recorder) return;
+        if (!S().expert.recorder && !recGate()) return;
         load().then(() => {
           const key = `${info.method} ${info.path} ?${shapeOf(info.query)} ${shapeOf(info.body)}${recVariant(info)}`;
           const e = data[key] || (data[key] = { method: info.method, path: info.path, known: KNOWN_API.includes(info.path), first: now(), n: 0, examples: [], pages: [] });
@@ -911,7 +1026,7 @@
         });
       },
       async stats() { await load(); const v = Object.values(data); return { total: v.length, fresh: v.filter((x) => !x.known).length }; },
-      async export() { await load(); const cur = await KV.get('recorder', {}); data = mergeRec(cur, data); let valuemap; try { valuemap = grValueTableSnapshot(); } catch {} const idres = G.get('idres_test', null); const searchDistances = G.get('search_distances', null); let idresFailed = null; try { idresFailed = idresFails(); } catch {} return { version: VERSION, at: new Date().toISOString(), valuemap, idres, idresFailed, searchDistances, entries: Object.values(data).sort((a, b) => (a.known - b.known) || a.path.localeCompare(b.path)) }; },
+      async export() { await load(); const cur = await KV.get('recorder', {}); data = mergeRec(cur, data); let valuemap; try { valuemap = grValueTableSnapshot(); } catch {} const idres = G.get('idres_test', null); const searchDistances = G.get('search_distances', null); let idresFailed = null; try { idresFailed = idresFails(); } catch {} return { version: VERSION, at: new Date().toISOString(), valuemap, idres, idresFailed, searchDistances, xxlDiag: G.get('xxl_diag', null), scanLog: G.get('rec_scan_log', []), entries: Object.values(data).sort((a, b) => (a.known - b.known) || a.path.localeCompare(b.path)) }; },
       async clear() { data = {}; await KV.set('recorder', {}); Bus.emit('recorder'); },
     };
   })();
@@ -10098,6 +10213,7 @@
         return `<a class="card" data-uid="${esc(m.uid)}" href="${esc(pathOfName(m.nick))}"><div class="pic"${pic}>${pic || m.img ? '' : `<i class="ini">${esc((m.nick || '?')[0].toUpperCase())}</i>`}${badge}</div><div class="tx"><b>${esc(m.nick)}</b><span>${esc(meta)}</span></div></a>`;
       }).join('') || `<div style="color:#a6a6a6">Keine Treffer. Die ${esc(xxlName())}-Suche im Opa-Scan füllt diese Liste.</div>`;
       xxlPicsFor(grid);
+      if (recGate()) { clearTimeout(draw.diagT); draw.diagT = setTimeout(() => xxlDiag(grid).catch((e) => warn('Moppel-Diagnose', e)), 6000); }
       if (rows.length > shown) { const b = document.createElement('button'); b.type = 'button'; b.className = 'vaf-btn more'; b.textContent = `Weitere ${fmtN(Math.min(120, rows.length - shown))} anzeigen`; b.addEventListener('click', () => { shown += 120; draw(); }); grid.after(b); }
     };
     const upd = () => { save(); shown = 120; draw(); };
@@ -11116,7 +11232,12 @@
     if (BK_MODE === 'poppen' && !(await Owner.check().catch((e) => { warn('Kontobindung', e); return true; }))) { Owner.showOff(); return; }
     bkEmbed(true);
     await migrate232().catch((e) => warn('Umzug', e));
-    loadMe().then(() => { headerButton(); ageWithMe().catch((e) => warn('Grenzen altern', e)); return loadSecondHome(); }).catch(() => {});
+    loadMe().then(() => { headerButton(); recGateUpdate().catch(() => {}); ageWithMe().catch((e) => warn('Grenzen altern', e)); return loadSecondHome(); }).catch(() => {});
+    // 2.53: Rekorder der Testkonten – Scan-Lauf fortsetzen, regelmäßig an Home Assistant
+    recGateUpdate().catch(() => {});
+    if (G.get('rec_scan', null)) setTimeout(() => recScanTick(), 2500);
+    setTimeout(() => recToHa().catch(() => {}), 120000);
+    setInterval(() => recToHa().catch(() => {}), 30 * 60000);
     setInterval(() => loadMe().then(() => ageWithMe()).catch(() => {}), 3 * 3600000);
     checkReblock().catch((e) => warn('Wiedersperren', e));
     hookTrash();

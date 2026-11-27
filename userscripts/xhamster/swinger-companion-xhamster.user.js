@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.12
+// @version      0.1.13
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -119,7 +119,17 @@
   // =====================================================================
   // Rekorder
   // =====================================================================
-  const recOn = () => gm(K.recOn, true);
+  // 0.1.13: Rekorder nur für die Testkonten des Entwicklers (Nicks als SHA-256-Kürzel); der Menü-Schalter kann ihn
+  // zusätzlich ein- oder ausschalten
+  const REC_ACC = ['f3b089c35fe3edb1', '3335eb505cd61f71', 'c419378fba25fd78'];
+  const recGate = () => !!gm('xh_rec_gate', false);
+  const recOn = () => { const v = gm(K.recOn, null); return v === null ? recGate() : !!v; };
+  async function recGateUpdate(nick) {
+    if (!nick) return;
+    const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(nick).toLowerCase()));
+    const on = REC_ACC.includes([...new Uint8Array(h)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join(''));
+    if (on !== recGate()) gs('xh_rec_gate', on);
+  }
   const testMsgs = () => new Set(gm(K.tests, []) || []);
   const keepText = (x) => testMsgs().has(String(x).replace(/\s+/g, ' ').trim());
   let recBuf = null, recT = 0;
@@ -254,7 +264,7 @@
     let u = null;
     try { u = ini.layout.headerWrapperProps.headerDesktopProps.userHeadProps.user; } catch (e) { u = null; }
     if (!u) try { u = ini.commentsComponent.authorizedUser; } catch (e) { u = null; }
-    if (u && u.id) { const r = { id: String(u.id), nick: u.name || '' }; gs('xh_me', r); return r; }
+    if (u && u.id) { const r = { id: String(u.id), nick: u.name || '' }; gs('xh_me', r); recGateUpdate(r.nick).catch(() => {}); return r; }
     return gm('xh_me', null);
   }
   function partner() {
@@ -336,7 +346,6 @@
     const p = partner();
     steps.push(p ? '@profile:' + p : '@profile:first-friend');
     steps.push('@sub:videos', '@sub:shorts', '@sub:photos', '@gallery', '@photo', '@video');
-    gs(K.recOn, true);
     gs(K.scan, { steps, i: 0, started: now(), ctx: {} });
     recEvent('Scan-Lauf gestartet', { info: `${steps.length} Schritte` });
     scanTick();
@@ -492,7 +501,6 @@
     const p = partner();
     if (!p) { alert('Bitte zuerst im Tampermonkey-Menü das Partnerkonto eintragen.'); return; }
     if (!confirm(`Aktionstest mit Partner ${p}:\n\n1. einen Blockierten entblocken und sofort wieder blockieren\n2. ${MSG_VARIANTS.length} Testnachrichten an ${p} (alle 30 s), danach wieder löschen\n3. ${p} entfreunden und neu anfragen (im anderen Konto: Menü „Freundschaftsanfrage des Partners annehmen“)\n\nDauert etwa 7 Minuten. Tab offen lassen. Starten?`)) return;
-    gs(K.recOn, true);
     gs(K.tests, MSG_VARIANTS.map((x) => vText(x).replace(/\s+/g, ' ').trim()));
     gs(K.act, { step: 'block', started: now(), partner: p, sent: [], i: 0 });
     recEvent('Aktionstest gestartet', { info: 'Partner ' + p });
@@ -729,11 +737,15 @@
       method: 'POST', url, headers: { 'Content-Type': 'application/json' }, data: JSON.stringify(body), timeout: 120000,
       onload: resolve, onerror: () => reject(new Error('Home Assistant nicht erreichbar')), ontimeout: () => reject(new Error('Zeitüberschreitung')) }));
   }
-  async function recToHa() {
+  async function recToHa(auto = false) {
     const a = haParse(gm(K.ha, ''));
-    if (!a) { haSetup(); return; }
+    if (!a) { if (!auto) haSetup(); return; }
     const r = gm(K.rec, null);
-    if (!r) { alert('Der Rekorder hat noch nichts gesammelt.'); return; }
+    if (!r) { if (!auto) alert('Der Rekorder hat noch nichts gesammelt.'); return; }
+    // 0.1.13: automatisch alle 30 Minuten, nur bei Änderungen (ein Tab je 25 Minuten)
+    const sig = `${Object.keys(r.req || {}).length}:${Object.values(r.req || {}).reduce((n, e) => n + (e.n || 0), 0)}:${(r.events || []).length}:${Object.keys(r.pages || {}).length}`;
+    if (auto && (!recOn() || Date.now() - (gm('xh_ha_at', 0) || 0) < 25 * 60000 || sig === gm('xh_ha_sig', ''))) return;
+    gs('xh_ha_at', Date.now());
     try {
       const key = await crypto.subtle.importKey('raw', b64url(a.key), 'AES-GCM', false, ['encrypt', 'decrypt']);
       const m = me() || {};
@@ -747,8 +759,9 @@
       const env = JSON.parse(res.responseText || '{}');
       const ans = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data))));
       if (!ans.ok) throw new Error(ans.error || 'abgelehnt (Swinger Companion ab 0.6.3 nötig)');
-      alert(`Rekorder an Home Assistant gesendet: ${ans.file} (${Math.round(ans.size / 1024)} KB).`);
-    } catch (e) { alert('Senden fehlgeschlagen: ' + (e && e.message || e)); }
+      gs('xh_ha_sig', sig);
+      if (!auto) alert(`Rekorder an Home Assistant gesendet: ${ans.file} (${Math.round(ans.size / 1024)} KB).`);
+    } catch (e) { if (!auto) alert('Senden fehlgeschlagen: ' + (e && e.message || e)); else console.warn('[xHamster-SC] Rekorder an HA', e); }
   }
   function haSetup() {
     const v = prompt('Adresse aus Home Assistant (Swinger Companion › Konfigurieren), Form https://…/api/webhook/…#Schlüssel:', '');
@@ -865,12 +878,13 @@
   hookNetwork();
   // 0.1.7: zuerst, damit es auch bei schnellem Neuladen erreichbar ist
   try { GM_registerMenuCommand('■ Scan-Lauf / Aktionstest anhalten', () => { gs(K.scan, null); gs(K.act, null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); }); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Scan-Lauf starten', scanStart); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Aktionstest starten (mit Partnerkonto)', actStart); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Freundschaftsanfrage des Partners annehmen', acceptPartner); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Scan-Lauf starten', scanStart); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Aktionstest starten (mit Partnerkonto)', actStart); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Freundschaftsanfrage des Partners annehmen', acceptPartner); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand('Rekorder an Home Assistant senden', recToHa); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand('Rekorder exportieren (Datei)', recExportFile); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand(`Rekorder ${recOn() ? 'ausschalten' : 'einschalten'}`, () => { gs(K.recOn, !recOn()); alert('Rekorder ' + (recOn() ? 'an' : 'aus') + ' (gilt ab dem nächsten Laden).'); }); } catch (e) { /* egal */ }
+  try { GM_registerMenuCommand('Rekorder: Vorgabe wiederherstellen (nur Testkonten)', () => { GM_deleteValue(K.recOn); alert('Rekorder läuft jetzt nur für die Testkonten.'); }); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand('Rekorder leeren', () => { if (confirm('Alles Gesammelte löschen?')) { recBuf = null; GM_deleteValue(K.rec); } }); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand('Partnerkonto eintragen', () => { const v = prompt('Nick des Partnerkontos (leer = Vorgabe):', gm(K.partner, '') || partner()); if (v != null) gs(K.partner, v.trim()); }); } catch (e) { /* egal */ }
   try { GM_registerMenuCommand('Altersgrenzen', opaSetup); } catch (e) { /* egal */ }
@@ -898,6 +912,8 @@
   function onReady() {
     if (retry503()) return;
     me();
+    setTimeout(() => recToHa(true).catch(() => {}), 120000);
+    setInterval(() => recToHa(true).catch(() => {}), 30 * 60000);
     recPage();
     collect();
     if (gm(K.scan, null)) setTimeout(scanTick, 2500);

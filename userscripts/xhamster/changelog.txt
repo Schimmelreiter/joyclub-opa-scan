@@ -1,6 +1,10 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.1.13 (27.11.2026)
+- Rekorder, Scan-Lauf und Aktionstest nur noch für die Testkonten des Entwicklers; der Rekorder geht dort alle 30 Minuten
+  (nur bei Änderungen) an Home Assistant. Der Menü-Schalter kann ihn weiterhin ein- oder ausschalten
+
 0.1.12 (27.11.2026)
 - Rekorder: Anfragen an dieselbe Adresse werden nach Art des Vorgangs getrennt (action, items[].state) – so bleibt
   z. B. „Nachricht löschen“ neben „Nachricht senden“ erhalten
