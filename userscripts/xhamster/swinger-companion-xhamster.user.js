@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.4.0
+// @version      0.5.0
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren (Regeln von poppen.de oder eigene), gemeinsame Fickliste mit Bildern und Videos für Home Assistant, Textvorlagen, ohne Werbung; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -12,6 +12,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
+// @grant        GM_listValues
 // @grant        GM_registerMenuCommand
 // @grant        GM_addValueChangeListener
 // @grant        GM_xmlhttpRequest
@@ -329,7 +330,7 @@
     return {
       id: u.id != null ? String(u.id) : '', nick: u.name || '', url: u.pageURL || '', retired: !!u.retired,
       gender: (pi.gender && pi.gender.name) || '', age: ageOf(pi.birthday), city: (pi.geo && (pi.geo.city || pi.geo.cityName)) || '',
-      online: !!u.isOnline, relation: u.currentUserRelation || '', thumb: u.thumbURL || '',
+      online: !!u.isOnline, relation: u.currentUserRelation || '', thumb: u.thumbURL || '', bday: pi.birthday != null ? pi.birthday : null,
     };
   }
   // Abstand des n-ten Neuladens nach Fehler 503: 5 s, 10 s, 20 s, 40 s … höchstens 5 Minuten, mit etwas Zufall
@@ -500,12 +501,13 @@
     recPush('pages', route, { at: now(), url: maskUrl(location.href), htmlClass: document.documentElement.className, initials: ini ? shrink(ini, keepText) : null }, 2);
   }
   // Wer ist angemeldet?
+  let meLive = false;   // 0.5.0: Konto steht auf dieser Seite (nicht nur gespeichert) – für die Kontobindung
   function me() {
     const ini = initials() || {};
     let u = null;
     try { u = ini.layout.headerWrapperProps.headerDesktopProps.userHeadProps.user; } catch (e) { u = null; }
     if (!u) try { u = ini.commentsComponent.authorizedUser; } catch (e) { u = null; }
-    if (u && u.id) { const r = { id: String(u.id), nick: u.name || '' }; gs('xh_me', r); try { if (u.personalInfo && u.personalInfo.gender && u.personalInfo.gender.name) gs('xh_me_gender', u.personalInfo.gender.name); } catch (e) { /* egal */ } recGateUpdate(r.nick).catch(() => {}); return r; }
+    if (u && u.id) { meLive = true; const r = { id: String(u.id), nick: u.name || '' }; gs('xh_me', r); try { if (u.personalInfo && u.personalInfo.gender && u.personalInfo.gender.name) gs('xh_me_gender', u.personalInfo.gender.name); if (u.personalInfo && u.personalInfo.birthday != null) gs('xh_me_bday', u.personalInfo.birthday); } catch (e) { /* egal */ } recGateUpdate(r.nick).catch(() => {}); return r; }
     return gm('xh_me', null);
   }
   function partner() {
@@ -530,7 +532,7 @@
     box.id = 'xhsc-box';
     box.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483646;width:360px;max-height:50vh;overflow:auto;background:#1f2125;color:#eee;border:1px solid #444;border-radius:10px;font:12.5px/1.4 system-ui,sans-serif;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5)';
     box.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>Swinger Companion · xHamster</b><span><button data-a="stop" style="background:#c62828;color:#fff;border:0;border-radius:6px;padding:2px 8px;cursor:pointer">Abbrechen</button> <button data-a="hide" style="background:#444;color:#fff;border:0;border-radius:6px;padding:2px 8px;cursor:pointer">✕</button></span></div><div data-s style="margin:6px 0;color:#9ec5ff"></div><div data-l style="white-space:pre-wrap;font:11.5px/1.35 ui-monospace,monospace;color:#bbb"></div>';
-    box.querySelector('[data-a=stop]').onclick = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); uiStatus('Abgebrochen.'); };
+    box.querySelector('[data-a=stop]').onclick = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs('xh_iscan', null); uiStatus('Abgebrochen.'); };
     box.querySelector('[data-a=hide]').onclick = () => box.remove();
     document.body.appendChild(box);
     return box;
@@ -1093,7 +1095,8 @@
       if (Array.isArray(o.lim) && o.lim.length === 3) { const l = o.lim.map((x) => Math.max(18, Math.min(AGE_MAX, Number(x) || 18))); for (const k of POP_SRC) { g.src[k] = [...l]; if (g.srcW) g.srcW[k] = [...l]; if (g.srcM) g.srcM[k] = [...l]; } }
       if ('visual' in o) g.visual = !!o.visual;
       if ('ignore' in o) g.ignore = !!o.ignore;
-      rulesCache.own[gk] = true;
+      if (Array.isArray(o.labels) && o.labels.length === 6 && o.labels.every((x) => typeof x === 'string' && x.trim())) { g.labels = o.labels.map((x) => x.trim()); rulesCache.ownLabels = Object.assign(rulesCache.ownLabels || {}, { [gk]: true }); }
+      if (Array.isArray(o.lim) || 'visual' in o || 'ignore' in o) rulesCache.own[gk] = true;
     }
     return rulesCache;
   }
@@ -1112,7 +1115,7 @@
   }
   function labelsOf(gk, s = rules()) {
     const l = [...(s.groups[gk].labels || POP_DEFAULTS.groups[gk].labels)];
-    if (s.ruhr) for (const i of [4, 5]) if (REGIONAL[l[i]]) l[i] = REGIONAL[l[i]];
+    if (s.ruhr && !(s.ownLabels || {})[gk]) for (const i of [4, 5]) if (REGIONAL[l[i]]) l[i] = REGIONAL[l[i]];
     return l;
   }
   // xHamster-Geschlecht → Gruppe der poppen-Regeln (Paare aus Mann und Frau; übrige Paar- und Trans-Angaben bleiben ohne Gruppe)
@@ -1122,7 +1125,11 @@
     const n = norm(p.nick);
     if (n && (s.whitelist.names || []).some((x) => norm(x && x.n) === n)) return 'Whitelist';
     if (n && (s.whitelist.prefixes || []).some((x) => x && n.startsWith(norm(x)))) return 'Whitelist (Präfix)';
+    const ow = gm('xh_white', null);
+    if (ow && n && (ow.names || []).some((x) => norm(x) === n)) return 'Whitelist (xHamster)';
+    if (ow && n && (ow.prefixes || []).some((x) => x && n.startsWith(norm(x)))) return 'Whitelist (xHamster, Präfix)';
     const lists = gm(K.lists, {}) || {};
+    if (p.id && (lists.subs || []).includes(p.id)) return 'Abo';
     if (p.relation === 'friend' || (lists.friends || []).includes(p.id)) return 'Freund';
     if (p.id && fickXhIds().has(p.id)) return 'Fickliste';
     const m = me();
@@ -1321,6 +1328,14 @@
     };
     if (/^\/my\/friends/.test(location.pathname)) take('friends', ini.friendsUsersCollection, ini.friendsUsersPaging);
     if (/^\/my\/blocked-users/.test(location.pathname)) take('blocked', ini.blockedUsersCollection, ini.blockedUsersPaging);
+    // 0.5.0: Abos (Subscriptions) als Ausnahme – Nutzer-Einträge aus den Seitendaten
+    if (/^\/my\/subscriptions/.test(location.pathname)) {
+      const us = [];
+      const walk = (o, d) => { if (!o || typeof o !== 'object' || d > 6) return; if (Array.isArray(o)) { for (const v of o.slice(0, 500)) walk(v, d + 1); return; } if (o.id != null && typeof o.name === 'string' && o.pageURL && /\/users\//.test(o.pageURL)) us.push(o); for (const k in o) if (k !== 'layout' && o[k] && typeof o[k] === 'object') walk(o[k], d + 1); };
+      walk(ini, 0);
+      const m0 = me();
+      take('subs', us.filter((u) => !m0 || String(u.id) !== m0.id), null);
+    }
     if (ch) { gs(K.lists, lists); rulesCache = null; }
   }
   const srcOfPage = () => (/^\/dating/.test(location.pathname) ? 'suche' : 'interaktionen');
@@ -1342,7 +1357,8 @@
       // nur die kleinste passende Karte schmücken
       if ([...it.querySelectorAll('.item.friend, [class*="card"], [class*="Card"], li')].some((c) => c.querySelector('a[href*="/users/"]'))) continue;
       const c = classify(p, src);
-      const html = badgeHtml(p, c);
+      vmAdd(p, c);
+      const html = [badgeHtml(p, c), mopBadge(p)].filter(Boolean).join(' · ');
       if (!html) continue;
       const b = document.createElement('div');
       b.className = 'xhsc-badge';
@@ -1385,8 +1401,12 @@
     if (p.age != null) bits.push(p.age + ' J.');
     if (p.city) bits.push(esc(p.city));
     if (p.relation && p.relation !== 'none') bits.push(esc(p.relation));
-    if (cl.near) bits.push('<span style="color:#ef6c00">bald über der Grenze</span>');
+    if (cl.near) bits.push('<span style="color:#ef6c00">bald über der Grenze – vorgemerkt</span>');
     if (cl.white && cl.white !== 'ich') bits.push(`<span style="color:#9ec5ff">${esc(cl.white)}</span>`);
+    p.bday = ((((ini.displayUserModel || {}).personalInfo) || {}).birthday);
+    vmAdd(p, cl);
+    bodyLearn();
+    const mb = mopBadge(p); if (mb) bits.push(mb);
     if (c.galleries != null) bits.push(`${c.galleries} Galerien`);
     if (c.videos != null) bits.push(`${c.videos} Videos`);
     if (p.info.Website) bits.push(`<a href="${esc(p.info.Website)}" target="_blank" rel="noopener" style="color:#9ec5ff">${esc(p.info.Website.replace(/^https?:\/\//, ''))}</a>`);
@@ -2272,7 +2292,7 @@
       <div class="xs-slider" data-g="${gk}"><div class="xs-track"><div class="xs-seg" data-s="1" style="background:${STAGE_COL[1]}"></div><div class="xs-seg" data-s="2" style="background:${STAGE_COL[2]}"></div><div class="xs-seg" data-s="3" style="background:${STAGE_COL[3]}"></div><div class="xs-seg" data-s="4" style="background:#e53935"></div></div>
       ${x.map((v, i) => `<input type="range" min="18" max="${AGE_MAX}" step="1" value="${v}" data-i="${i}" aria-label="${['Stufe 1 bis', 'Stufe 2 bis', 'Ignorieren ab'][i]}">`).join('')}</div>
       <div class="xs-vals" data-g="${gk}" data-l="${esc(JSON.stringify([l[0], l[2], l[4]]))}"></div>
-      <div class="xs-sw">${sw('visual', g.visual, 'markieren')}${sw('ignore', g.ignore, 'ignorieren')}</div></div>`;
+      <div class="xs-sw">${sw('visual', g.visual, 'markieren')}${sw('ignore', g.ignore, 'ignorieren')}${own ? sw('age', !!((gm(OWNK, {}) || {})[gk] || {}).age, 'Grenzen altern mit mir') : ''}</div></div>`;
   }
   // Segmente und Text eines Reglers nach den aktuellen Werten
   function sliderPaint(box, gk) {
@@ -2313,8 +2333,16 @@
       ${s.moppel.on ? setRow(`Länder für „${(s.moppel.labels || [])[5] || 'XXL'}“`, `<input class="xs-in" data-k="mopcty" value="${esc(gm('xh_mop_cty', 'de'))}">`, 'Kürzel, durch Komma getrennt; mehrere = Aufklappmenü') : ''}
       </div>
       <div class="xs-btns"><button type="button" class="xh-button black" data-a="reload">Regeln neu laden</button></div></section>
+      <section><h3>Bezeichnungen und Whitelist für xHamster</h3>
+      <p class="xs-note">Leer = wie poppen.de. Je Stufe Einzahl und Mehrzahl.</p><div class="xs-grid">
+      ${['m', 'w', 'p'].map((gk) => { const l = labelsOf(gk, s); const ownL = ((gm(OWNK, {}) || {})[gk] || {}).labels; return setRow(GROUP_NAME[gk], [0, 1, 2, 3, 4, 5].map((i) => `<input class="xs-in" data-lab="${gk}" value="${esc(ownL ? ownL[i] : '')}" placeholder="${esc(l[i])}" style="max-width:130px;margin:0 4px 4px 0">`).join(''), ownL ? 'eigene Bezeichnungen' : ''); }).join('')}
+      ${setRow('Whitelist: Namen', `<textarea class="xs-in" data-white="names" rows="3" style="max-width:360px;width:100%">${esc(ownWhite().names.join('\n'))}</textarea>`, 'ein Nick je Zeile – zusätzlich zur Whitelist von poppen.de')}
+      ${setRow('Whitelist: Präfixe', `<textarea class="xs-in" data-white="prefixes" rows="2" style="max-width:360px;width:100%">${esc(ownWhite().prefixes.join('\n'))}</textarea>`, 'Nicks, die so anfangen')}
+      ${setRow('Immer ausgenommen', 'Freunde, Abos (Subscriptions), Fickliste, Du selbst')}
+      </div></section>
       <section><h3>Anzeige</h3><div class="xs-grid">
       ${setRow(`${OWs()} in der Dating-Suche ausblenden`, sw('xhsc-set-hide', o.hide), 'aus = nur abdunkeln')}
+      ${s.moppel.on ? setRow(`${esc((s.moppel.labels || [])[5] || 'XXL')} zuerst`, sw('xhsc-set-mopsort', !!gm('xh_mop_sort', false)), 'Dating-Suche nach Körpertyp sortieren (bekannt aus Profilen und der Suche „Large“)') : ''}
       </div></section>
       <section><h3>${OW()}-Scan</h3><div class="xs-grid">
       ${setRow('Länder', `<input class="xs-in" data-k="cty" value="${esc(gm('xh_oscan_cty', 'de,at,ch'))}">`, 'Kürzel, durch Komma getrennt; leer = alle')}
@@ -2322,14 +2350,25 @@
       ${setRow('Letzter Lauf', lastTxt)}
       </div>
       <div class="xs-btns"><button type="button" class="xh-button black" data-a="dry">Probelauf (zählt nur)</button><button type="button" class="xh-button red" data-a="block">${OWs()} blockieren</button></div></section>
+      <section><h3>Blockierliste und Interaktionen</h3><div class="xs-grid">
+      ${setRow('Blockiert', `${((gm(K.lists, {}) || {}).blocked || []).length} · davon ${Object.keys(gm(BYME_K, {}) || {}).length} vom Skript · abgeglichen ${gm('xh_blocksync_at', 0) ? esc(new Date(gm('xh_blocksync_at', 0)).toLocaleString('de-DE')) : 'noch nie'}`, 'Abgleichen liest alle Seiten von „Blocked users“; danach Rückfrage, falls nach den Regeln jemand entsperrt werden kann')}
+      ${setRow('Vorgemerkt', `${Object.keys(gm(VORM_K, {}) || {}).length} kurz vor der Grenze · ${vmDue().length} inzwischen drüber`, `werden beim nächsten „${OWs()} blockieren“ zuerst gesperrt`)}
+      ${(() => { const il = gm('xh_iscan_last', null); return setRow('Interaktionen', il ? `${il.mode === 'dry' ? 'Probelauf' : 'Blockieren'} am ${esc(new Date(il.at).toLocaleString('de-DE'))}: ${il.seen} Absender · ${il.hits} über der Grenze · ${il.done} blockiert` : '<span style="opacity:.6">noch nicht geprüft</span>', 'Absender aus den Benachrichtigungen (Kommentare, Gifts, Freundschaften)'); })()}
+      </div>
+      <div class="xs-btns"><button type="button" class="xh-button black" data-a="bsync">Blockierliste abgleichen</button><button type="button" class="xh-button black" data-a="idry">Interaktionen: Probelauf</button><button type="button" class="xh-button red" data-a="iblock">Interaktionen: blockieren</button></div></section>
       <section><h3>Home Assistant</h3><div class="xs-grid">
       ${setRow('Adresse', `${ha ? '<span>eingetragen</span> ' : '<span class="xs-warn">nicht eingetragen</span> '}<input class="xs-in" data-k="ha" type="password" autocomplete="off" placeholder="neue Adresse einfügen" style="max-width:360px;margin-top:6px">`, 'aus Home Assistant: Swinger Companion › Konfigurieren (gleiche Adresse wie beim JOYclub-Skript)')}
       ${setRow('Bilder und Videos der Fickliste', `${ms.pics} Bilder · ${ms.shorts} Short Videos · ${ms.videosOn} von ${ms.videos} Videos · ${ms.sent} an Home Assistant geschickt${ms.waiting ? ` · ${ms.waiting} warten` : ''}`, 'Videos: bis 5 je Person alle, sonst einzeln einschalten')}
-      </div></section>`;
+      </div></section>
+      <section><h3>Sicherung und Prüflauf</h3><div class="xs-grid">
+      ${setRow('Konto', (() => { const ow = gm(OWNER_K, null); return ow ? `gebunden an ${esc(ow.nick)} seit ${esc(new Date(ow.seit).toLocaleDateString('de-DE'))}${(ow.also || []).length ? ` · auch: ${esc(ow.also.map((y) => y.nick).join(', '))}` : ''}` : 'noch nicht gebunden'; })(), 'bei einem anderen angemeldeten Konto bleibt das Skript aus')}
+      ${(() => { const t = gm('xh_selftest_last', null); return setRow('Letzter Prüflauf', t ? `${esc(new Date(t.at).toLocaleString('de-DE'))} (${esc(t.ver)}): ${t.bad} Fehler · ${t.warn} Hinweise` : '<span style="opacity:.6">noch keiner</span>', 'geht alle Funktionen durch und ändert nichts'); })()}
+      </div>
+      <div class="xs-btns"><button type="button" class="xh-button black" data-a="test">Prüflauf starten</button><button type="button" class="xh-button black" data-a="bexp">Sicherung exportieren</button><button type="button" class="xh-button black" data-a="bimp">Sicherung einspielen</button></div></section>`;
   }
   function setBind(box) {
     const q = (sel) => box.querySelector(sel);
-    q('[data-a=reload]').onclick = async () => { await rulesRefresh(true); setFill(box); uiToast('Regeln neu geladen.'); };
+    q('[data-a=reload]').onclick = async () => { await rulesRefresh(true); setFill(box); uiToast('Regeln neu geladen.'); relaxCheck(); };
     q('#xhsc-set-hide').onchange = (e) => { const o = opa(); o.hide = !!e.target.checked; gs(K.opa, o); };
     q('[data-k=cty]').onchange = (e) => gs('xh_oscan_cty', e.target.value.trim());
     q('[data-k=max]').onchange = (e) => gs('xh_oscan_max', Math.max(1, parseInt(e.target.value, 10) || 200));
@@ -2349,12 +2388,33 @@
           inp.value = v[i];
           sliderPaint(box, gk);
         });
-        inp.addEventListener('change', () => { ownSet(gk, { lim: ins.map((x) => +x.value) }); setFill(box); });
+        inp.addEventListener('change', () => { ownSet(gk, { lim: ins.map((x) => +x.value) }); setFill(box); relaxCheck(); });
       });
       sliderPaint(box, gk);
     }
-    for (const c of box.querySelectorAll('input[data-sw]')) c.onchange = () => { ownSet(c.dataset.g, { [c.dataset.sw]: !!c.checked }); setFill(box); };
-    for (const b of box.querySelectorAll('[data-reset]')) b.onclick = () => { const own = gm(OWNK, {}) || {}; delete own[b.dataset.reset]; gs(OWNK, own); rulesCache = null; setFill(box); };
+    for (const c of box.querySelectorAll('input[data-sw]')) c.onchange = () => { ownSet(c.dataset.g, { [c.dataset.sw]: !!c.checked }); if (c.dataset.sw === 'age') gs('xh_my_age_last', ageOf(gm('xh_me_bday', null)) || 0); setFill(box); if (c.dataset.sw === 'ignore') relaxCheck(); };
+    for (const b of box.querySelectorAll('[data-reset]')) b.onclick = () => { const own = gm(OWNK, {}) || {}; const lab = (own[b.dataset.reset] || {}).labels; if (lab) own[b.dataset.reset] = { labels: lab }; else delete own[b.dataset.reset]; gs(OWNK, own); rulesCache = null; setFill(box); relaxCheck(); };
+    // 0.5.0: eigene Bezeichnungen, eigene Whitelist, Blockierliste, Interaktionen, Sicherung, Prüflauf
+    for (const gk of ['m', 'w', 'p']) {
+      const ins = [...box.querySelectorAll(`input[data-lab="${gk}"]`)];
+      ins.forEach((inp) => { inp.onchange = () => {
+        const own = gm(OWNK, {}) || {};
+        const v = ins.map((i) => i.value.trim());
+        own[gk] = Object.assign({}, own[gk] || {});
+        if (v.every(Boolean)) own[gk].labels = v; else delete own[gk].labels;
+        if (!Object.keys(own[gk]).length) delete own[gk];
+        gs(OWNK, own); rulesCache = null; setFill(box);
+      }; });
+    }
+    for (const t of box.querySelectorAll('textarea[data-white]')) t.onchange = () => { const w = ownWhite(); w[t.dataset.white] = t.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).slice(0, 2000); gs(WHITE_K, w); rulesCache = null; relaxCheck(); };
+    const bt = (a, f) => { const e = q(`[data-a=${a}]`); if (e) e.onclick = f; };
+    bt('bsync', async () => { try { await blockSync(); setFill(box); relaxCheck(); } catch (e) { uiToast(esc(e.message)); } });
+    bt('idry', () => iscanStart('dry'));
+    bt('iblock', () => iscanStart('block'));
+    bt('bexp', backupExport);
+    bt('bimp', backupImport);
+    bt('test', () => selfTest());
+    const ms2 = q('#xhsc-set-mopsort'); if (ms2) ms2.onchange = (e) => gs('xh_mop_sort', !!e.target.checked);
   }
   function setFill(box) { box.innerHTML = setPanelHtml(); setBind(box); }
   // linke Leiste: Eintrag „Opa-Schutz“ hinter „Privacy“ (Vorlage: ein vorhandener Eintrag)
@@ -2484,8 +2544,29 @@
     setTimeout(() => document.addEventListener('click', function off(ev) { if (!dd.contains(ev.target)) { dd.remove(); document.removeEventListener('click', off, true); } }, true), 0);
     let l;
     try { l = await tplAll(); } catch (e) { dd.innerHTML = `<div style="padding:8px 14px;color:#ff7875">Textvorlagen nicht erreichbar: ${esc(e.message)}</div>`; return; }
-    if (!l.length) { dd.innerHTML = '<div style="padding:8px 14px;opacity:.6">Keine Textvorlagen. Angelegt werden sie im JOYclub- oder poppen-Skript.</div>'; return; }
+    let terms = [];
+    try { terms = await termUpcoming(); } catch (e) { terms = []; }
+    if (!l.length && !terms.length) { dd.innerHTML = '<div style="padding:8px 14px;opacity:.6">Keine Textvorlagen. Angelegt werden sie im JOYclub- oder poppen-Skript.</div>'; return; }
     dd.innerHTML = '';
+    // 0.5.0: die nächsten Termine aus der gemeinsamen Termin-Datei
+    if (terms.length) {
+      const h = document.createElement('div'); h.style.cssText = 'padding:6px 14px 2px;font-weight:600;opacity:.8'; h.textContent = 'Termine'; dd.appendChild(h);
+      for (const t of terms) {
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:5px 14px;cursor:pointer';
+        row.textContent = [t.wann, t.wo, t.was].filter(Boolean).join(' · ');
+        row.addEventListener('mouseenter', () => { row.style.background = '#33363c'; });
+        row.addEventListener('mouseleave', () => { row.style.background = ''; });
+        row.addEventListener('click', (ev) => {
+          ev.stopPropagation(); dd.remove();
+          const ed = [...document.querySelectorAll('.xh-editable-content[contenteditable]')].find((x) => x.isConnected) || null;
+          if (!ed) { uiToast('Kein Eingabefeld gefunden.'); return; }
+          tplInsert(ed, [t.wann, t.wo, t.was, t.link].filter(Boolean).join(' - '));
+        });
+        dd.appendChild(row);
+      }
+      if (l.length) { const h2 = document.createElement('div'); h2.style.cssText = 'padding:8px 14px 2px;font-weight:600;opacity:.8;border-top:1px solid #3a3d43;margin-top:4px'; h2.textContent = 'Textvorlagen'; dd.appendChild(h2); }
+    }
     for (const t of l) {
       const row = document.createElement('div');
       row.style.cssText = 'padding:7px 14px;cursor:pointer';
@@ -2851,6 +2932,476 @@
 
 
   // =====================================================================
+  // Eigene Regeln für xHamster (ab 0.5.0): Grenzen altern mit, Vormerken, eigene Whitelist und Bezeichnungen,
+  // Blockierliste abgleichen, Regeln gelockert → entsperren, Interaktionen (Benachrichtigungen) prüfen
+  // =====================================================================
+  const WHITE_K = 'xh_white';       // { names: [..], prefixes: [..] } – eigene Whitelist (zusätzlich zu poppen.de)
+  const VORM_K = 'xh_vormerk';      // { <ID>: { nick, url, bday, g, at } } – kurz vor der Grenze
+  const BYME_K = 'xh_byme';         // { <ID>: { nick, bday, g, at } } – vom Skript blockiert
+  const BINFO_K = 'xh_blockinfo';   // { <ID>: { nick, bday, g, retired } } – aus der Blockierliste
+  const ownWhite = () => Object.assign({ names: [], prefixes: [] }, gm(WHITE_K, {}) || {});
+  // eigenes Alter (Geburtstag aus dem eigenen Profil, Kopfzeile) → Grenzen der eigenen Werte mit „altern mit mir“ anheben
+  function ageWithMe() {
+    const a = ageOf(gm('xh_me_bday', null));
+    if (!a) return;
+    const last = gm('xh_my_age_last', 0);
+    if (!last || a < last) { gs('xh_my_age_last', a); return; }
+    if (a === last) return;
+    gs('xh_my_age_last', a);
+    const own = gm(OWNK, {}) || {};
+    const names = [];
+    for (const gk of ['m', 'w', 'p']) {
+      const o = own[gk];
+      if (!o || !o.age || !Array.isArray(o.lim)) continue;
+      o.lim = o.lim.map((x) => Math.min(AGE_MAX, x + (a - last)));
+      names.push(GROUP_NAME[gk]);
+    }
+    if (!names.length) return;
+    gs(OWNK, own); rulesCache = null;
+    gs('xh_aged_at', now());          // kein „Regeln gelockert“ wegen des Alterns
+    uiToast(`Alles Gute! Die eigenen Altersgrenzen (${esc(names.join(', '))}) sind mit Dir um ${a - last === 1 ? 'ein Jahr' : (a - last) + ' Jahre'} gealtert.`);
+  }
+  // Vormerken: kurz vor der Grenze (Warnalter) merken und sperren, sobald die Person drüber ist
+  function vmAdd(p, c) {
+    if (!c || !c.near || !p || !p.id || p.bday == null) return;
+    const v = gm(VORM_K, {}) || {};
+    if (v[p.id]) return;
+    v[p.id] = { nick: p.nick, url: p.url, bday: p.bday, g: p.gender, at: now() };
+    const ids = Object.keys(v);
+    if (ids.length > 3000) ids.sort((a, b) => v[a].at - v[b].at).slice(0, ids.length - 3000).forEach((k) => delete v[k]);
+    gs(VORM_K, v);
+  }
+  // fällige Vorgemerkte: jetzt über der Grenze und noch nicht blockiert; Weggefallene (Whitelist, jünger …) entfernen
+  function vmDue() {
+    const v = gm(VORM_K, {}) || {};
+    const blocked = new Set((gm(K.lists, {}) || {}).blocked || []);
+    const out = [];
+    let ch = false;
+    for (const [id, e] of Object.entries(v)) {
+      if (blocked.has(id)) { delete v[id]; ch = true; continue; }
+      const p = { id, nick: e.nick, url: e.url, gender: e.g, age: ageOf(e.bday), bday: e.bday };
+      const c = classify(p, 'suche');
+      if (c.ignore) out.push(p);
+      else if (!c.near) { delete v[id]; ch = true; }
+    }
+    if (ch) gs(VORM_K, v);
+    return out;
+  }
+  function bymeAdd(p) {
+    const b = gm(BYME_K, {}) || {};
+    b[p.id] = { nick: p.nick, bday: p.bday != null ? p.bday : null, g: p.gender || '', at: now() };
+    gs(BYME_K, b);
+  }
+  // ganze Blockierliste lesen (/my/blocked-users, alle Seiten) → lists.blocked, Angaben je Person
+  async function blockSync(quiet = false) {
+    const ids = new Set(), info = {};
+    let page = 1, max = 1;
+    do {
+      const ini = initialsOf(await getHtml(location.origin + '/my/blocked-users' + (page > 1 ? '/' + page : '')));
+      if (!ini) throw new Error('Blockierliste nicht lesbar');
+      for (const u of ini.blockedUsersCollection || []) {
+        const p = personOf(u);
+        if (!p || !p.id) continue;
+        ids.add(p.id); info[p.id] = { nick: p.nick, bday: p.bday, g: p.gender, retired: p.retired };
+      }
+      max = Math.min(100, Number((ini.blockedUsersPaging || {}).maxPage) || 1);
+      if (!quiet) uiStatus(`Blockierliste: Seite ${page} von ${max} · ${ids.size} Einträge`);
+      page++;
+      if (page <= max) await sleep(1200 + Math.random() * 1200);
+    } while (page <= max);
+    const lists = gm(K.lists, {}) || {};
+    const before = new Set(lists.blocked || []);
+    lists.blocked = [...ids]; gs(K.lists, lists);
+    gs(BINFO_K, info);
+    const b = gm(BYME_K, {}) || {};
+    let gone = 0;
+    for (const id of Object.keys(b)) if (!ids.has(id)) { delete b[id]; gone++; }
+    gs(BYME_K, b);
+    gs('xh_blocksync_at', now());
+    rulesCache = null;
+    const added = [...ids].filter((x) => !before.has(x)).length;
+    const removed = [...before].filter((x) => !ids.has(x)).length;
+    const msg = `Blockierliste abgeglichen: ${ids.size} blockiert (${added} neu bekannt, ${removed} nicht mehr blockiert${gone ? `, davon ${gone} vom Skript` : ''}).`;
+    if (!quiet) uiStatus(msg);
+    recEvent('Blockierliste abgeglichen', { info: `${ids.size} · +${added} · −${removed}` });
+    return { n: ids.size, added, removed };
+  }
+  // Regeln gelockert: vom Skript Blockierte, die jetzt nicht mehr über der Grenze liegen
+  function relaxCandidates() {
+    const b = gm(BYME_K, {}) || {};
+    const out = [];
+    for (const [id, e] of Object.entries(b)) {
+      const p = { id, nick: e.nick, gender: e.g, age: ageOf(e.bday), bday: e.bday };
+      if (p.age == null) continue;
+      const c = classify(p, 'suche');
+      if (!c.ignore) out.push(Object.assign(p, { why: c.white || 'unter der Grenze' }));
+    }
+    return out;
+  }
+  function relaxCheck() {
+    const list = relaxCandidates();
+    const skip = new Set(gm('xh_relax_keep', []) || []);
+    const todo = list.filter((p) => !skip.has(p.id));
+    if (!todo.length || document.getElementById('xhsc-relax')) return;
+    edCss();
+    const ov = document.createElement('div');
+    ov.className = 'xhsc-ov'; ov.id = 'xhsc-relax';
+    ov.innerHTML = `<div class="xhsc-ed"><div class="hd"><h3>Regeln geändert</h3></div><div class="bd">
+      <p>Nach den neuen Regeln liegen <b>${todo.length}</b> vom Skript blockierte Profile nicht mehr über der Grenze. Entsperren?</p>
+      <div class="hist" style="max-height:240px">${todo.slice(0, 300).map((p) => `<div>${esc(p.nick)} (${p.age} J.) – ${esc(p.why)}</div>`).join('')}${todo.length > 300 ? `<div>… und ${todo.length - 300} weitere</div>` : ''}</div>
+      <p class="muted">Wer neu über einer Grenze liegt, sperrt der nächste ${esc(OW())}-Scan.</p></div>
+      <div class="ft"><button type="button" class="btn del" data-a="keep">Gesperrt lassen</button><button type="button" class="btn" data-a="later">Später</button><button type="button" class="btn pri" data-a="go">Entsperren</button></div></div>`;
+    const close = () => ov.remove();
+    ov.querySelector('[data-a=later]').onclick = close;
+    ov.querySelector('[data-a=keep]').onclick = () => { gs('xh_relax_keep', [...skip, ...todo.map((p) => p.id)].slice(-5000)); close(); };
+    ov.querySelector('[data-a=go]').onclick = () => { close(); relaxRun(todo); };
+    document.body.appendChild(ov);
+  }
+  async function relaxRun(todo) {
+    let ok = 0, bad = 0;
+    const lists = gm(K.lists, {}) || {};
+    const blocked = new Set(lists.blocked || []);
+    const b = gm(BYME_K, {}) || {};
+    for (const p of todo) {
+      uiStatus(`Entsperren: ${ok + bad + 1} von ${todo.length} – ${p.nick}`);
+      let r;
+      try { r = await blockUser(p.id, false); } catch (e) { r = { ok: false, msg: e.message }; }
+      if (r.ok) { ok++; blocked.delete(p.id); delete b[p.id]; } else { bad++; recEvent('Entsperren fehlgeschlagen', { info: `${r.status || ''} ${r.msg || ''}`.trim(), resp: r.text || '' }); if (bad >= 3 && !ok) break; }
+      lists.blocked = [...blocked]; gs(K.lists, lists); gs(BYME_K, b);
+      await sleep(2000 + Math.random() * 3000);
+    }
+    uiStatus(`Entsperrt: ${ok}${bad ? ` · ${bad} fehlgeschlagen` : ''}.`);
+    recEvent('Regeln gelockert: entsperrt', { info: `${ok} ok · ${bad} Fehler` });
+  }
+  // Interaktionen: Absender aus den Benachrichtigungen (Kommentare, Gifts, Anfragen) prüfen und ggf. blockieren
+  const ISCAN_K = 'xh_iscan';
+  const NOTI_KNOWN = new Set(['event', 'comment', 'comment-photo', 'comment-video', 'friend-approve', 'invite', 'gift']);
+  function notiRows(html) {
+    const out = [];
+    const re = /<div class="notifications-row"[\s\S]*?(?=<div class="notifications-row"|<\/section>|$)/g;
+    let m;
+    while ((m = re.exec(html))) {
+      const row = m[0];
+      const u = /href="https:\/\/xhamster\.com\/users\/(?:profiles\/)?([^"/?#]+)/.exec(row);
+      const cls = (/<div class="event ([^"]+)"/.exec(row) || [])[1] || '';
+      if (u) out.push({ nick: decodeURIComponent(u[1]), cls });
+    }
+    return out;
+  }
+  function iscanStart(mode) {
+    if (gm(ISCAN_K, null)) { uiStatus('Interaktionen werden schon geprüft.'); return; }
+    gs(ISCAN_K, { mode, phase: 'list', page: 1, nicks: [], i: 0, seen: 0, hits: 0, done: 0, fail: 0, skip: {}, started: now() });
+    iscanRun();
+  }
+  let iscanBusy = false;
+  async function iscanRun() {
+    if (iscanBusy) return;
+    iscanBusy = true;
+    try {
+      const m = me();
+      for (;;) {
+        const st = gm(ISCAN_K, null);
+        if (!st) { uiStatus('Interaktionen: angehalten.'); break; }
+        if (st.phase === 'list') {
+          uiStatus(`Interaktionen: Benachrichtigungen Seite ${st.page}`);
+          let html = '';
+          try { html = await getHtml(location.origin + '/notifications' + (st.page > 1 ? '/' + st.page : '')); } catch (e) { html = ''; }
+          const rows = notiRows(html);
+          for (const r of rows) {
+            const kinds = r.cls.split(/\s+/).filter(Boolean);
+            const unk = kinds.filter((k) => !NOTI_KNOWN.has(k));
+            if (unk.length) recEvent('Benachrichtigung: unbekannte Art', { info: unk.join(' ') });
+            if (kinds.includes('gift')) recEvent('Benachrichtigung: Gift', { info: r.cls });
+            if (!st.nicks.some((x) => norm(x) === norm(r.nick)) && !(m && norm(m.nick) === norm(r.nick))) st.nicks.push(r.nick);
+          }
+          if (rows.length && st.page < 10) st.page++; else st.phase = 'check';
+          gs(ISCAN_K, st);
+          await sleep(1200 + Math.random() * 1200);
+          continue;
+        }
+        if (st.i >= st.nicks.length) {
+          gs(ISCAN_K, null);
+          const skip = Object.entries(st.skip).map(([k, v]) => `${k} ${v}`).join(', ');
+          uiStatus(`Interaktionen geprüft: ${st.seen} Absender, ${st.hits} über der Grenze, ${st.done} blockiert${st.fail ? `, ${st.fail} Fehler` : ''}.`);
+          uiLog(`Übersprungen: ${skip || '–'}`);
+          gs('xh_iscan_last', { at: now(), mode: st.mode, seen: st.seen, hits: st.hits, done: st.done, fail: st.fail });
+          recEvent('Interaktionen geprüft', { info: `${st.mode}: ${st.seen} · ${st.hits} · ${st.done}` });
+          break;
+        }
+        const nick = st.nicks[st.i];
+        uiStatus(`Interaktionen: ${st.i + 1} von ${st.nicks.length} · ${st.hits} über der Grenze · ${st.done} blockiert`);
+        let p = null;
+        try { const ini = initialsOf(await getHtml(profileUrl(nick))); const dm = ini && ini.displayUserModel; if (dm) p = personOf(dm); } catch (e) { p = null; }
+        st.i++; st.seen++;
+        const add = (k) => { st.skip[k] = (st.skip[k] || 0) + 1; };
+        if (!p || !p.id) add('nicht lesbar');
+        else if (p.retired) add('gelöscht');
+        else {
+          peopleAdd(Object.assign({ modelName: 'userModel' }, { id: p.id, name: p.nick, pageURL: p.url }));
+          const c = classify(p, 'interaktionen');
+          vmAdd(p, c);
+          const blocked = new Set((gm(K.lists, {}) || {}).blocked || []);
+          if (!c.ignore) add(c.white || (p.age == null ? 'ohne Alter' : 'unter der Grenze'));
+          else if (blocked.has(p.id)) add('schon blockiert');
+          else {
+            st.hits++;
+            if (st.mode === 'block') {
+              let r;
+              try { r = await blockUser(p.id, true); } catch (e) { r = { ok: false, msg: e.message }; }
+              if (r.ok) { st.done++; const l = gm(K.lists, {}) || {}; l.blocked = [...new Set([...(l.blocked || []), p.id])]; gs(K.lists, l); bymeAdd(p); uiLog(`blockiert: ${p.nick} (${p.age})`); }
+              else { st.fail++; recEvent('Interaktionen: Block fehlgeschlagen', { info: `${r.status || ''} ${r.msg || ''}`.trim(), resp: r.text || '' }); }
+            } else uiLog(`würde blockiert: ${p.nick} (${p.age})`);
+          }
+        }
+        gs(ISCAN_K, st);
+        await sleep(1800 + Math.random() * 2000);
+      }
+    } finally { iscanBusy = false; }
+  }
+
+  // ---------- Moppel nach Körpertyp (xHamster kennt kein Gewicht) ----------
+  const BODY_K = 'xh_body';         // { <ID>: Körpertyp wie auf xHamster, z. B. „Large“ }
+  function bodyStage(b) {
+    const t = norm(b);
+    if (!t) return 0;
+    if (/large|bbw|plus|heavy|big/.test(t)) return 3;
+    if (/extra|chubby|full/.test(t)) return 2;
+    if (/curvy/.test(t)) return 1;
+    return 0;
+  }
+  function bodyLearn() {
+    const all = gm(BODY_K, {}) || {};
+    let ch = false;
+    if (/^\/users\//.test(location.pathname)) {
+      const p = profilePerson();
+      const b = p && p.info && p.info['Body type'];
+      if (p && b && all[p.id] !== b) { all[p.id] = b; ch = true; }
+    }
+    // Dating-Suche mit Filter „Large“: alle Treffer sind „Large“ (Vermessung über den Suchfilter)
+    if (/^\/dating/.test(location.pathname) && /(^|[?&])body=large(&|$)/.test(location.search)) {
+      for (const u of (((initials() || {}).datingListComponent || {}).users) || []) if (u && u.id != null && !all[String(u.id)]) { all[String(u.id)] = 'Large'; ch = true; }
+    }
+    if (ch) { const ks = Object.keys(all); if (ks.length > 20000) ks.slice(0, ks.length - 20000).forEach((k) => delete all[k]); gs(BODY_K, all); }
+  }
+  function mopBadge(p) {
+    const s = rules();
+    if (!s.moppel.on || !p || !p.id) return '';
+    const st = bodyStage((gm(BODY_K, {}) || {})[p.id]);
+    if (!st) return '';
+    const l = s.moppel.labels || [];
+    const g = p.gender === 'male' ? 'm' : 'w';
+    return `<span style="display:inline-flex;align-items:center;gap:2px;color:#f0b45a">${st === 3 ? xxlIconSvg(g).replace(/width="20" height="20"/, 'width="14" height="14"') : ''}${esc(l[(st - 1) * 2] || '')}</span>`;
+  }
+  // Dating-Suche: Moppel zuerst (Schalter auf der Einstellungsseite)
+  function mopSort() {
+    if (!rules().moppel.on || !gm('xh_mop_sort', false) || !/^\/dating/.test(location.pathname)) return;
+    const body = gm(BODY_K, {}) || {};
+    const cards = [...document.querySelectorAll('a[href*="/users/"][class*="card"], a[href*="/users/"][class*="Card"]')].filter((a) => !a.closest('header'));
+    const par = cards.length && cards[0].parentElement;
+    if (!par || par.dataset.xhscSorted === String(cards.length)) return;
+    const st = (a) => { const p = People.byUrl.get(urlKey(a.href)); return p ? bodyStage(body[p.id]) : 0; };
+    const sib = cards.filter((a) => a.parentElement === par);
+    const sorted = sib.slice().sort((a, b) => st(b) - st(a));
+    if (sorted.some((a, i) => a !== sib[i])) sorted.forEach((a) => par.appendChild(a));
+    par.dataset.xhscSorted = String(cards.length);
+  }
+
+  // ---------- Kopfzeile: Symbol mit Zahl der Blockierten ----------
+  function hdrIcon() {
+    const menu = document.querySelector('[data-role="header-top-menu"]');
+    const ps = menu && menu.querySelector('[data-nav-item-id="pornstars"]');
+    if (!ps) return;
+    const n = ((gm(K.lists, {}) || {}).blocked || []).length;
+    let d = menu.querySelector('.xhsc-hdr');
+    const sig = `${n}|${OW()}`;
+    if (d && d.dataset.sig === sig) return;
+    if (d) d.remove();
+    const a0 = ps.querySelector('a');
+    const ic0 = a0 && a0.querySelector('.xh-icon:not([class*="arrowIcon"])');
+    const tx0 = a0 && a0.querySelector('[class*="linkText-"]');
+    if (!a0) return;
+    d = document.createElement('div');
+    d.className = String(ps.className).replace(/\bxh-dropdown\b/, '').trim() + ' xhsc-hdr';
+    d.dataset.sig = sig;
+    d.innerHTML = `<a class="${esc(a0.className)}" href="${esc(setUrl())}" title="${esc(`${OW()}-Schutz: ${n} blockiert`)}"><span class="${esc(ic0 ? ic0.className : 'xh-icon')}"><svg viewBox="0 0 640 1280" width="11" height="20" fill="currentColor" aria-hidden="true">${owFigure()}</svg></span> <div class="${esc(tx0 ? tx0.className : '')}"></div></a>`;
+    d.querySelector('a > div').textContent = String(n);
+    d.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); setOpen(); });
+    ps.after(d);
+  }
+
+  // ---------- Kontobindung: Skript gehört zu genau einem xHamster-Konto ----------
+  const OWNER_K = 'xh_owner';
+  function ownerOk() {
+    const m = me();
+    if (!m || !m.id || !meLive) return true;
+    const o = gm(OWNER_K, null);
+    if (!o) { gs(OWNER_K, { id: m.id, nick: m.nick, seit: now(), also: [] }); return true; }
+    return String(o.id) === String(m.id) || (o.also || []).some((x) => String(x.id) === String(m.id));
+  }
+  // weiteres eigenes Konto zulassen (z. B. Testkonten im selben Browser) – die gespeicherten Daten teilen sich alle
+  function ownerRebind() {
+    const m = me(), o = gm(OWNER_K, null) || {};
+    if (!m) return;
+    if (!confirm(`Swinger Companion gehört zu ${o.nick || '?'}. Auch für ${m.nick} verwenden?\n\nBeide Konten teilen sich dann die gespeicherten Daten (Blockierliste, Archiv, Einstellungen). Nur zulassen, wenn ${m.nick} Dein eigenes Konto ist.`)) return;
+    o.also = (o.also || []).filter((x) => String(x.id) !== String(m.id)).concat([{ id: m.id, nick: m.nick, seit: now() }]);
+    gs(OWNER_K, o);
+    location.reload();
+  }
+
+  // ---------- Sicherung: eigener Tampermonkey-Speicher als Datei ----------
+  const BACKUP_SKIP = /^xh_(rpc[qra]_|bkm_|rec$|ha_url$|tab_|oscan_lock$|media_lock$)/;
+  function backupExport() {
+    let keys = [];
+    try { keys = GM_listValues(); } catch (e) { uiToast('Sicherung: Tampermonkey erlaubt das Auflisten nicht.'); return; }
+    const data = {};
+    for (const k of keys) if (/^xh_/.test(k) && !BACKUP_SKIP.test(k)) data[k] = gm(k, null);
+    const m = me();
+    const blob = new Blob([JSON.stringify({ format: 'swinger-companion-xhamster', v: 1, script: VER, at: now(), account: m ? { id: m.id, nick: m.nick } : null, data })], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `swinger-companion-xhamster-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    uiToast(`Sicherung gespeichert (${Object.keys(data).length} Einträge, ohne Home-Assistant-Adresse und Rekorder).`);
+  }
+  function backupImport() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      let j = null;
+      try { j = JSON.parse(await f.text()); } catch (e) { uiToast('Die Datei ist keine Sicherung.'); return; }
+      if (!j || j.format !== 'swinger-companion-xhamster' || !j.data) { uiToast('Die Datei ist keine Sicherung des xHamster-Skripts.'); return; }
+      const m = me();
+      const other = j.account && m && String(j.account.id) !== String(m.id);
+      if (!confirm(`Sicherung vom ${new Date(j.at).toLocaleString()} (${Object.keys(j.data).length} Einträge${j.account ? ', Konto ' + j.account.nick : ''}) einspielen?${other ? '\n\nACHTUNG: Die Sicherung stammt von einem anderen Konto.' : ''}\n\nVorhandene Werte mit gleichem Namen werden ersetzt.`)) return;
+      let n = 0;
+      for (const [k, v] of Object.entries(j.data)) if (/^xh_/.test(k) && !BACKUP_SKIP.test(k) && k !== OWNER_K) { gs(k, v); n++; }
+      rulesCache = null;
+      uiToast(`${n} Einträge eingespielt – Seite wird neu geladen.`);
+      setTimeout(() => location.reload(), 1500);
+    };
+    inp.click();
+  }
+
+  // ---------- Termine aus der gemeinsamen Termin-Datei (meta.termine_file, Zeilen „wann - wo - was - Link“) ----------
+  const TERM_D = '(\\d{1,2})\\.(?:(\\d{1,2})\\.)?(\\d{4})?';
+  const TERM_RE = new RegExp(`^\\s*${TERM_D}(?:\\s*[-–]\\s*${TERM_D})?(?=\\s*(?:[-–]\\s|$))`);
+  function parseTermLine(line) {
+    const m = TERM_RE.exec(line);
+    if (!m) return null;
+    const [, d1, m1, y1, d2, m2, y2] = m;
+    const year = +(y2 || y1 || new Date().getFullYear());
+    const end = d2 ? { d: +d2, m: +(m2 || m1), y: +(y2 || y1 || year) } : { d: +d1, m: +m1, y: +(y1 || year) };
+    if (!end.m) return null;
+    const endDate = new Date(end.y, end.m - 1, end.d);
+    if (endDate.getMonth() !== end.m - 1) return null;
+    const wann = m[0].trim();
+    const parts = line.slice(m[0].length).replace(/^\s*[-–]\s*/, '').split(/\s+[-–]\s+/).map((x) => x.trim()).filter(Boolean);
+    let link = '';
+    if (parts.length > 1 && /^(https?:\/\/|www\.)\S+$/i.test(parts[parts.length - 1])) link = parts.pop();
+    return { wann, wo: parts.shift() || '', was: parts.join(' - '), link, end: endDate };
+  }
+  async function termUpcoming(max = 5) {
+    const r = await SH.call('get', { s: 'meta', k: 'termine_file' }, 15000);
+    const text = (r && r.text) || '';
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const out = [];
+    for (const line of text.split(/\r?\n/)) {
+      const t = parseTermLine(line);
+      if (!t || t.end < today) continue;
+      out.push(t);
+      if (out.length >= max) break;
+    }
+    return out;
+  }
+
+  // ---------- Prüflauf (ab 0.5.0): alle Funktionen ansehen, nichts ändern ----------
+  async function selfTest() {
+    edCss();
+    const res = [];
+    const add = (grp, name, st, info) => res.push({ grp, name, st, info: info || '' });
+    const ini = initials() || {};
+    const path = location.pathname;
+    // Konto und Speicher
+    const m = me();
+    add('Konto', 'Angemeldetes Konto erkannt', m ? 'ok' : 'warn', m ? m.nick : 'nicht angemeldet oder Kopfzeile geändert');
+    const o = gm(OWNER_K, null);
+    add('Konto', 'Kontobindung', ownerOk() ? 'ok' : 'err', o ? `gebunden an ${o.nick}${(o.also || []).length ? ' + ' + o.also.map((y) => y.nick).join(', ') : ''}` : 'noch nicht gebunden');
+    add('Konto', 'Eigenes Geschlecht und Geburtstag', gm('xh_me_gender', '') && gm('xh_me_bday', null) != null ? 'ok' : 'warn', `${gm('xh_me_gender', '') || '?'} · ${ageOf(gm('xh_me_bday', null)) || '?'} J.`);
+    let t0 = now();
+    try { const r = await SH.call('get', { s: 'meta', k: 'schema' }, 15000); add('Briefkasten', 'Gemeinsame Ablage erreichbar', 'ok', `${now() - t0} ms${r ? ' · Format ' + r.schema : ''}`); } catch (e) { add('Briefkasten', 'Gemeinsame Ablage erreichbar', 'err', e.message); }
+    const pr = gm(POPK, null) || {};
+    add('Regeln', 'Regeln von poppen.de', pr.src === 'poppen' ? (now() - (pr.popAt || 0) < 14 * 86400000 ? 'ok' : 'warn') : 'warn', pr.src === 'poppen' ? `Stand ${new Date(pr.popAt || 0).toLocaleString()}` : 'nur Vorgaben – poppen.de einmal öffnen');
+    const plan = oscanPlan();
+    add('Regeln', 'Ignorierte Gruppen', plan.length ? 'ok' : 'warn', plan.map((x) => `${GROUP_NAME[x.gk]} ab ${x.minAge}`).join(', ') || 'keine');
+    try { const l = await fickAll(true); add('Fickliste', 'Fickliste lesbar', 'ok', `${l.length} Einträge · ${(gm('xh_fick_ids', []) || []).length} mit xHamster-Profil`); } catch (e) { add('Fickliste', 'Fickliste lesbar', 'err', e.message); }
+    try { const l = await tplAll(); add('Messenger', 'Textvorlagen lesbar', l.length ? 'ok' : 'warn', `${l.length} Vorlagen`); } catch (e) { add('Messenger', 'Textvorlagen lesbar', 'err', e.message); }
+    try { const t = await termUpcoming(); add('Messenger', 'Termin-Datei', t.length ? 'ok' : 'warn', t.length ? `${t.length} kommende Termine` : 'keine kommenden Termine oder keine Datei'); } catch (e) { add('Messenger', 'Termin-Datei', 'err', e.message); }
+    // Hintergrund-Abrufe (nur lesen)
+    t0 = now();
+    try {
+      const pi = initialsOf(await getHtml(location.origin + '/dating/de?gender=male&minAge=60&maxAge=99&sort=activity'));
+      const us = (((pi || {}).datingListComponent || {}).users) || [];
+      const withAge = us.filter((u) => personOf(u).age != null).length;
+      add('Scan', 'Dating-Suche im Hintergrund lesbar', us.length && withAge ? 'ok' : 'err', `${us.length} Profile, ${withAge} mit Alter · ${now() - t0} ms`);
+    } catch (e) { add('Scan', 'Dating-Suche im Hintergrund lesbar', 'err', e.message); }
+    try {
+      const bi = initialsOf(await getHtml(location.origin + '/my/blocked-users'));
+      add('Scan', 'Blockierliste lesbar', bi && bi.blockedUsersPaging ? 'ok' : 'err', bi ? `${(bi.blockedUsersCollection || []).length} auf Seite 1 von ${(bi.blockedUsersPaging || {}).maxPage || 1}` : 'keine Seitendaten');
+    } catch (e) { add('Scan', 'Blockierliste lesbar', 'err', e.message); }
+    try {
+      const rows = notiRows(await getHtml(location.origin + '/notifications'));
+      add('Scan', 'Benachrichtigungen lesbar', 'ok', `${rows.length} auf Seite 1`);
+    } catch (e) { add('Scan', 'Benachrichtigungen lesbar', 'err', e.message); }
+    add('Scan', 'Kopfzeilen der Seite für Blockieren', apiHdr ? 'ok' : 'warn', apiHdr ? 'mitgeschnitten' : 'noch keine – erscheint, sobald die Seite selbst etwas lädt');
+    const ls = gm(K.lists, {}) || {};
+    add('Scan', 'Blockierliste bekannt', (ls.blocked || []).length ? 'ok' : 'warn', `${(ls.blocked || []).length} blockiert · ${Object.keys(gm(BYME_K, {}) || {}).length} vom Skript · abgeglichen ${gm('xh_blocksync_at', 0) ? new Date(gm('xh_blocksync_at', 0)).toLocaleDateString() : 'nie'}`);
+    add('Scan', 'Vormerkliste', 'ok', `${Object.keys(gm(VORM_K, {}) || {}).length} vorgemerkt · ${vmDue().length} fällig`);
+    // Medien und Home Assistant
+    const ha = haParse(gm(K.ha, ''));
+    add('Home Assistant', 'Adresse eingetragen', ha ? 'ok' : 'warn', ha ? 'eingetragen' : 'fehlt');
+    const ms = mediaStats();
+    add('Home Assistant', 'Bilder und Videos', 'ok', `${ms.pics} Bilder · ${ms.shorts} Shorts · ${ms.videosOn}/${ms.videos} Videos · ${ms.sent} geschickt${ms.waiting ? ` · ${ms.waiting} warten` : ''}`);
+    // diese Seite
+    const sel = (name, q, need = true) => { const ok = !!document.querySelector(q); add('Diese Seite', name, ok ? 'ok' : (need ? 'err' : 'warn'), ok ? '' : 'nicht gefunden: ' + q); };
+    sel('Kopfzeilen-Menü', '[data-role="header-top-menu"] [data-nav-item-id="pornstars"]');
+    if (/^\/users\/(profiles\/)?[^/]+\/?$/.test(path) && ini.displayUserModel) {
+      const own = m && String(ini.displayUserModel.id) === String(m.id);
+      sel('Steckbrief (.user-details)', '.user-details');
+      sel('Rechte Spalte', '.right-column');
+      if (!own) {
+        sel('Knopfleiste', '[data-role="controls-container"]');
+        sel('Freund-Knopf', '[data-role="controls-container"] button[class*="growButton-"]');
+        sel('Fickliste-Knopf eingebaut', '.xhsc-fl-btn');
+        const pp = profilePerson();
+        add('Diese Seite', 'Steckbrief lesbar („I am“)', pp && pp.age != null ? 'ok' : 'err', pp ? `${pp.age || '?'} J. · ${pp.gender || '?'} · Körpertyp ${pp.info['Body type'] || '?'}` : '');
+      }
+    }
+    if (/^\/my\/friends/.test(path)) { sel('Seitenleiste „Friends“', 'ul.friends-side-switcher li.friends'); sel('Fickliste in der Seitenleiste', '.xhsc-fl-side'); }
+    if (/^\/dating/.test(path)) { add('Diese Seite', 'Dating-Treffer in den Seitendaten', (((ini.datingListComponent || {}).users) || []).length ? 'ok' : 'err', `${(((ini.datingListComponent || {}).users) || []).length}`); sel('Markierungen', '.xhsc-badge', false); }
+    if (/^\/my\/messages/.test(path) || document.querySelector('.xh-editable-content')) { sel('Smiley-Leiste', '[class*="emojiDropdown-"]', false); sel('Vorlagen-Knopf', '.xhsc-tpl', false); }
+    if (/^\/my\/edit\/profile/.test(path)) sel('Linke Leiste der Einstellungen', '[data-role="edit-menu"] ul');
+    if (/^\/videos\//.test(path)) add('Diese Seite', 'Video in den Seitendaten', ini.videoModel && ini.videoModel.id ? 'ok' : 'err', '');
+    if (ini.bannerPrefix) add('Diese Seite', 'Werbe-Kennung erkannt', 'ok', ini.bannerPrefix);
+    const bad = res.filter((x) => x.st === 'err').length, warn = res.filter((x) => x.st === 'warn').length;
+    gs('xh_selftest_last', { at: now(), ver: VER, bad, warn, res });
+    recEvent('Prüflauf', { info: `${res.length} Prüfungen · ${bad} Fehler · ${warn} Hinweise`, res: res.filter((x) => x.st !== 'ok').map((x) => `${x.grp}: ${x.name} (${x.st})`) });
+    const ico = { ok: '<span style="color:#7bd88f">✓</span>', warn: '<span style="color:#f0b45a">!</span>', err: '<span style="color:#ff7875">✗</span>' };
+    const ov = document.createElement('div');
+    ov.className = 'xhsc-ov';
+    let grp = '';
+    ov.innerHTML = `<div class="xhsc-ed"><div class="hd"><h3>Prüflauf ${esc(VER)} – ${bad ? `${bad} Fehler` : 'keine Fehler'}${warn ? `, ${warn} Hinweise` : ''}</h3><button type="button" class="x" style="color:#bbb;font-size:22px">×</button></div><div class="bd">
+      ${res.map((x) => { const h = x.grp !== grp ? `<div class="sub" style="font-weight:600;margin:10px 0 2px">${esc(x.grp)}</div>` : ''; grp = x.grp; return `${h}<div style="display:flex;gap:8px"><b style="width:14px">${ico[x.st]}</b><span>${esc(x.name)}${x.info ? ` <span class="muted">– ${esc(x.info)}</span>` : ''}</span></div>`; }).join('')}
+      <p class="muted" style="margin-top:12px">Der Prüflauf ändert nichts. Seitenbezogene Prüfungen gelten für die gerade geöffnete Seite – für vollständige Ergebnisse auch auf einem fremden Profil, in „Friends“, im Messenger und in der Dating-Suche starten.</p></div></div>`;
+    ov.querySelector('.x').onclick = () => ov.remove();
+    ov.addEventListener('mousedown', (e) => { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+    return res;
+  }
+
+  // =====================================================================
   // Opa-Scan (ab 0.2.0): Dating-Suche nach den poppen-Regeln durchgehen und Opas blockieren
   // Erst Probelauf (zählt nur), dann Blockieren: der erste Block wird geprüft, danach Pausen von 2–5 s.
   // Ausgenommen: Whitelist, Freunde, Fickliste, man selbst, schon Blockierte, gelöschte Konten.
@@ -2930,6 +3481,8 @@
     }
     const countries = cty.split(/[,; ]+/).map((x) => x.trim().toLowerCase()).filter((x) => /^[a-z]{2}$/.test(x));
     const st = { mode, plan, countries: countries.length ? countries : [''], pi: 0, ci: 0, page: 1, url: '', seen: 0, hits: 0, done: 0, fail: 0, skip: {}, verified: false, max, started: now(), list: [], err: 0 };
+    // 0.5.0: Vorgemerkte, die inzwischen über der Grenze sind, zuerst
+    st.vq = vmDue().map((p) => ({ id: p.id, nick: p.nick, age: p.age, bday: p.bday, g: p.gender }));
     gs(K.oscan, st);
     recEvent('Opa-Scan gestartet', { info: `${mode} · ${plan.map((x) => x.gender + '≥' + x.minAge).join(', ')} · ${st.countries.join(',') || 'alle'}` });
     oscanRun();
@@ -2954,6 +3507,20 @@
         if (!st) { uiStatus(`${OW()}-Scan angehalten.`); break; }
         if (!lockMine()) { uiStatus(`${OW()}-Scan läuft in einem anderen Tab.`); break; }
         gs('xh_oscan_lock', { tab: TAB_ID, at: now() });
+        if (st.vq && st.vq.length) {
+          const q = st.vq.shift();
+          st.seen++; st.hits++;
+          if (st.list.length < 3000) st.list.push({ id: q.id, nick: q.nick, age: q.age, city: '', g: q.g, vm: 1 });
+          if (st.mode === 'block' && st.done < st.max) {
+            let r;
+            try { r = await blockUser(q.id, true); } catch (e) { r = { ok: false, msg: e.message }; }
+            if (r.ok) { st.done++; st.verified = true; const l = gm(K.lists, {}) || {}; l.blocked = [...new Set([...(l.blocked || []), q.id])]; gs(K.lists, l); bymeAdd({ id: q.id, nick: q.nick, bday: q.bday, gender: q.g }); const v = gm(VORM_K, {}) || {}; delete v[q.id]; gs(VORM_K, v); uiLog(`blockiert (vorgemerkt): ${q.nick} (${q.age})`); }
+            else { st.fail++; st.skip['Block abgelehnt'] = (st.skip['Block abgelehnt'] || 0) + 1; }
+            gs(K.oscan, st);
+            await sleep(2000 + Math.random() * 3000);
+          } else gs(K.oscan, st);
+          continue;
+        }
         if (st.pi >= st.plan.length) { oscanDone(st, 'fertig'); break; }
         const pl = st.plan[st.pi];
         const url = oscanUrl(st);
@@ -2997,6 +3564,7 @@
             st.failRun = 0;
             blocked.add(p.id);
             lists.blocked = [...blocked]; gs(K.lists, lists);
+            bymeAdd(Object.assign({}, p, { bday: (u.personalInfo || {}).birthday }));
             uiLog(`blockiert: ${p.nick} (${p.age}, ${p.city || '?'})`);
             if (!st.verified) {
               st.verified = true;
@@ -3060,8 +3628,8 @@
   hookNetwork();
   // 0.1.7: zuerst, damit es auch bei schnellem Neuladen erreichbar ist
   // 0.2.1: eine Liste für beide Menüs – das Tampermonkey-Menü und das Nutzer-Menü von xHamster (Klick auf den eigenen Avatar)
-  const running = () => !!(gm(K.scan, null) || gm(K.act, null) || gm(K.oscan, null));
-  const stopAll = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs('xh_oscan_lock', null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); };
+  const running = () => !!(gm(K.scan, null) || gm(K.act, null) || gm(K.oscan, null) || gm(ISCAN_K, null));
+  const stopAll = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs(ISCAN_K, null); gs('xh_oscan_lock', null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); };
   const toggleHide = () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? `${OWs()} werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).` : `${OWs()} werden nur abgedunkelt (ab dem nächsten Laden).`); };
   const ACTIONS = [
     { g: 'fl', icon: 'fick', label: () => 'Fickliste', fn: flOpen },
@@ -3069,6 +3637,12 @@
     { g: 'fl', icon: 'stop', label: () => `■ Anhalten (${OW()}-Scan, Scan-Lauf, Aktionstest)`, ddLabel: () => 'Anhalten', fn: stopAll, dd: running },
     { g: 'opa', icon: 'scan', label: () => `${OW()}-Scan: Probelauf (zählt nur)`, fn: () => oscanStart('dry') },
     { g: 'opa', icon: 'block', label: () => `${OW()}-Scan: ${OWs()} blockieren`, fn: () => oscanStart('block') },
+    { g: 'opa', icon: 'scan', label: () => 'Interaktionen prüfen: Probelauf (Benachrichtigungen)', fn: () => iscanStart('dry') },
+    { g: 'opa', icon: 'block', label: () => `Interaktionen prüfen: ${OWs()} blockieren`, fn: () => iscanStart('block') },
+    { g: 'opa', icon: 'reload', label: () => 'Blockierliste abgleichen', fn: () => blockSync().then(relaxCheck).catch((e) => uiStatus('Blockierliste: ' + e.message)) },
+    { g: 'opa', icon: 'rules', label: () => 'Prüflauf (alle Funktionen ansehen)', fn: () => selfTest() },
+    { g: 'opa', icon: 'rules', label: () => 'Sicherung exportieren', fn: backupExport },
+    { g: 'opa', icon: 'rules', label: () => 'Sicherung einspielen', fn: backupImport },
     { g: 'opa', icon: 'rules', label: () => 'Regeln von poppen.de anzeigen', fn: rulesInfo },
     { g: 'opa', icon: 'reload', label: () => 'Regeln von poppen.de neu laden', fn: async () => { await rulesRefresh(true); rulesInfo(); } },
     { g: 'opa', icon: 'eye', label: () => `${OWs()} in der Dating-Suche ${opa().hide ? 'nur abdunkeln' : 'ausblenden'}`, fn: toggleHide },
@@ -3163,6 +3737,15 @@
   function onReady() {
     if (retry503()) return;
     me();
+    // 0.5.0: Kontobindung – bei einem anderen Konto bleibt das Skript aus
+    if (!ownerOk()) {
+      const o = gm(OWNER_K, null) || {};
+      try { GM_registerMenuCommand(`Swinger Companion auch für dieses Konto verwenden (gebunden an ${o.nick || '?'})`, ownerRebind); } catch (e) { /* egal */ }
+      try { if (!sessionStorage.getItem('xhsc_owner_note')) { sessionStorage.setItem('xhsc_owner_note', '1'); setTimeout(() => uiToast(`Swinger Companion ist aus: angemeldet ist ein anderes Konto als ${esc(o.nick || '?')}. Einschalten über das Tampermonkey-Menü „auch für dieses Konto verwenden“.`), 1500); } } catch (e) { /* egal */ }
+      return;
+    }
+    ageWithMe();
+    bodyLearn();
     setTimeout(() => recToHa(true).catch(() => {}), 120000);
     setInterval(() => recToHa(true).catch(() => {}), 30 * 60000);
     recPage();
@@ -3170,14 +3753,17 @@
     peopleWalk(initials());
     // gemeinsame Ablage: Regeln von poppen.de, Fickliste, eigenes Profil
     (async () => {
-      try { if (await rulesRefresh()) { for (const b of document.querySelectorAll('.xhsc-badge')) b.remove(); const pb = document.getElementById('xhsc-prof'); if (pb) pb.remove(); const mn = document.querySelector('.xhsc-mop-nav'); if (mn) mn.remove(); } } catch (e) { /* egal */ }
+      try { if (await rulesRefresh()) { for (const b of document.querySelectorAll('.xhsc-badge')) b.remove(); const pb = document.getElementById('xhsc-prof'); if (pb) pb.remove(); const mn = document.querySelector('.xhsc-mop-nav'); if (mn) mn.remove(); setTimeout(relaxCheck, 2000); } } catch (e) { /* egal */ }
       try { await fickAll(); await ichPut(); await fickGalleryPics(); mediaStart(); } catch (e) { recEvent('Fickliste nicht erreichbar', { info: String(e && e.message || e) }); }
     })();
     if (gm(K.oscan, null)) setTimeout(oscanRun, 3000);
+    if (gm(ISCAN_K, null)) setTimeout(iscanRun, 3500);
+    // Rekorder: neue Gifts (Zähler in den Seitendaten)
+    try { const nm = (initials() || {}).notificationsModel; if (nm && typeof nm.gifts === 'number') { const g0 = gm('xh_gifts_n', 0); if (nm.gifts > g0) recEvent('Neue Gifts', { info: `${g0} → ${nm.gifts}` }); gs('xh_gifts_n', nm.gifts); } } catch (e) { /* egal */ }
     if (gm(K.scan, null)) setTimeout(scanTick, 2500);
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
-    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); mopNav(); setMenu(); adHide(); tplButton(); videoSyncButton(); flOwnBox().catch(() => {}); } catch (e) { /* egal */ } };
+    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); mopNav(); setMenu(); adHide(); tplButton(); videoSyncButton(); flOwnBox().catch(() => {}); hdrIcon(); mopSort(); } catch (e) { /* egal */ } };
     navCss();
     // Nutzer-Menü: entsteht erst beim Öffnen – sofort ergänzen
     try { new MutationObserver(() => { try { ddInsert(); } catch (e) { /* egal */ } }).observe(document.body, { childList: true, subtree: true }); } catch (e) { /* egal */ }

@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.4.0 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.5.0 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -58,6 +58,18 @@ Bei Männern heißt es wie im poppen-Skript „Oma-Schutz“ und „Oma-Scan“ 
   Änderungen, höchstens 15). Ist das Profil gelöscht, zeigt das Archiv „gelöscht seit …“ und alle Stände.
 - **Eigenes Profil:** Kasten „Meine Fickliste“ mit Zählern und den letzten Treffen.
 - **Galerien:** Öffnest Du eine Galerie einer Person aus der Fickliste, kommen die Bilder in deren Bilderliste.
+- **Eigene Regeln für xHamster** (Einstellungsseite): Altersgrenzen mit Schiebereglern, Bezeichnungen, Whitelist,
+  „Grenzen altern mit mir“; Abos (Subscriptions) sind immer ausgenommen. Wer kurz vor der Grenze liegt, wird
+  vorgemerkt und gesperrt, sobald er drüber ist.
+- **Blockierliste abgleichen** und **Regeln geändert**: liest alle Seiten von „Blocked users“; liegen vom Skript
+  Blockierte nach neuen Regeln nicht mehr über der Grenze, fragt das Skript, ob es sie entsperren soll.
+- **Interaktionen prüfen:** Absender aus den Benachrichtigungen (Kommentare, Gifts, Freundschaften), Probelauf oder
+  Blockieren.
+- **Moppel nach Körpertyp:** Abzeichen aus dem Körpertyp (Profil, Dating-Suche „Large“), auf Wunsch zuerst sortiert.
+- **Kopfzeile:** Symbol mit der Zahl der Blockierten.
+- **Kontobindung, Sicherung, Prüflauf:** Das Skript gehört zum ersten angemeldeten Konto (weitere eigene Konten im
+  Tampermonkey-Menü zulassen); Sicherung als Datei; der Prüflauf geht alle Funktionen durch und ändert nichts.
+- **Termine** aus der gemeinsamen Termin-Datei im Vorlagen-Menü des Messengers.
 - **Opa-Scan** (Menü): geht die Dating-Suche ab der „Ignorieren ab“-Grenze durch, je Land (Vorgabe de, at, ch).
   - *Opa-Scan: Probelauf (zählt nur)* – blockiert nichts, zeigt Treffer und Gründe fürs Überspringen.
   - *Opa-Scan: Opas blockieren* – mit Höchstzahl je Lauf (Vorgabe 200). Der erste Block wird geprüft (xHamster muss

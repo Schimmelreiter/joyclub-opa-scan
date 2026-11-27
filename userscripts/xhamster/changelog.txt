@@ -1,6 +1,29 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.5.0 (27.11.2026)
+- Neu: Prüflauf (Einstellungsseite und Tampermonkey-Menü) – geht alle Funktionen durch und ändert nichts: Konto,
+  Briefkasten, Regeln, Fickliste, Textvorlagen, Termine, Abrufe im Hintergrund (Dating-Suche, Blockierliste,
+  Benachrichtigungen), Home Assistant und die Bausteine der geöffneten Seite; Ergebnis mit ✓ / ! / ✗
+- Neu: Blockierliste abgleichen (alle Seiten von „Blocked users“); das Skript merkt sich, wen es selbst blockiert hat
+- Neu: Regeln geändert – liegen vom Skript Blockierte nach den neuen Regeln (Grenzen, Ignorieren, Whitelist) nicht
+  mehr über der Grenze, fragt das Skript, ob es sie entsperren soll („Später“ / „Gesperrt lassen“)
+- Neu: Vormerken – wer kurz vor der Grenze liegt (Warnalter), wird gemerkt und beim nächsten Blockieren zuerst
+  gesperrt, sobald er drüber ist
+- Neu: Interaktionen prüfen – Absender aus den Benachrichtigungen (Kommentare, Gifts, Freundschaften) mit Probelauf
+  und Blockieren
+- Neu: Eigene Bezeichnungen und eigene Whitelist für xHamster (zusätzlich zu poppen.de); Abos (Subscriptions) sind
+  immer ausgenommen
+- Neu: „Grenzen altern mit mir“ für eigene Werte (Geburtstag aus dem eigenen Profil)
+- Neu: Moppel nach Körpertyp – Abzeichen (Kurvig/Üppig/XXL nach den Bezeichnungen von poppen.de) aus dem
+  Körpertyp der Profile und der Dating-Suche „Large“; auf Wunsch zuerst sortiert
+- Neu: Kopfzeile – Symbol mit der Zahl der Blockierten (öffnet die Einstellungsseite)
+- Neu: Kontobindung – das Skript gehört zum ersten angemeldeten Konto; bei einem anderen bleibt es aus, bis es im
+  Tampermonkey-Menü „auch für dieses Konto verwenden“ zugelassen wird
+- Neu: Sicherung exportieren/einspielen (ohne Home-Assistant-Adresse und Rekorder)
+- Neu: Termine aus der gemeinsamen Termin-Datei im Vorlagen-Menü des Messengers
+- Rekorder: neue Arten von Benachrichtigungen und neue Gifts werden vermerkt
+
 0.4.0 (27.11.2026)
 - Neu: Fickliste-Einträge bearbeiten – Dialog im xHamster-Stil mit Status, eigenem Namen, „Auch auf …“ (je Profil
   eigener Status oder „folgt der Person“, gelöscht, Hauptprofil wechseln), Treffen (auch mit Link zu einer JOYclub-
