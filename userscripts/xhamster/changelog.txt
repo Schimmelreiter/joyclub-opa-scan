@@ -1,6 +1,11 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.1.5 (27.11.2026)
+- Aktionstest, Nachrichten: Nimmt xHamster das künstliche Enter nicht an, klickt das Skript den Knopf „Send“ (sobald er
+  freigegeben ist). Klappt das Senden zweimal nicht, wird der Nachrichtenteil übersprungen statt alle Varianten mit
+  Wartezeit durchzuprobieren; Eingabefeld und Knopf werden dabei aufgezeichnet
+
 0.1.4 (27.11.2026)
 - Behoben: Der Scan-Lauf kam bei nicht öffentlichem eigenem Profil nicht aus dem Profil heraus (Umleitung nach
   /users/profiles/…, endloses Neuladen). Jede Seite wird jetzt höchstens einmal angesteuert; leitet xHamster um, wird

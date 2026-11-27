@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.4
+// @version      0.1.5
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -535,18 +535,39 @@
       await sleep(400);
       if (i === 0) recDom('Chat: Eingabe vor dem Senden', document.querySelector('[data-role="input-box"]'));
       for (const t of ['keydown', 'keypress', 'keyup']) ed.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-      const el = await waitFor(() => [...document.querySelectorAll('.message.mine[id^="message-"]')].find((e) => !before.has(e.id)), 15000);
+      const newMsg = () => [...document.querySelectorAll('.message.mine[id^="message-"]')].find((e) => !before.has(e.id));
+      let el = await waitFor(newMsg, 5000);
+      let how = 'Enter';
+      if (!el) {
+        // 0.1.5: künstliches Enter nimmt xHamster evtl. nicht an → Sende-Knopf suchen (erscheint oft erst mit Text)
+        const box = document.querySelector('[data-role="message-input-component"]') || document.querySelector('[data-role="input-box"]');
+        if (i === a.i) recDom('Chat: Eingabe nach Enter (nichts gesendet)', box);
+        const btn = box && (box.querySelector('button[class*="sendButton-"]') || [...box.querySelectorAll('button, [role=button]')].find((b) => visible(b) && !/attach|emoji|image/i.test((b.getAttribute('data-tooltip') || '') + ' ' + (b.getAttribute('aria-label') || '')) &&
+          /^(send|senden)$/i.test(b.textContent.trim())));
+        if (btn) {
+          // der Knopf ist gesperrt, solange xHamster keinen Text erkannt hat
+          if (btn.disabled) { ed.dispatchEvent(new Event('change', { bubbles: true })); ed.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true })); await waitFor(() => !btn.disabled, 3000); }
+          recDom('Chat: Sende-Knopf' + (btn.disabled ? ' (gesperrt)' : ''), btn);
+          if (!btn.disabled) { click(btn); how = 'Knopf'; el = await waitFor(newMsg, 10000); }
+        }
+      }
       const sent = actSave({}) || a;
       if (!el) {
-        recEvent('Nachricht nicht erschienen', { info: `Variante ${i + 1}`, sent: text });
+        const fails = (a.fails || 0) + 1; a.fails = fails;
+        recEvent('Nachricht nicht erschienen', { info: `Variante ${i + 1}`, sent: text, editor: maskStr(String(ed.textContent || '').slice(0, 200)) });
         recDom('Chat: nach dem Senden (nichts erschienen)', document.querySelector('.message-list') || document.body);
+        try { document.execCommand('selectAll', false); document.execCommand('delete', false); } catch (e) { ed.textContent = ''; }
+        if (fails >= 2) { recEvent('Senden klappt nicht – Nachrichtenteil übersprungen (Rekorder an HA senden, ich passe das Skript an)'); actSave({ i: i + 1 }); next((sent.sent || []).length ? 'del' : 'unfriend'); return; }
+        actSave({ i: i + 1, fails });
+        continue;
       } else {
+        a.fails = 0;
         await sleep(1500);
         const w = el.querySelector('.message-wrapper');
         const shown = ((w || el).innerText != null ? (w || el).innerText : (w || el).textContent || '').trim();
         const diff = censorDiff(text, shown);
         sent.sent.push({ id: el.id, i });
-        recEvent('Testnachricht', { info: `${i + 1}: ${diff || 'unverändert'}`, sent: text, shown, html: maskStr((w ? w.innerHTML : '').slice(0, 1500)), censored: diff });
+        recEvent('Testnachricht', { info: `${i + 1} (${how}): ${diff || 'unverändert'}`, sent: text, shown, html: maskStr((w ? w.innerHTML : '').slice(0, 1500)), censored: diff });
         if (i === 0) recDom('Chat: gesendete Nachricht', el);
       }
       actSave({ i: i + 1, sent: sent.sent });
