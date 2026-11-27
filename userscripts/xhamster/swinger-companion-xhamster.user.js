@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.3.0
+// @version      0.3.1
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren (Regeln von poppen.de oder eigene), gemeinsame Fickliste mit Bildern und Videos für Home Assistant, Textvorlagen, ohne Werbung; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1583,6 +1583,12 @@
     act.forEach((li) => li.classList.remove('active'));
     const mine = side.querySelector('.xhsc-fl-side');
     if (mine) mine.classList.add('active');
+    // 0.3.1: auch oben bei den Reitern „Fickliste“ statt „Friends“ markieren
+    const TAB_ON = ['active', 'current-tab'];
+    const tabs = [...document.querySelectorAll('.xh-tabset a.friends')].filter((a) => TAB_ON.some((c) => a.classList.contains(c)));
+    const flTabs = [...document.querySelectorAll('.xh-tabset .xhsc-fl-tab')];
+    tabs.forEach((a) => TAB_ON.forEach((c) => a.classList.remove(c)));
+    flTabs.forEach((a) => TAB_ON.forEach((c) => a.classList.add(c)));
     for (const ul of document.querySelectorAll('ul.friends-additional-switchers')) if (!ul.classList.contains('xh-helper-hidden')) { ul.classList.add('xh-helper-hidden'); hidden.push(ul); }
     const box = document.createElement('div');
     box.className = 'friends-list xhsc-fl-list';
@@ -1591,6 +1597,8 @@
     const leave = () => {
       box.remove(); hidden.forEach((el) => el.classList.remove('xh-helper-hidden'));
       if (mine) mine.classList.remove('active');
+      flTabs.forEach((a) => TAB_ON.forEach((c) => a.classList.remove(c)));
+      tabs.forEach((a) => TAB_ON.forEach((c) => a.classList.add(c)));
       if (location.hash === FL_HASH) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* egal */ }
     };
     for (const li of side.querySelectorAll(':scope > li:not(.xhsc-fl-side)')) li.addEventListener('click', () => { if (box.isConnected) { leave(); if (!li.classList.contains('active') && act.includes(li)) li.classList.add('active'); } }, { once: true });
@@ -1608,7 +1616,8 @@
     for (const ts of document.querySelectorAll('.xh-tabset')) {
       const have = ts.querySelector('.xhsc-fl-tab .value');
       if (have) { if (n != null && have.textContent !== String(n)) have.textContent = String(n); continue; }
-      const fr = [...ts.querySelectorAll('a.friends')].find((a) => /\/my\/friends\/?$/.test(a.getAttribute('href') || ''));
+      // 0.3.1: auf /my/friends selbst hat „Friends“ keinen Link (gewählter Reiter)
+      const fr = [...ts.querySelectorAll('a.friends')].find((a) => /\/my\/friends\/?$/.test(a.getAttribute('href') || '') || (!a.getAttribute('href') && /^\/my\/friends\/?$/.test(location.pathname)));
       if (!fr) continue;
       const a = document.createElement('a');
       a.className = 'followable xhsc-fl-tab';
@@ -2205,8 +2214,11 @@
     for (let i = 0; i < segs.length; i++) await onPart(new Uint8Array((await gmGet(segs[i], 'arraybuffer')).response), i === segs.length - 1, mime);
   }
   // ein Video in Teilen von höchstens 5 MB schicken (Home Assistant setzt sie zusammen); load(cb) liefert die Stücke
-  async function haVideo(pid, k, load) {
-    const resume = Number((await haAsk({ kind: 'vidresume', pid, k })).next) || 0;
+  async function haVideo(rec, k, load) {
+    let pid = '';
+    const rr = await withPid(rec, async (p) => { const r = await haAsk({ kind: 'vidresume', pid: p, k }); if (r.ok) pid = p; return r; });
+    if (!rr.ok) throw new Error(rr.error || 'abgelehnt');
+    const resume = Number(rr.next) || 0;
     let part = 0, ok = false;
     await load(async (bytes, last, mime) => {
       for (let off = 0; off < bytes.length || (off === 0 && !bytes.length); off += PART) {
@@ -2245,12 +2257,33 @@
       setTimeout(() => mediaUpload().catch(() => {}), 3000);
     } catch (e) { /* egal */ }
   }
+  // 0.3.1: Home Assistant kennt die Person unter der ID, mit der das JOYclub-Skript sie geschickt hat – oft ohne
+  // Vorsilbe („10573689“ statt „j:10573689“). Erst die gemerkte, dann die gemeinsame ID, dann ohne Vorsilbe.
+  const PID_K = 'xh_ha_pid';
+  function pidCandidates(rec) {
+    const known = (gm(PID_K, {}) || {})[rec.id];
+    const out = [known, rec.id, String(rec.id).replace(/^[a-z]+:/i, '')];
+    return [...new Set(out.filter(Boolean))];
+  }
+  // fn(pid) → { ok, error }; probiert die Kandidaten, solange Home Assistant „unknown picture“ meldet
+  async function withPid(rec, fn) {
+    let last = { ok: false, error: 'unknown picture' };
+    for (const pid of pidCandidates(rec)) {
+      last = await fn(pid);
+      if (last.ok || !/unknown picture/.test(last.error || '')) {
+        if (last.ok) { const m = gm(PID_K, {}) || {}; if (m[rec.id] !== pid) { m[rec.id] = pid; gs(PID_K, m); } }
+        return last;
+      }
+    }
+    return last;
+  }
   let mediaBusy = false;
   const mediaLockMine = () => { const l = gm('xh_media_lock', null); return !l || l.tab === TAB_ID || now() - l.at > 120000; };
   async function mediaUpload() {
     if (mediaBusy || !haParse(gm(K.ha, '')) || !mediaLockMine()) return;
     mediaBusy = true;
     const t0 = now();
+    if (gm('xh_media_ver', '') !== VER) { gs(WAIT_K, {}); gs('xh_media_ver', VER); }
     try {
       const done = new Set(gm(DONE_K, []) || []);
       const wait = gm(WAIT_K, {}) || {};
@@ -2268,17 +2301,17 @@
               const blob = x.response;
               const mime = (blob && blob.type) || 'image/jpeg';
               const buf = new Uint8Array(await blob.arrayBuffer());
-              const r = await haAsk({ kind: 'pic', pid: rec.id, k: p.k, mime: /^image\//.test(mime) ? mime : 'image/jpeg', data: b64(buf) });
+              const r = await withPid(rec, (pid) => haAsk({ kind: 'pic', pid, k: p.k, mime: /^image\//.test(mime) ? mime : 'image/jpeg', data: b64(buf) }));
               ok = !!r.ok; why = r.error || '';
             } else if (p.short) {
               const src = await shortSource(p.page);
               if (!src) { why = 'keine Adresse'; } else if (src.mp4) {
-                ok = await haVideo(rec.id, p.k, async (cb) => { const x = await gmGet(src.mp4, 'arraybuffer'); await cb(new Uint8Array(x.response), true, 'video/mp4'); });
-              } else ok = await haVideo(rec.id, p.k, (cb) => hlsParts(src.hls, cb));
+                ok = await haVideo(rec, p.k, async (cb) => { const x = await gmGet(src.mp4, 'arraybuffer'); await cb(new Uint8Array(x.response), true, 'video/mp4'); });
+              } else ok = await haVideo(rec, p.k, (cb) => hlsParts(src.hls, cb));
             } else {
               const u = vurl[p.vid];
               if (!u || now() - u.at > 2.5 * 3600000) { continue; } // wird beim nächsten Öffnen des Videos geladen
-              ok = await haVideo(rec.id, p.k, (cb) => hlsParts(u.u, cb));
+              ok = await haVideo(rec, p.k, (cb) => hlsParts(u.u, cb));
             }
           } catch (e) { why = String((e && e.message) || e); }
           if (ok) { done.add(p.k); delete wait[p.k]; gs(DONE_K, [...done].slice(-20000)); }

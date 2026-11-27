@@ -1,6 +1,12 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.3.1 (27.11.2026)
+- Behoben: Bilder und Videos kamen nicht in Home Assistant an – Home Assistant kennt Personen unter der ID aus der
+  Lieferung des JOYclub-Skripts (oft ohne Vorsilbe, z. B. „10573689“ statt „j:10573689“). Das Skript probiert jetzt
+  beide und merkt sich die passende; Wartezeiten aus 0.3.0 werden beim Update zurückgesetzt
+- Behoben: In „Friends“ fehlte oben der Reiter „Fickliste“, und bei geöffneter Fickliste war oben „Friends“ markiert
+
 0.3.0 (27.11.2026)
 - Eigene Altersgrenzen mit Schiebereglern (je Gruppe drei Griffe: Stufe 1, Stufe 2, Ignorieren ab; dazu markieren und
   ignorieren). Vorgabe sind die Werte von poppen.de; geänderte Gruppen tragen „eigene Werte für xHamster“ und lassen sich

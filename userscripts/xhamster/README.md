@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.3.0 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.3.1 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
