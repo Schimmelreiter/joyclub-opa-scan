@@ -1,6 +1,12 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.3 (27.11.2026)
+- Fickliste: steht jetzt in „Friends“ an Stelle der Freundesliste (Eintrag „Fickliste“ in der Seitenleiste wird aktiv),
+  ein Fick je Zeile: links Bild, Name, Status und Profile, rechts Treffen (Datum, Uhrzeit, Club, Anlass, Link, Notiz)
+  und Anmerkung (Klick zeigt sie ganz). Reiter im Profil und Nutzer-Menü führen dorthin; ein anderer Eintrag der
+  Seitenleiste stellt die Seite wieder her
+
 0.2.2 (27.11.2026)
 - Fickliste als Übersicht: Reiter „Fickliste“ hinter „Friends“ im eigenen Profil, Eintrag in der Seitenleiste von
   „Friends“ (zwischen „Friends“ und „Subscriptions“) und im Nutzer-Menü. Zeigt alle Personen der gemeinsamen

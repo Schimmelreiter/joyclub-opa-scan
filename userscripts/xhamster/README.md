@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.2.2 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.2.3 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -31,7 +31,8 @@ Stand: Version 0.2.2 – Änderungen siehe [changelog.txt](changelog.txt)
   Hauptprofil (und dem xHamster-Profil unter „Auch auf …“), wird dieser Eintrag geändert. Neue Personen bekommen das
   xHamster-Profil als Hauptprofil und ein Vorschaubild.
 - **Fickliste als Übersicht:** Reiter „Fickliste“ hinter „Friends“ im eigenen Profil, in der Seitenleiste von „Friends“
-  und im Nutzer-Menü – alle Personen mit Bild, Status, Treffen und Profil-Links, Filter nach Status, Suche.
+  und im Nutzer-Menü. Sie erscheint in „Friends“ an Stelle der Freundesliste, ein Fick je Zeile: links Bild, Name,
+  Status und Profile, rechts Treffen und Anmerkung; Filter nach Status, Suche.
 - **Galerien:** Öffnest Du eine Galerie einer Person aus der Fickliste, kommen die Bilder in deren Bilderliste.
 - **Opa-Scan** (Menü): geht die Dating-Suche ab der „Ignorieren ab“-Grenze durch, je Land (Vorgabe de, at, ch).
   - *Opa-Scan: Probelauf (zählt nur)* – blockiert nichts, zeigt Treffer und Gründe fürs Überspringen.

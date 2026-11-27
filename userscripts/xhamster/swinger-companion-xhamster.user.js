@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.2
+// @version      0.2.3
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1401,53 +1401,94 @@
     return '';
   }
   const flName = (r) => String(r.alias || (r.main && (r.main.nick || r.main.name)) || (r.ext && r.ext.name) || r.id);
-  function flRowHtml(r) {
+  // Ein Fick je Zeile: links Bild, Name, Status und Profile (wie ein Eintrag in „Friends“), rechts Treffen und Anmerkung
+  const deDate = (d) => String(d || '').split('-').reverse().join('.');
+  function flItemHtml(r) {
     const nick = (r.main && (r.main.nick || r.main.name)) || (r.ext && r.ext.name) || '';
-    const name = r.alias && nick && norm(r.alias) !== norm(nick) ? `${esc(r.alias)} <span style="color:#999">(${esc(nick)})</span>` : esc(flName(r));
-    const img = r.thumb && /^data:image\//.test(r.thumb) ? `<img src="${esc(r.thumb)}" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">`
-      : `<div style="width:56px;height:56px;border-radius:8px;background:#3a3d44;display:flex;align-items:center;justify-content:center;font:600 22px system-ui;color:#bbb">${esc(flName(r).slice(0, 1).toUpperCase())}</div>`;
+    const name = r.alias && nick && norm(r.alias) !== norm(nick) ? `${esc(r.alias)} <span style="opacity:.6">(${esc(nick)})</span>` : esc(flName(r));
+    const mainUrl = profUrl(r.main);
+    const img = r.thumb && /^data:image\//.test(r.thumb) ? `<img class="xh-avatar normal" src="${esc(r.thumb)}" alt="" style="width:80px;height:80px;object-fit:cover">`
+      : `<div class="xh-avatar normal" style="width:80px;height:80px;background:#3a3d44;display:flex;align-items:center;justify-content:center;font:600 30px system-ui;color:#bbb">${esc(flName(r).slice(0, 1).toUpperCase())}</div>`;
     const profs = [r.main, ...(r.profiles || [])].filter((p) => p && p.pf && !p.dead && !p.deleted && !p.gone);
-    const links = profs.map((p) => { const u = profUrl(p); const lab = esc(p.pf === 'other' ? (p.pfName || 'Sonstige') : (PF_NAME[p.pf] || p.pf)); return u ? `<a href="${esc(u)}" target="_blank" rel="noopener" style="color:#9ec5ff">${lab}</a>` : `<span>${lab}${p.text ? ': ' + esc(p.text) : ''}</span>`; }).join(' · ');
-    const meets = (r.meets || []).filter((m) => m && m.date).sort((a, b) => String(b.date).localeCompare(String(a.date)));
-    const last = meets[0] ? `zuletzt ${esc(meets[0].date.split('-').reverse().join('.'))}${meets[0].club ? ' · ' + esc(meets[0].club) : ''}` : '';
-    const st = r.status ? `<b style="color:${FCOL[r.status] || '#ccc'}">${esc(FSTAT[r.status] || r.status)}</b>` : '<span style="color:#999">ohne Status</span>';
-    return `<div class="xhsc-fl-row" style="display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid #333">${img}<div style="min-width:0"><div style="font-weight:600">${name}</div><div style="color:#ccc">${st}${meets.length ? ` · ${meets.length} Treffen` : ''}${last ? ' · ' + last : ''}</div><div style="font-size:12px;color:#aaa">${links}</div></div></div>`;
+    const links = profs.map((p) => {
+      const u = profUrl(p);
+      const lab = esc(p.pf === 'other' ? (p.pfName || 'Sonstige') : (PF_NAME[p.pf] || p.pf)) + (p !== r.main && (p.name || p.nick) && norm(p.name || p.nick) !== norm(nick) ? ': ' + esc(p.name || p.nick) : '');
+      return u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${lab}</a>` : `<span>${lab}${p.text ? ': ' + esc(p.text) : ''}</span>`;
+    }).join(' · ');
+    const st = r.status ? `<b style="color:${FCOL[r.status] || 'inherit'}">${esc(FSTAT[r.status] || r.status)}</b>` : '<span style="opacity:.6">ohne Status</span>';
+    const meets = (r.meets || []).filter((m) => m && (m.date || m.club || m.where)).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    const meetHtml = meets.length ? `<div style="font-weight:600;margin-bottom:2px">Treffen (${meets.length})</div>` + meets.slice(0, 8).map((m) => {
+      const bits = [m.date ? deDate(m.date) + (m.time ? ' ' + esc(m.time) : '') : '', esc(m.club || ''), esc(m.where || '')].filter(Boolean).join(' · ');
+      const l = m.link ? ` <a href="${esc(m.link)}" target="_blank" rel="noopener">Link</a>` : '';
+      return `<div>${bits || '–'}${l}${m.note ? `<div style="opacity:.7;font-size:12px">${esc(String(m.note).slice(0, 200))}</div>` : ''}</div>`;
+    }).join('') + (meets.length > 8 ? `<div style="opacity:.6">… und ${meets.length - 8} weitere</div>` : '') : '';
+    const notes = String(r.notes || '').trim();
+    const noteHtml = notes ? `<div style="font-weight:600;margin:6px 0 2px">Anmerkung</div><div class="xhsc-fl-note" style="white-space:pre-wrap;max-height:7.5em;overflow:hidden;cursor:pointer" title="Klicken: ganz anzeigen">${esc(notes)}</div>` : '';
+    const right = meetHtml || noteHtml ? meetHtml + noteHtml : '<span style="opacity:.5">Keine Treffen, keine Anmerkung.</span>';
+    return `<div class="item friend xhsc-fl-item" style="float:none;width:auto;display:flex;gap:16px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(128,128,128,.25)">
+      <div style="display:flex;gap:12px;flex:0 0 300px;min-width:0"><div class="image-container avatar-container normal">${mainUrl ? `<a href="${esc(mainUrl)}" target="_blank" rel="noopener">${img}</a>` : img}</div>
+      <div class="info" style="min-width:0"><div class="info-line">${mainUrl ? `<a href="${esc(mainUrl)}" target="_blank" rel="noopener">${name}</a>` : name}</div><div>${st}</div><div style="font-size:12px;opacity:.85">${links}</div></div></div>
+      <div style="flex:1 1 auto;min-width:0;font-size:13px;line-height:1.45">${right}</div></div>`;
   }
-  async function flOpen() {
-    if (document.getElementById('xhsc-fl')) return;
-    const d = document.createElement('div');
-    d.id = 'xhsc-fl';
-    d.style.cssText = 'position:fixed;inset:0;z-index:2147483645;background:rgba(0,0,0,.6);display:flex;justify-content:center;align-items:flex-start;overflow:auto;padding:40px 12px';
-    d.innerHTML = `<div style="background:#1f2125;color:#eee;border:1px solid #444;border-radius:12px;width:min(760px,100%);padding:16px 20px;font:13.5px/1.45 system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.6)">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b style="font-size:18px">Fickliste</b><button data-a="close" type="button" style="background:#444;color:#fff;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">✕</button></div>
-      <div data-f style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0"></div>
-      <input data-q type="search" placeholder="Name suchen …" style="width:100%;box-sizing:border-box;background:#2a2c31;color:#eee;border:1px solid #444;border-radius:6px;padding:6px 8px;margin-bottom:6px">
-      <div data-l><span style="color:#999">Lade …</span></div></div>`;
-    const close = () => { d.remove(); if (location.hash === FL_HASH) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* egal */ } };
-    d.addEventListener('click', (e) => { if (e.target === d) close(); });
-    d.querySelector('[data-a=close]').onclick = close;
-    document.body.appendChild(d);
+  // Liste mit Filter und Suche in einen Behälter zeichnen
+  async function flRender(box) {
+    box.innerHTML = '<span style="opacity:.6">Lade die Fickliste …</span>';
     let list = [];
-    try { list = await fickAll(true); } catch (e) { d.querySelector('[data-l]').innerHTML = `<span style="color:#ff7875">Fickliste nicht erreichbar: ${esc(e.message)}</span>`; return; }
+    try { list = await fickAll(true); } catch (e) { box.innerHTML = `<span style="color:#e53935">Fickliste nicht erreichbar: ${esc(e.message)}</span>`; return; }
+    box.innerHTML = `<div data-f style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px"></div>
+      <input data-q type="search" placeholder="Name suchen …" style="width:100%;max-width:360px;box-sizing:border-box;border:1px solid rgba(128,128,128,.5);border-radius:6px;padding:6px 8px;margin-bottom:6px;background:transparent;color:inherit">
+      <div data-l class="mixed-list"></div>`;
     let flt = gm('xh_fl_filter', 'all');
-    const f = d.querySelector('[data-f]'), q = d.querySelector('[data-q]'), l = d.querySelector('[data-l]');
+    const f = box.querySelector('[data-f]'), q = box.querySelector('[data-q]'), l = box.querySelector('[data-l]');
     const draw = () => {
       const cnt = (k) => (k === 'all' ? list.length : k === 'none' ? list.filter((r) => !r.status).length : list.filter((r) => r.status === k).length);
       f.innerHTML = '';
       for (const [k, v] of [['all', 'Alle'], ...Object.entries(FSTAT), ['none', 'ohne Status']]) {
         const b = document.createElement('button'); b.type = 'button';
         b.textContent = `${v} (${cnt(k)})`;
-        b.style.cssText = `border:0;border-radius:6px;padding:3px 10px;cursor:pointer;color:#fff;background:${k === flt ? (FCOL[k] || '#1565c0') : '#3a3d44'}`;
+        b.style.cssText = `border:0;border-radius:6px;padding:3px 10px;cursor:pointer;color:#fff;background:${k === flt ? (FCOL[k] || '#1565c0') : '#5a5d64'}`;
         b.onclick = () => { flt = k; gs('xh_fl_filter', k); draw(); };
         f.appendChild(b);
       }
       const t = norm(q.value);
       const rows = list.filter((r) => (flt === 'all' || (flt === 'none' ? !r.status : r.status === flt)) && (!t || norm(flName(r)).includes(t) || [r.main, ...(r.profiles || [])].some((p) => p && norm(p.nick || p.name).includes(t))))
         .sort((a, b) => flName(a).localeCompare(flName(b), 'de', { sensitivity: 'base' }));
-      l.innerHTML = rows.length ? rows.map(flRowHtml).join('') : '<span style="color:#999">Keine Einträge.</span>';
+      l.innerHTML = rows.length ? rows.map(flItemHtml).join('') : '<span style="opacity:.6">Keine Einträge.</span>';
+      for (const n of l.querySelectorAll('.xhsc-fl-note')) n.onclick = () => { n.style.maxHeight = n.style.maxHeight ? '' : '7.5em'; };
     };
     q.oninput = draw;
     draw();
+  }
+  // In „Friends“ (/my/friends): an Stelle der Freundesliste, Eintrag „Fickliste“ in der Seitenleiste aktiv
+  function flPage() {
+    const col = document.querySelector('.user-content-section .content-column');
+    const side = document.querySelector('ul.friends-side-switcher');
+    if (!col || !side) return false;
+    if (col.querySelector('.xhsc-fl-list')) return true;
+    const hidden = [];
+    for (const el of col.children) if (!el.classList.contains('xh-helper-hidden')) { el.classList.add('xh-helper-hidden'); hidden.push(el); }
+    const act = [...side.querySelectorAll(':scope > li.active')];
+    act.forEach((li) => li.classList.remove('active'));
+    const mine = side.querySelector('.xhsc-fl-side');
+    if (mine) mine.classList.add('active');
+    for (const ul of document.querySelectorAll('ul.friends-additional-switchers')) if (!ul.classList.contains('xh-helper-hidden')) { ul.classList.add('xh-helper-hidden'); hidden.push(ul); }
+    const box = document.createElement('div');
+    box.className = 'friends-list xhsc-fl-list';
+    col.prepend(box);
+    // anderen Eintrag der Seitenleiste gewählt → Fickliste weg, Seite wie vorher
+    const leave = () => {
+      box.remove(); hidden.forEach((el) => el.classList.remove('xh-helper-hidden'));
+      if (mine) mine.classList.remove('active');
+      if (location.hash === FL_HASH) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* egal */ }
+    };
+    for (const li of side.querySelectorAll(':scope > li:not(.xhsc-fl-side)')) li.addEventListener('click', () => { if (box.isConnected) { leave(); if (!li.classList.contains('active') && act.includes(li)) li.classList.add('active'); } }, { once: true });
+    flRender(box);
+    return true;
+  }
+  // Übersicht öffnen: in „Friends“ an Ort und Stelle, sonst dorthin wechseln
+  function flOpen() {
+    if (/^\/my\/friends\/?$/.test(location.pathname) && flPage()) { if (location.hash !== FL_HASH) try { history.replaceState(null, '', location.pathname + location.search + FL_HASH); } catch (e) { /* egal */ } return; }
+    location.assign(flUrl());
   }
   // Reiter „Fickliste“ hinter „Friends“ (nur im eigenen Profil, dort zeigt „Friends“ auf /my/friends)
   function flTab() {
@@ -1478,7 +1519,7 @@
       fr.after(li);
     }
   }
-  function flCheckHash() { if (location.hash === FL_HASH) flOpen(); }
+  function flCheckHash() { if (location.hash === FL_HASH && /^\/my\/friends\/?$/.test(location.pathname)) flPage(); }
 
   // =====================================================================
   // Opa-Scan (ab 0.2.0): Dating-Suche nach den poppen-Regeln durchgehen und Opas blockieren
@@ -1791,11 +1832,11 @@
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
     const tick = () => { try { profileBox(); decorate(); flTab(); } catch (e) { /* egal */ } };
-    flCheckHash();
-    window.addEventListener('hashchange', flCheckHash);
     // Nutzer-Menü: entsteht erst beim Öffnen – sofort ergänzen
     try { new MutationObserver(() => { try { ddInsert(); } catch (e) { /* egal */ } }).observe(document.body, { childList: true, subtree: true }); } catch (e) { /* egal */ }
     tick();
+    flCheckHash();
+    window.addEventListener('hashchange', flCheckHash);
     setInterval(tick, 1500);
     // Seitenwechsel ohne Neuladen: Stand der neuen Seite aufzeichnen
     let last = location.href;
