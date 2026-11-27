@@ -1,6 +1,9 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.6 (27.11.2026)
+- Rekorder-Befehle (Scan-Lauf, Aktionstest, Rekorder …) nur noch im Tampermonkey-Menü, nicht im Nutzer-Menü von xHamster
+
 0.2.5 (27.11.2026)
 - Kopfzeile: „Live Sex“, „Nude Chat“ und „Premium Videos“ ausgeblendet
 - Bei „Benutzer ist Moppel-Liebhaber“ (Einstellung im poppen-Skript) steht vor „Pornstars“ ein Link zur Dating-Suche

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.5
+// @version      0.2.6
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1911,7 +1911,7 @@
     frag.appendChild(head);
     let lastG = '';
     for (const x of ACTIONS) {
-      if (x.gate && !recGate()) continue;
+      if (x.g === 'rec') continue;   // 0.2.6: Rekorder-Befehle nur im Tampermonkey-Menü
       if (x.dd && !x.dd()) continue;
       if (lastG && x.g !== lastG) sep();
       lastG = x.g;
