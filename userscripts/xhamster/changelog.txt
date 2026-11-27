@@ -1,6 +1,11 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.5 (27.11.2026)
+- Kopfzeile: „Live Sex“, „Nude Chat“ und „Premium Videos“ ausgeblendet
+- Bei „Benutzer ist Moppel-Liebhaber“ (Einstellung im poppen-Skript) steht vor „Pornstars“ ein Link zur Dating-Suche
+  mit Figur „Large“ (Geschlecht wie im poppen-Skript), mit dessen Symbol und Namen (Bezeichnung der Stufe 3, Mehrzahl)
+
 0.2.4 (27.11.2026)
 - Fickliste-Knopf in der Knopfleiste fremder Profile hinter „Friend/Unfriend“, mit den Symbolen des JOYclub-Skripts
   (Umriss = nicht eingetragen, gefüllt = Will ich, rot = Gefickt, durchgestrichen = Nie wieder!/Nein, danke!).

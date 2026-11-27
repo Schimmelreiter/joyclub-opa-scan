@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.2.4 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.2.5 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -41,6 +41,8 @@ Stand: Version 0.2.4 – Änderungen siehe [changelog.txt](changelog.txt)
     „blocked“ melden), danach 2–5 s Pause je Block. Bei Fehler 503 wartet er mit steigendem Abstand.
   - Ausgenommen: Whitelist, Freunde, Fickliste, man selbst, schon Blockierte, gelöschte Konten, Profile ohne Alter.
   - Läuft im Hintergrund des Tabs weiter (auch nach Neuladen), *■ Anhalten* oder „Abbrechen“ im Kasten stoppt ihn.
+- **Kopfzeile:** „Live Sex“, „Nude Chat“ und „Premium Videos“ sind ausgeblendet. Ist im poppen-Skript „Benutzer ist
+  Moppel-Liebhaber“ an, steht vor „Pornstars“ ein Link zur Dating-Suche mit Figur „Large“, Name und Symbol wie dort.
 - **Fehler 503:** Die Seite wird mit steigendem Abstand (5 s, 10 s, 20 s … höchstens 5 Minuten) neu geladen.
 
 ## Gemeinsame Ablage (Briefkasten)

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.4
+// @version      0.2.5
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -502,7 +502,7 @@
     let u = null;
     try { u = ini.layout.headerWrapperProps.headerDesktopProps.userHeadProps.user; } catch (e) { u = null; }
     if (!u) try { u = ini.commentsComponent.authorizedUser; } catch (e) { u = null; }
-    if (u && u.id) { const r = { id: String(u.id), nick: u.name || '' }; gs('xh_me', r); recGateUpdate(r.nick).catch(() => {}); return r; }
+    if (u && u.id) { const r = { id: String(u.id), nick: u.name || '' }; gs('xh_me', r); try { if (u.personalInfo && u.personalInfo.gender && u.personalInfo.gender.name) gs('xh_me_gender', u.personalInfo.gender.name); } catch (e) { /* egal */ } recGateUpdate(r.nick).catch(() => {}); return r; }
     return gm('xh_me', null);
   }
   function partner() {
@@ -1026,6 +1026,8 @@
     watch: true,
     whitelist: { names: [], prefixes: ['Pop-MOD-'] },
     expert: { sharedLimits: true },
+    // Moppel-Liebhaber (nur an/aus, Bezeichnungen, gesuchte Typen)
+    moppel: { on: false, labels: ['Kurvig', 'Kurvige', 'Üppig', 'Üppige', 'XXL', 'XXL'], types: ['m', 'w'] },
   };
   const AGE_MAX = 99;
   const openTop = (x) => (x >= AGE_MAX ? Infinity : x);
@@ -1045,7 +1047,7 @@
     }
     for (const [p, e] of Object.entries(st)) {
       if (!e || typeof e !== 'object' || !('v' in e)) continue;
-      if (!/^(groups\.|warnYears$|watch$|whitelist\.(names|prefixes)$|expert\.sharedLimits$)/.test(p)) continue;
+      if (!/^(groups\.|warnYears$|watch$|whitelist\.(names|prefixes)$|expert\.sharedLimits$|moppel\.(on|labels|types)$)/.test(p)) continue;
       if (p === 'whitelist.names') { if (Array.isArray(e.v)) setPath(s, p, clone(e.v)); continue; }
       const def = p in flatDef ? flatDef[p] : getPath(POP_DEFAULTS, p);
       if (def !== undefined && stable(def) !== stable(e.src)) continue;
@@ -1074,6 +1076,8 @@
     const r = gm(POPK, null) || {};
     rulesCache = popRules(r.stored);
     rulesCache.ruhr = !!r.ruhr;
+    rulesCache.popG = r.popG || [];
+    rulesCache.sextype = r.sextype || [];
     rulesCache.from = r.src === 'poppen' ? `poppen.de (Stand ${new Date(r.popAt || r.at || 0).toLocaleString()})` : 'Vorgaben des poppen-Skripts';
     return rulesCache;
   }
@@ -1084,9 +1088,9 @@
     try { r = await SH.call('get', { s: 'meta', k: 'poppen_gm' }, 20000); } catch (e) { recEvent('Briefkasten nicht erreichbar', { info: String(e && e.message || e) }); gs(POPK, Object.assign({}, cur || {}, { at: now() })); return false; }
     const data = (r && r.data) || null;
     const next = data && data.vaf2_settings !== undefined
-      ? { at: now(), src: 'poppen', popAt: r.at || 0, popVer: r.ver || '', stored: data.vaf2_settings || {}, ruhr: ruhrOf(((data.vaf2_me || {}).cities) || []) }
+      ? { at: now(), src: 'poppen', popAt: r.at || 0, popVer: r.ver || '', stored: data.vaf2_settings || {}, ruhr: ruhrOf(((data.vaf2_me || {}).cities) || []), popG: ((data.vaf2_me || {}).g) || [], sextype: data.vaf2_my_sextype || [] }
       : { at: now(), src: 'vorgabe', stored: {}, ruhr: false };
-    const changed = !cur || stable(cur.stored || {}) !== stable(next.stored) || cur.ruhr !== next.ruhr;
+    const changed = !cur || stable(cur.stored || {}) !== stable(next.stored) || cur.ruhr !== next.ruhr || stable(cur.popG || []) !== stable(next.popG || []);
     gs(POPK, next); rulesCache = null;
     return changed;
   }
@@ -1607,6 +1611,52 @@
   }
   function flCheckHash() { if (location.hash === FL_HASH && /^\/my\/friends\/?$/.test(location.pathname)) flPage(); }
 
+
+  // =====================================================================
+  // Kopfzeile (ab 0.2.5): Werbe-Links „Live Sex“, „Nude Chat“, „Premium Videos“ ausblenden; bei „Benutzer ist
+  // Moppel-Liebhaber“ (poppen-Einstellung) vor „Pornstars“ der Link zur Moppel-Suche, Name wie im poppen-Skript
+  // (Bezeichnung der Stufe 3, Mehrzahl)
+  // =====================================================================
+  const XXL_ICON = { w: '<mask id="__ID__"><rect width="64" height="64" fill="#fff"/> <path d="M11.5 31.5 C14 36 22 37 28.5 34.5 C31 33.5 33 32 39.5 31.5" stroke="#000" stroke-width="1.6" fill="none" stroke-linecap="round"/> <path d="M13.5 47.8 Q24 52 37 48.4" stroke="#000" stroke-width="1.5" fill="none" stroke-linecap="round"/> <path d="M22.8 23 C23.8 26 24.2 30 23.6 33.5" stroke="#000" stroke-width="0.9" fill="none" stroke-linecap="round"/> <path d="M31.7 52.5 L31.7 61" stroke="#000" stroke-width="1.2" stroke-linecap="round"/> <circle cx="21.5" cy="41" r="1" fill="#000"/> </mask> <path d="M30.5 4.5 C33.5 1 39.5 1.5 41 6 C42 9.5 41 12.5 43 15.5 C44.8 18 44.5 21.5 42.5 23.5 C42 20.5 40 18.5 38 17.5 C39.5 14 38.5 10 36 8.5 C34 7.3 31.5 7.2 30.5 4.5Z"/> <path d="M30.2 5.5 C33.5 4 37.5 5.5 38 9.5 C38.4 12.5 36.5 15 34 15.3 C31.5 15.6 29.5 14 29 11.5 C28.6 9.5 28.8 7 30.2 5.5Z"/> <path d="M31.8 14.8 L36 14.8 L36.6 18 L31.2 18Z"/> <path d="M41 19.5 C44.5 22 45.6 27 45.3 32 C45 36 44.5 39.5 42.5 42.5" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round"/> <g mask="url(#__ID__)"> <path d="M26 18 C31 16.6 37 16.8 40 18.5 C41.8 20 42 23 41.6 26.5 C41.3 29 40.5 30.5 39.5 31.5 C34 32 31 33.5 28.5 35 C22 38 13.5 37 11 33 C9.5 30 10.5 25.5 13.5 22.5 C16 19.5 21 18.5 26 18Z"/> <path d="M14 34 C20 36.5 26 36 30 34 L40.5 31.5 C42.5 35 43 40 41.5 44 C40.5 47 38.5 48.8 36 49.5 C30 51.5 18.5 51 13 48 C8.5 45.5 7.5 40 9.5 37 C10.8 35 12 34.2 14 34Z"/> <path d="M19 49.5 C18.5 53.5 19.8 57.5 21.5 61.5 L41 61.5 C41.8 57.5 42 53.5 40.5 48.5Z"/> </g> <path d="M21 62 L30 62 L29.5 63.6 L21.5 63.6Z"/><path d="M33.5 62 L41.5 62 L41 63.6 L33.5 63.6Z"/>', m: '<mask id="__ID__"><rect width="64" height="64" fill="#fff"/> <path d="M20.5 27 C23.5 30.5 28 30.8 31 28.5 M33 28.5 C36 30.8 40.5 30.5 43.5 27" stroke="#000" stroke-width="1.1" fill="none" stroke-linecap="round"/> <path d="M14.5 46 C22 51 42 51 49.5 46" stroke="#000" stroke-width="1.6" fill="none" stroke-linecap="round"/> <circle cx="32" cy="41" r="1.1" fill="#000"/> <path d="M28.3 13.5 C30 15 34 15 35.7 13.5" stroke="#000" stroke-width="0.7" fill="none" stroke-linecap="round"/> <path d="M32 50.5 L32 61.5" stroke="#000" stroke-width="1.3" stroke-linecap="round"/> </mask> <path mask="url(#__ID__)" d="M27 8.5 C26.3 4.5 28.8 2.2 32 2.2 C35.2 2.2 37.7 4.5 37 8.5 C37.6 9.6 37.6 11 37 12 C36.8 15 34.8 17.3 32 17.3 C29.2 17.3 27.2 15 27 12 C26.4 11 26.4 9.6 27 8.5Z"/> <path d="M29.5 16 L34.5 16 L35 18.5 L29 18.5Z"/> <path d="M14 22.5 C10.5 26.5 9.5 33 10 39 C10.3 42.5 11 45 12 47" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/> <path d="M50 22.5 C53.5 26.5 54.5 33 54 39 C53.7 42.5 53 45 52 47" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/> <g mask="url(#__ID__)"> <path d="M22 18.5 C27 17.2 37 17.2 42 18.5 C46.5 19.8 49 22.5 49 26.5 C49 29 48.5 31 49 33 C51.5 37 52 42.5 49.5 46.5 C46.5 50.5 39 51.8 32 51.8 C25 51.8 17.5 50.5 14.5 46.5 C12 42.5 12.5 37 15 33 C15.5 31 15 29 15 26.5 C15 22.5 17.5 19.8 22 18.5Z"/> <path d="M16 48 C21 51.5 43 51.5 48 48 C48.5 52.5 47.5 57.5 46.5 62 L17.5 62 C16.5 57.5 15.5 52.5 16 48Z"/> </g>' };
+  let xxlIconN = 0;
+  const xxlIconSvg = (g) => { const id = 'xhsc-xxlm' + (xxlIconN++); return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="20" height="20" fill="currentColor" aria-hidden="true">${XXL_ICON[g === 'm' ? 'm' : 'w'].replace(/__ID__/g, id)}</svg>`; };
+  function navCss() {
+    if (document.getElementById('xhsc-nav-css')) return;
+    const st = document.createElement('style');
+    st.id = 'xhsc-nav-css';
+    st.textContent = '[data-role="header-top-menu"] [data-nav-item-id="cams"],[data-role="header-top-menu"] [data-nav-item-id="premium"],[data-role="header-top-menu"] [data-nav-item-id="flirtify"],[data-role="header-top-menu"] li[data-nav-item-id="cams"],[data-role="header-top-menu"] li[data-nav-item-id="premium"],[data-role="header-top-menu"] li[data-nav-item-id="flirtify"]{display:none!important}';
+    (document.head || document.documentElement).appendChild(st);
+  }
+  // gesuchtes Geschlecht wie mopSeek() im poppen-Skript; ohne poppen-Profil nach dem eigenen xHamster-Geschlecht
+  function mopSeek(s = rules()) {
+    const g = s.popG || [];
+    if (g.length >= 2) return g.every((x) => x === 'm') ? 'm' : 'w';
+    const gay = (s.sextype || [])[0] === 1;
+    let t = g[0];
+    if (!t) { const mg = gm('xh_me_gender', ''); t = mg === 'female' ? 'w' : mg === 'male' ? 'm' : ''; }
+    if (t === 'w') return gay ? 'w' : 'm';
+    if (t === 'tv') return (s.moppel.types || []).includes('pw') ? 'w' : 'm';
+    return gay ? 'm' : 'w';
+  }
+  const mopUrl = () => `${location.origin}/dating?${new URLSearchParams({ gender: mopSeek() === 'm' ? 'male' : 'female', body: 'large', sort: 'activity' })}`;
+  function mopNav() {
+    const s = rules();
+    const ps = document.querySelector('[data-role="header-top-menu"] [data-nav-item-id="pornstars"]');
+    const old = document.querySelector('[data-role="header-top-menu"] .xhsc-mop-nav');
+    if (!s.moppel.on) { if (old) old.remove(); return; }
+    if (!ps || old) return;
+    const a0 = ps.querySelector('a');
+    const ic0 = a0 && a0.querySelector('.xh-icon');
+    const tx0 = a0 && a0.querySelector('[class*="linkText-"]');
+    if (!a0) return;
+    const d = document.createElement('div');
+    d.className = String(ps.className).replace(/\bxh-dropdown\b/, '').trim() + ' xhsc-mop-nav';
+    const label = (s.moppel.labels || [])[5] || 'XXL';
+    d.innerHTML = `<a class="${esc(a0.className)}" href="${esc(mopUrl())}" tabindex="-1"><span class="${esc(ic0 ? ic0.className : 'xh-icon')}">${xxlIconSvg(mopSeek())}</span> <div class="${esc(tx0 ? tx0.className : '')}"></div></a>`;
+    d.querySelector('div').textContent = label;
+    ps.before(d);
+  }
+
   // =====================================================================
   // Opa-Scan (ab 0.2.0): Dating-Suche nach den poppen-Regeln durchgehen und Opas blockieren
   // Erst Probelauf (zählt nur), dann Blockieren: der erste Block wird geprüft, danach Pausen von 2–5 s.
@@ -1910,14 +1960,15 @@
     peopleWalk(initials());
     // gemeinsame Ablage: Regeln von poppen.de, Fickliste, eigenes Profil
     (async () => {
-      try { if (await rulesRefresh()) { for (const b of document.querySelectorAll('.xhsc-badge')) b.remove(); const pb = document.getElementById('xhsc-prof'); if (pb) pb.remove(); } } catch (e) { /* egal */ }
+      try { if (await rulesRefresh()) { for (const b of document.querySelectorAll('.xhsc-badge')) b.remove(); const pb = document.getElementById('xhsc-prof'); if (pb) pb.remove(); const mn = document.querySelector('.xhsc-mop-nav'); if (mn) mn.remove(); } } catch (e) { /* egal */ }
       try { await fickAll(); await ichPut(); await fickGalleryPics(); } catch (e) { recEvent('Fickliste nicht erreichbar', { info: String(e && e.message || e) }); }
     })();
     if (gm(K.oscan, null)) setTimeout(oscanRun, 3000);
     if (gm(K.scan, null)) setTimeout(scanTick, 2500);
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
-    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); } catch (e) { /* egal */ } };
+    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); mopNav(); } catch (e) { /* egal */ } };
+    navCss();
     // Nutzer-Menü: entsteht erst beim Öffnen – sofort ergänzen
     try { new MutationObserver(() => { try { ddInsert(); } catch (e) { /* egal */ } }).observe(document.body, { childList: true, subtree: true }); } catch (e) { /* egal */ }
     tick();
@@ -1928,6 +1979,7 @@
     let last = location.href;
     setInterval(() => { if (location.href !== last) { last = location.href; setTimeout(recPage, 2500); } }, 1000);
   }
+  try { navCss(); } catch (e) { /* egal */ }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady, { once: true }); else onReady();
 
   // für Tests
