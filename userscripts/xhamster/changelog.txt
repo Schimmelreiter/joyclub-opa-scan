@@ -1,6 +1,12 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.2 (27.11.2026)
+- Fickliste als Übersicht: Reiter „Fickliste“ hinter „Friends“ im eigenen Profil, Eintrag in der Seitenleiste von
+  „Friends“ (zwischen „Friends“ und „Subscriptions“) und im Nutzer-Menü. Zeigt alle Personen der gemeinsamen
+  Fickliste mit Bild, Status, Treffen und Links zu allen Profilen; Filter nach Status und Suche nach Namen.
+  Direkt erreichbar über https://xhamster.com/my/friends#xhsc-fickliste
+
 0.2.1 (27.11.2026)
 - Die Befehle stehen jetzt auch im Nutzer-Menü von xHamster (Klick auf den eigenen Avatar) unter „Swinger Companion“,
   vor „Edit profile“ – wie das Hamburger-Menü bei JOYclub und poppen.de. Das Tampermonkey-Menü bleibt

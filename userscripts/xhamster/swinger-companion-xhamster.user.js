@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.1
+// @version      0.2.2
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1166,7 +1166,7 @@
     fickCache = (l || []).filter((x) => x && !x.deleted); fickAt = now();
     const ids = new Set();
     for (const r of fickCache) for (const pr of [r.main, ...(r.profiles || [])]) if (pr && pr.pf === 'xhamster' && pr.uid && !pr.dead) ids.add(String(pr.uid));
-    gs('xh_fick_ids', [...ids]); rulesCache = null;
+    gs('xh_fick_ids', [...ids]); gs('xh_fick_n', fickCache.length); rulesCache = null;
     return fickCache;
   }
   const isXh = (pr, p) => !!pr && pr.pf === 'xhamster' && ((pr.uid && String(pr.uid) === p.id) || (pr.url && p.url && urlKey(pr.url) === urlKey(p.url)) || (!pr.uid && !pr.url && pr.nick && norm(pr.nick) === norm(p.nick)));
@@ -1388,6 +1388,99 @@
   }
 
   // =====================================================================
+  // Fickliste: Übersicht (ab 0.2.2) – Reiter hinter „Friends“ im eigenen Profil und Eintrag im Nutzer-Menü
+  // =====================================================================
+  const FL_HASH = '#xhsc-fickliste';
+  const flUrl = () => location.origin + '/my/friends' + FL_HASH;
+  const PF_NAME = { poppen: 'poppen', joyclub: 'JOYclub', xhamster: 'xHamster', telegram: 'Telegram', whatsapp: 'WhatsApp', signal: 'Signal', threema: 'Threema', other: 'Sonstige' };
+  function profUrl(pr) {
+    if (!pr) return '';
+    if (pr.url) return pr.url;
+    if (pr.pf === 'poppen' && pr.nick) return 'https://www.poppen.de/p/' + encodeURIComponent(pr.nick);
+    if (pr.pf === 'xhamster' && pr.nick) return profileUrl(pr.nick);
+    return '';
+  }
+  const flName = (r) => String(r.alias || (r.main && (r.main.nick || r.main.name)) || (r.ext && r.ext.name) || r.id);
+  function flRowHtml(r) {
+    const nick = (r.main && (r.main.nick || r.main.name)) || (r.ext && r.ext.name) || '';
+    const name = r.alias && nick && norm(r.alias) !== norm(nick) ? `${esc(r.alias)} <span style="color:#999">(${esc(nick)})</span>` : esc(flName(r));
+    const img = r.thumb && /^data:image\//.test(r.thumb) ? `<img src="${esc(r.thumb)}" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">`
+      : `<div style="width:56px;height:56px;border-radius:8px;background:#3a3d44;display:flex;align-items:center;justify-content:center;font:600 22px system-ui;color:#bbb">${esc(flName(r).slice(0, 1).toUpperCase())}</div>`;
+    const profs = [r.main, ...(r.profiles || [])].filter((p) => p && p.pf && !p.dead && !p.deleted && !p.gone);
+    const links = profs.map((p) => { const u = profUrl(p); const lab = esc(p.pf === 'other' ? (p.pfName || 'Sonstige') : (PF_NAME[p.pf] || p.pf)); return u ? `<a href="${esc(u)}" target="_blank" rel="noopener" style="color:#9ec5ff">${lab}</a>` : `<span>${lab}${p.text ? ': ' + esc(p.text) : ''}</span>`; }).join(' · ');
+    const meets = (r.meets || []).filter((m) => m && m.date).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    const last = meets[0] ? `zuletzt ${esc(meets[0].date.split('-').reverse().join('.'))}${meets[0].club ? ' · ' + esc(meets[0].club) : ''}` : '';
+    const st = r.status ? `<b style="color:${FCOL[r.status] || '#ccc'}">${esc(FSTAT[r.status] || r.status)}</b>` : '<span style="color:#999">ohne Status</span>';
+    return `<div class="xhsc-fl-row" style="display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid #333">${img}<div style="min-width:0"><div style="font-weight:600">${name}</div><div style="color:#ccc">${st}${meets.length ? ` · ${meets.length} Treffen` : ''}${last ? ' · ' + last : ''}</div><div style="font-size:12px;color:#aaa">${links}</div></div></div>`;
+  }
+  async function flOpen() {
+    if (document.getElementById('xhsc-fl')) return;
+    const d = document.createElement('div');
+    d.id = 'xhsc-fl';
+    d.style.cssText = 'position:fixed;inset:0;z-index:2147483645;background:rgba(0,0,0,.6);display:flex;justify-content:center;align-items:flex-start;overflow:auto;padding:40px 12px';
+    d.innerHTML = `<div style="background:#1f2125;color:#eee;border:1px solid #444;border-radius:12px;width:min(760px,100%);padding:16px 20px;font:13.5px/1.45 system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.6)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b style="font-size:18px">Fickliste</b><button data-a="close" type="button" style="background:#444;color:#fff;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">✕</button></div>
+      <div data-f style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0"></div>
+      <input data-q type="search" placeholder="Name suchen …" style="width:100%;box-sizing:border-box;background:#2a2c31;color:#eee;border:1px solid #444;border-radius:6px;padding:6px 8px;margin-bottom:6px">
+      <div data-l><span style="color:#999">Lade …</span></div></div>`;
+    const close = () => { d.remove(); if (location.hash === FL_HASH) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* egal */ } };
+    d.addEventListener('click', (e) => { if (e.target === d) close(); });
+    d.querySelector('[data-a=close]').onclick = close;
+    document.body.appendChild(d);
+    let list = [];
+    try { list = await fickAll(true); } catch (e) { d.querySelector('[data-l]').innerHTML = `<span style="color:#ff7875">Fickliste nicht erreichbar: ${esc(e.message)}</span>`; return; }
+    let flt = gm('xh_fl_filter', 'all');
+    const f = d.querySelector('[data-f]'), q = d.querySelector('[data-q]'), l = d.querySelector('[data-l]');
+    const draw = () => {
+      const cnt = (k) => (k === 'all' ? list.length : k === 'none' ? list.filter((r) => !r.status).length : list.filter((r) => r.status === k).length);
+      f.innerHTML = '';
+      for (const [k, v] of [['all', 'Alle'], ...Object.entries(FSTAT), ['none', 'ohne Status']]) {
+        const b = document.createElement('button'); b.type = 'button';
+        b.textContent = `${v} (${cnt(k)})`;
+        b.style.cssText = `border:0;border-radius:6px;padding:3px 10px;cursor:pointer;color:#fff;background:${k === flt ? (FCOL[k] || '#1565c0') : '#3a3d44'}`;
+        b.onclick = () => { flt = k; gs('xh_fl_filter', k); draw(); };
+        f.appendChild(b);
+      }
+      const t = norm(q.value);
+      const rows = list.filter((r) => (flt === 'all' || (flt === 'none' ? !r.status : r.status === flt)) && (!t || norm(flName(r)).includes(t) || [r.main, ...(r.profiles || [])].some((p) => p && norm(p.nick || p.name).includes(t))))
+        .sort((a, b) => flName(a).localeCompare(flName(b), 'de', { sensitivity: 'base' }));
+      l.innerHTML = rows.length ? rows.map(flRowHtml).join('') : '<span style="color:#999">Keine Einträge.</span>';
+    };
+    q.oninput = draw;
+    draw();
+  }
+  // Reiter „Fickliste“ hinter „Friends“ (nur im eigenen Profil, dort zeigt „Friends“ auf /my/friends)
+  function flTab() {
+    const n = gm('xh_fick_n', null);
+    for (const ts of document.querySelectorAll('.xh-tabset')) {
+      const have = ts.querySelector('.xhsc-fl-tab .value');
+      if (have) { if (n != null && have.textContent !== String(n)) have.textContent = String(n); continue; }
+      const fr = [...ts.querySelectorAll('a.friends')].find((a) => /\/my\/friends\/?$/.test(a.getAttribute('href') || ''));
+      if (!fr) continue;
+      const a = document.createElement('a');
+      a.className = 'followable xhsc-fl-tab';
+      a.href = flUrl();
+      a.innerHTML = 'Fickliste<span class="value"></span>';
+      if (n != null) a.querySelector('.value').textContent = String(n);
+      a.addEventListener('click', (e) => { e.preventDefault(); flOpen(); });
+      fr.after(a);
+    }
+    // Seitenleiste auf /my/friends (Friend requests, Friends, Subscriptions …): zwischen „Friends“ und „Subscriptions“
+    for (const ul of document.querySelectorAll('ul.friends-side-switcher')) {
+      const have = ul.querySelector('.xhsc-fl-side .value');
+      if (have) { if (n != null && have.textContent !== String(n)) have.textContent = String(n); continue; }
+      const fr = ul.querySelector('li.friends');
+      if (!fr) continue;
+      const li = document.createElement('li');
+      li.className = 'xhsc-fl-side';
+      li.innerHTML = `<a href="${esc(flUrl())}"><span class="label">Fickliste</span> <span class="value">${n != null ? n : ''}</span></a>`;
+      li.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); flOpen(); });
+      fr.after(li);
+    }
+  }
+  function flCheckHash() { if (location.hash === FL_HASH) flOpen(); }
+
+  // =====================================================================
   // Opa-Scan (ab 0.2.0): Dating-Suche nach den poppen-Regeln durchgehen und Opas blockieren
   // Erst Probelauf (zählt nur), dann Blockieren: der erste Block wird geprüft, danach Pausen von 2–5 s.
   // Ausgenommen: Whitelist, Freunde, Fickliste, man selbst, schon Blockierte, gelöschte Konten.
@@ -1590,6 +1683,7 @@
   const stopAll = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs('xh_oscan_lock', null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); };
   const toggleHide = () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? 'Opas werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).' : 'Opas werden nur abgedunkelt (ab dem nächsten Laden).'); };
   const ACTIONS = [
+    { g: 'fl', icon: 'heart', label: () => 'Fickliste', fn: flOpen },
     { g: 'opa', icon: 'stop', label: () => '■ Anhalten (Opa-Scan, Scan-Lauf, Aktionstest)', fn: stopAll, dd: running },
     { g: 'opa', icon: 'scan', label: () => 'Opa-Scan: Probelauf (zählt nur)', fn: () => oscanStart('dry') },
     { g: 'opa', icon: 'block', label: () => 'Opa-Scan: Opas blockieren', fn: () => oscanStart('block') },
@@ -1607,7 +1701,7 @@
     { g: 'rec', gate: true, icon: 'rec', label: () => 'Partnerkonto eintragen', fn: () => { const v = prompt('Nick des Partnerkontos (leer = Vorgabe):', gm(K.partner, '') || partner()); if (v != null) gs(K.partner, v.trim()); } },
     { g: 'rec', gate: true, icon: 'rec', label: () => 'Home-Assistant-Adresse eintragen', fn: haSetup },
   ];
-  for (const x of ACTIONS) if (!x.gate || recGate()) try { GM_registerMenuCommand(x.label(), x.fn); } catch (e) { /* egal */ }
+  for (const x of ACTIONS) if ((!x.gate || recGate()) && x.tm !== false) try { GM_registerMenuCommand(x.label(), x.fn); } catch (e) { /* egal */ }
   // Symbole (20 × 20, Stil wie die xHamster-Menüsymbole)
   const ICONS = {
     stop: '<rect x="5" y="5" width="10" height="10" rx="1.5"/>',
@@ -1617,6 +1711,7 @@
     reload: '<path d="M10 3a7 7 0 0 1 6.3 4H14v2h5V4h-2v1.7A9 9 0 1 0 19 10h-2a7 7 0 1 1-7-7Z"/>',
     eye: '<path d="M10 4c4.5 0 7.6 3.6 8.6 6-1 2.4-4.1 6-8.6 6S2.4 12.4 1.4 10C2.4 7.6 5.5 4 10 4Zm0 2.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/>',
     rec: '<circle cx="10" cy="10" r="5"/>',
+    heart: '<path d="M10 17.3 8.9 16.3C4.8 12.6 2 10.1 2 7a4 4 0 0 1 4-4c1.5 0 3 .7 4 1.8A5.3 5.3 0 0 1 14 3a4 4 0 0 1 4 4c0 3.1-2.8 5.6-6.9 9.3L10 17.3Z"/>',
     send: '<path d="M2 3l16 7-16 7 2.5-7L2 3Zm3.8 6h5.7v2H5.8L5 13.6 13.4 10 5 6.4 5.8 9Z"/>',
   };
   // Nutzer-Menü von xHamster: eigene Einträge vor „Edit profile“ (wird bei jedem Öffnen neu aufgebaut)
@@ -1695,7 +1790,9 @@
     if (gm(K.scan, null)) setTimeout(scanTick, 2500);
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
-    const tick = () => { try { profileBox(); decorate(); } catch (e) { /* egal */ } };
+    const tick = () => { try { profileBox(); decorate(); flTab(); } catch (e) { /* egal */ } };
+    flCheckHash();
+    window.addEventListener('hashchange', flCheckHash);
     // Nutzer-Menü: entsteht erst beim Öffnen – sofort ergänzen
     try { new MutationObserver(() => { try { ddInsert(); } catch (e) { /* egal */ } }).observe(document.body, { childList: true, subtree: true }); } catch (e) { /* egal */ }
     tick();
