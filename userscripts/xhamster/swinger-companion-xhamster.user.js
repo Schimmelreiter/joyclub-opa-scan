@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.3.1
+// @version      0.3.2
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren (Regeln von poppen.de oder eigene), gemeinsame Fickliste mit Bildern und Videos für Home Assistant, Textvorlagen, ohne Werbung; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1155,6 +1155,10 @@
   // (Geschlecht aus dem eigenen xHamster-Profil)
   function OW() { const male = gm('xh_me_gender', '') === 'male'; const ruhr = !!(gm(POPK, null) || {}).ruhr; return male ? (ruhr ? 'Omma' : 'Oma') : (ruhr ? 'Oppa' : 'Opa'); }
   const OWs = () => OW() + 's';
+  // 0.3.2: Opa-/Oma-Figur wie im JOYclub- und poppen-Skript (eigener Mann → Oma, sonst Opa)
+  const OPA_PATH = 'M3408 12790 c-235 -43 -487 -227 -651 -477 -33 -50 -47 -63 -67 -63 -37 0 -119 -24 -168 -49 -102 -52 -148 -120 -201 -298 -48 -164 -73 -337 -69 -483 3 -112 6 -131 30 -180 15 -30 41 -64 58 -75 29 -19 30 -23 30 -92 0 -39 -3 -74 -8 -77 -4 -2 -86 -1 -182 4 -273 12 -411 -7 -566 -80 -227 -105 -387 -276 -518 -551 -127 -266 -203 -574 -253 -1019 -22 -199 -25 -1016 -5 -1265 20 -240 60 -603 82 -750 12 -82 15 -131 9 -133 -6 -3 -6 -8 0 -16 7 -8 -3 -51 -30 -136 -109 -339 -191 -737 -235 -1140 -22 -191 -25 -693 -6 -845 33 -258 72 -434 158 -699 234 -721 431 -1986 554 -3566 12 -145 22 -265 23 -266 1 -1 52 -16 114 -34 98 -29 113 -36 121 -59 45 -127 347 -276 743 -366 622 -140 1209 -69 1131 137 l-10 28 168 0 c273 0 423 30 492 100 62 62 50 120 -43 204 -59 53 -250 150 -377 191 l-84 27 6 77 c35 439 116 2702 166 4611 15 587 12 548 44 595 65 94 130 255 161 400 9 44 19 87 21 97 4 13 23 4 102 -49 201 -134 411 -220 617 -252 109 -16 209 -22 222 -14 18 13 32 57 39 126 l6 64 69 -35 69 -36 0 -156 c0 -170 4 -186 60 -215 37 -19 64 -19 104 0 55 26 61 45 66 214 l5 155 28 7 27 7 0 -2924 c0 -3216 -5 -2965 60 -2999 62 -32 136 -10 164 49 15 31 16 279 16 3052 l0 3017 25 64 c99 246 -33 525 -286 604 -33 10 -83 19 -110 19 -27 0 -60 6 -72 14 -37 24 -132 36 -367 46 -124 6 -272 15 -330 20 -98 9 -467 74 -476 83 -3 2 -9 91 -14 198 -27 543 -53 829 -125 1389 l-6 45 53 35 c141 94 296 282 422 513 20 37 42 67 49 67 7 0 46 -17 87 -38 59 -29 78 -45 93 -74 30 -59 36 -140 25 -308 -13 -195 -6 -359 17 -424 26 -71 104 -148 178 -175 200 -73 369 48 421 302 9 42 16 81 16 86 0 17 -87 71 -148 92 -72 26 -220 28 -308 5 -34 -9 -66 -16 -72 -16 -5 0 -11 71 -15 173 -4 137 -9 186 -26 239 -28 89 -88 155 -173 193 -35 15 -65 29 -66 31 -2 1 10 39 27 83 40 105 106 337 122 433 11 69 16 78 40 88 77 32 105 336 42 457 -16 31 -21 68 -27 190 -4 84 -14 199 -21 255 -14 100 -13 104 6 120 23 19 35 74 25 113 -6 24 -10 26 -39 21 l-32 -6 -19 82 c-10 46 -35 137 -57 203 -171 527 -466 883 -824 994 -79 25 -249 36 -327 21z';
+  const OMA_PARTS = '<circle cx="9.6" cy="9.2" r="3.3"/><circle cx="15.2" cy="12.4" r="5"/><path d="M8.4 16.2 C5.6 19.6 5.8 26 8.2 32 L4.6 53 L22.8 53 L19 33 C20.6 29 21 24.6 19.2 20.4 C16.6 17.2 12.2 15.4 8.4 16.2Z"/><path d="M17.4 21.6 C20.6 23.4 23.2 26 25.4 29.2 L23.8 30.4 C21.4 28 19 26 16.4 24.6Z"/><path d="M24.8 29.6 L24.8 62" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="M24.8 29.6 C24.8 26.4 28.8 26.4 28.8 29.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><rect x="9.6" y="52" width="3.2" height="9" rx="1"/><rect x="14.6" y="52" width="3.2" height="9" rx="1"/><path d="M8.2 60 h5.6 v2.6 h-6.6 z"/><path d="M13.6 60 h6 v2.6 h-6 z"/>';
+  const owFigure = () => (gm('xh_me_gender', '') === 'male' ? `<g transform="scale(20)">${OMA_PARTS}</g>` : `<g transform="translate(0,1280) scale(0.1,-0.1)"><path d="${OPA_PATH}"/></g>`);
 
   // =====================================================================
   // Personen, die die Seite kennt (Anfangszustand und nachgeladene Antworten) – für die Markierung
@@ -1347,7 +1351,9 @@
       (it.querySelector('.info, .conversation-meta, [class*="userInfo-"]') || it).appendChild(b);
       // bei jedem Neuzeichnen (z. B. nach neuen Regeln) setzen, nicht nur hinzufügen
       it.style.display = ''; it.style.opacity = ''; it.removeAttribute('title');
-      if (c.ignore) { if (opa().hide && src === 'suche') it.style.display = 'none'; else { it.style.opacity = '.35'; it.title = `${c.label}: ${c.reason}`; } }
+      // 0.3.2: auf eigenen Listen (Blockierte, Freunde, Anfragen) nur das Abzeichen, nicht abdunkeln
+      const ownList = /^\/my\/(blocked-users|friends|friend-requests)/.test(location.pathname);
+      if (c.ignore) { if (ownList) it.title = `${c.label}: ${c.reason}`; else if (opa().hide && src === 'suche') it.style.display = 'none'; else { it.style.opacity = '.35'; it.title = `${c.label}: ${c.reason}`; } }
       if (p.retired) it.style.opacity = '.5';
     }
   }
@@ -2598,8 +2604,8 @@
   const stopAll = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs('xh_oscan_lock', null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); };
   const toggleHide = () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? `${OWs()} werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).` : `${OWs()} werden nur abgedunkelt (ab dem nächsten Laden).`); };
   const ACTIONS = [
-    { g: 'fl', icon: 'heart', label: () => 'Fickliste', fn: flOpen },
-    { g: 'fl', icon: 'shield', label: () => `${OW()}-Schutz (Einstellungen)`, ddLabel: () => `${OW()}-Schutz`, fn: setOpen },
+    { g: 'fl', icon: 'fick', label: () => 'Fickliste', fn: flOpen },
+    { g: 'fl', icon: 'figur', label: () => `${OW()}-Schutz (Einstellungen)`, ddLabel: () => `${OW()}-Schutz`, fn: setOpen },
     { g: 'fl', icon: 'stop', label: () => `■ Anhalten (${OW()}-Scan, Scan-Lauf, Aktionstest)`, ddLabel: () => 'Anhalten', fn: stopAll, dd: running },
     { g: 'opa', icon: 'scan', label: () => `${OW()}-Scan: Probelauf (zählt nur)`, fn: () => oscanStart('dry') },
     { g: 'opa', icon: 'block', label: () => `${OW()}-Scan: ${OWs()} blockieren`, fn: () => oscanStart('block') },
@@ -2619,7 +2625,11 @@
   ];
   for (const x of ACTIONS) if ((!x.gate || recGate()) && x.tm !== false) try { GM_registerMenuCommand(x.label(), x.fn); } catch (e) { /* egal */ }
   // Symbole (20 × 20, Stil wie die xHamster-Menüsymbole)
+  // 0.3.2: Fickliste und Opa-/Oma-Schutz mit denselben Zeichnungen wie in den anderen Skripten
+  const ICON_VB = { fick: '-4 -4 264 217', figur: '0 0 640 1280' };
   const ICONS = {
+    fick: () => `<path d="${FL_D}"/>`,
+    figur: () => owFigure(),
     stop: '<rect x="5" y="5" width="10" height="10" rx="1.5"/>',
     scan: '<path d="M8.5 3a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Zm0 1.8a3.7 3.7 0 1 0 0 7.4 3.7 3.7 0 0 0 0-7.4Zm4.6 8 4 4-1.3 1.3-4-4 1.3-1.3Z"/>',
     block: '<path d="M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-4.7 4.6A6 6 0 0 0 13.4 14.7L5.3 6.6Zm1.3-1.3 8.1 8.1A6 6 0 0 0 6.6 5.3Z"/>',
@@ -2627,8 +2637,6 @@
     reload: '<path d="M10 3a7 7 0 0 1 6.3 4H14v2h5V4h-2v1.7A9 9 0 1 0 19 10h-2a7 7 0 1 1-7-7Z"/>',
     eye: '<path d="M10 4c4.5 0 7.6 3.6 8.6 6-1 2.4-4.1 6-8.6 6S2.4 12.4 1.4 10C2.4 7.6 5.5 4 10 4Zm0 2.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/>',
     rec: '<circle cx="10" cy="10" r="5"/>',
-    shield: '<path d="M10 2 3 5v5c0 4.2 3 7.4 7 8 4-.6 7-3.8 7-8V5l-7-3Zm0 2.2 5 2.1V10c0 3.1-2.1 5.6-5 6.1-2.9-.5-5-3-5-6.1V6.3l5-2.1Z"/>',
-    heart: '<path d="M10 17.3 8.9 16.3C4.8 12.6 2 10.1 2 7a4 4 0 0 1 4-4c1.5 0 3 .7 4 1.8A5.3 5.3 0 0 1 14 3a4 4 0 0 1 4 4c0 3.1-2.8 5.6-6.9 9.3L10 17.3Z"/>',
     send: '<path d="M2 3l16 7-16 7 2.5-7L2 3Zm3.8 6h5.7v2H5.8L5 13.6 13.4 10 5 6.4 5.8 9Z"/>',
   };
   // Nutzer-Menü von xHamster: eigene Einträge vor „Edit profile“ (wird bei jedem Öffnen neu aufgebaut)
@@ -2659,7 +2667,7 @@
       lastG = x.g;
       const li = document.createElement('li');
       li.className = 'user-dropdown-item with-icon xhsc-dd';
-      li.innerHTML = `<a class="${esc(linkCls)}" href="#"><span class="${esc(iconCls)}"><svg viewBox="0 0 20 20" width="20" class="${esc(svgCls)}" fill="currentColor">${ICONS[x.icon] || ''}</svg></span> </a>`;
+      li.innerHTML = `<a class="${esc(linkCls)}" href="#"><span class="${esc(iconCls)}"><svg viewBox="${ICON_VB[x.icon] || '0 0 20 20'}" width="20" height="20" class="${esc(svgCls)}" fill="currentColor" preserveAspectRatio="xMidYMid meet">${typeof ICONS[x.icon] === 'function' ? ICONS[x.icon]() : (ICONS[x.icon] || '')}</svg></span> </a>`;
       li.querySelector('a').append(x.ddLabel ? x.ddLabel() : x.label());
       li.querySelector('a').addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();

@@ -1,6 +1,12 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.3.2 (27.11.2026)
+- Behoben: Auf eigenen Listen (Blockierte, Freunde, Freundschaftsanfragen) wurden Profile über der Grenze
+  abgedunkelt – dort steht jetzt nur das Abzeichen, der Grund im Hinweis beim Darüberfahren
+- Geändert: Im Nutzer-Menü dieselben Symbole wie in den anderen Skripten – Fick-Piktogramm für die Fickliste,
+  Opa- bzw. Oma-Figur (nach eigenem Geschlecht) für den Schutz statt Herz und Schild
+
 0.3.1 (27.11.2026)
 - Behoben: Bilder und Videos kamen nicht in Home Assistant an – Home Assistant kennt Personen unter der ID aus der
   Lieferung des JOYclub-Skripts (oft ohne Vorsilbe, z. B. „10573689“ statt „j:10573689“). Das Skript probiert jetzt
