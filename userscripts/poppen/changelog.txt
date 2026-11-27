@@ -1,6 +1,9 @@
 Changelog – poppen.de Opa-Scan (Userscript)
 Neueste Version oben.
 
+2.52 (27.11.2026)
+- Behoben: Personen mit Hauptprofil auf JOYclub (z. B. mit verknüpftem poppen-Profil) standen in „Meine Fickliste“ unter ihrem poppen-Nick, ohne sichtbare Verbindung zum JOYclub-Profil. Sie stehen wieder unter dem JOYclub-Nick mit Link dorthin; das poppen-Profil ist das poppen-Zeichen daneben (verlinkt). Als Bild dient das von JOYclub
+
 2.51 (27.11.2026)
 - Neu: „Meine Fickliste“ und der Fickliste-Kasten im eigenen Profil zeigen Bilder: von poppen-Mitgliedern das Profilbild, von JOYclub-Personen das Vorschaubild des JOYclub-Skripts (ab 2.23), von eigenen Externen ihr Bild. Für Personen mit poppen-Profil legt das Skript sein Bild als Vorschaubild in die gemeinsame Ablage (alle 30 Minuten abgeglichen)
 

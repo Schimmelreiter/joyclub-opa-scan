@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – Poppen Edition
 // @name:en      Swinger Companion – Poppen Edition
 // @namespace    local.visitor-age-filter
-// @version      2.51
+// @version      2.52
 // @description  Swinger Companion für poppen.de: Opa-Schutz erkennt Mitglieder über einer Altersgrenze (Besucher, Likes, Sticker, Nachrichten, Gruppen, Mitgliedersuche) und blockiert sie in Etappen. Dazu Fickliste, Figur-Badges, Gruppen-Whitelist und mehr.
 // @homepageURL  https://github.com/Schimmelreiter/swinger-companion
 // @supportURL   https://github.com/Schimmelreiter/swinger-companion/issues
@@ -5209,6 +5209,8 @@
   const thumbOk = (t) => (typeof t === 'string' && t.length < 200000 && THUMB_RE.test(t) ? t : '');
   const mainIsPoppen = (p) => !!(p && p.main && (!p.main.pf || p.main.pf === 'poppen') && p.main.uid);
   async function fickImg(p) {
+    // 2.52: Hauptprofil auf einer anderen Plattform → deren Bild zuerst
+    if (foreignUrl(p) && thumbOk(p.thumb)) return thumbOk(p.thumb);
     const own = pm(p) ? await Images.get(pm(p).uid) : '';
     return own || thumbOk(p.thumb) || (p.ext && thumbOk(p.ext.img)) || '';
   }
@@ -5786,8 +5788,11 @@
     const rows = [];
     for (const p of persons) {
       const m = await memberOf(p);
-      const name = (m && m.nick) || (pm(p) && pm(p).nick) || (p.main && p.main.nick) || (p.ext && p.ext.name) || '?';
-      const base = { p, name, img: await fickImg(p), del: !!(m && m.del) || !!(p.ext && p.ext.gone), inactive: m && m.active === false, url: pm(p) ? profileUrl(name) : ((p.profiles || []).find((x) => x.pf === OWN_PF && x.url) || {}).url || extUrl(p), arch: '/setting/profile#archiv=' + encodeURIComponent(pm(p) ? pm(p).uid : p.id), pfs: uniq([...(p.main && p.main.pf && p.main.pf !== 'poppen' ? [p.main.pf] : []), ...(p.profiles || []).map((x) => x.pf)]),
+      // 2.52: Hauptprofil auf einer anderen Plattform (z. B. JOYclub) → dessen Nick und Link; das poppen-Profil als Zeichen daneben
+      const fu = foreignUrl(p);
+      const name = (fu && (p.main.nick || p.main.name)) || (m && m.nick) || (pm(p) && pm(p).nick) || (p.main && p.main.nick) || (p.ext && p.ext.name) || '?';
+      const base = { p, name, img: await fickImg(p), del: fu ? !!p.main.dead : !!(m && m.del) || !!(p.ext && p.ext.gone), inactive: !fu && m && m.active === false, url: fu || (pm(p) ? profileUrl(name) : ((p.profiles || []).find((x) => x.pf === OWN_PF && x.url) || {}).url || extUrl(p)),
+        popTitle: fu && pm(p) ? `poppen: ${(m && m.nick) || pm(p).nick || ''}` : '', popUrl: fu && pm(p) ? profileUrl((m && m.nick) || pm(p).nick || '') : '', arch: '/setting/profile#archiv=' + encodeURIComponent(pm(p) ? pm(p).uid : p.id), pfs: uniq([...(p.main && p.main.pf && p.main.pf !== 'poppen' ? [p.main.pf] : []), ...(p.profiles || []).map((x) => x.pf)]),
         badges: uniq([...(foreignUrl(p) ? [p.main.pf + '|'] : []), ...otherProfiles(p).map((x) => `${x.pf}|${x.pf === 'other' ? (x.pfName || '') : ''}`)]) };
       if (!(p.meets || []).length) rows.push({ ...base, t: null });
       for (const t of p.meets || []) rows.push({ ...base, t });
@@ -5831,7 +5836,7 @@
             <td style="padding:6px;white-space:nowrap">${r.t && r.t.date ? deDate(new Date(r.t.date + 'T12:00')) : '–'}</td>
             <td style="padding:6px;width:52px">${r.img ? `<img src="${esc(r.img)}" alt="" style="width:48px;height:48px;border-radius:6px;object-fit:cover;display:block${r.del ? ';filter:grayscale(1);opacity:.7' : ''}">` : `<div style="width:48px;height:48px;border-radius:6px;background:#5c6470;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">${esc((r.name || '?').slice(0, 1).toUpperCase())}</div>`}</td>
             <td style="padding:6px"><a href="${esc(r.url)}" target="_blank" rel="noopener" class="${r.del ? 'vaf-strike' : ''}" style="${r.inactive ? 'color:#ff7875' : ''}">${esc(r.name)}</a><br><a href="${esc(r.arch)}" style="font-size:12px;color:#a6a6a6">Profil-Archiv</a> · <a href="#" data-also="${i}" style="font-size:12px;color:#a6a6a6">Auch auf …</a>${notesOf(r.p) ? `<div title="${esc(notesOf(r.p))}" style="font-size:12px;color:#8c8c8c;max-width:360px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap">${esc(notesOf(r.p))}</div>` : ''}</td>
-            <td style="white-space:nowrap">${fickIcon(r.p.status ? FSTATES[r.p.status].i : 0, 18, true)} ${r.badges.map((b) => { const [pf, n] = b.split('|'); return pfBadge(pf, '', n); }).join('')}</td>
+            <td style="white-space:nowrap">${fickIcon(r.p.status ? FSTATES[r.p.status].i : 0, 18, true)} ${r.popUrl ? `<a href="${esc(r.popUrl)}" target="_blank" rel="noopener">${pfBadge('poppen', r.popTitle)}</a>` : ''}${r.badges.map((b) => { const [pf, n] = b.split('|'); return pfBadge(pf, '', n); }).join('')}</td>
             <td>${esc((r.t && r.t.where) || '')}</td><td>${esc((r.t && r.t.club) || '')}${r.t && r.t.link ? ` <a href="${esc(r.t.link)}" target="_blank" rel="noopener">${pfBadge(r.t.pf || platformOfUrl(r.t.link))}</a>` : ''}</td>
             <td style="color:#a6a6a6">${esc((r.t && r.t.note) || '')}</td></tr>`).join('') || '<tr><td colspan="7" style="padding:12px;color:#8c8c8c">Keine Einträge.</td></tr>'}</tbody></table>
         <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap"><button type="button" class="vaf-big" style="width:auto" data-a="ext">+ Externen Fick zufügen</button>
