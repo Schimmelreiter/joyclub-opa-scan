@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.11
+// @version      0.1.12
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -189,6 +189,16 @@
         list = JSON.parse(atob(decodeURIComponent(m[1]).replace(/-/g, '+').replace(/_/g, '/')));
         const urls = (Array.isArray(list) ? list : []).map((o) => o && o.url && pathPattern(o.url)).filter(Boolean);
         return urls.length ? ' → ' + [...new Set(urls)].join('+') : '';
+      }
+      // 0.1.12: übrige JSON-Anfragen nach Art des Vorgangs trennen (action, items[].state), sonst verdrängt z. B.
+      // „Nachricht senden“ das „Löschen“ an derselben Adresse
+      if (typeof body === 'string' && /^\s*[[{]/.test(body)) {
+        const o = JSON.parse(body);
+        const parts = [];
+        if (o && typeof o.action === 'string') parts.push('action=' + o.action);
+        const st = o && Array.isArray(o.items) ? [...new Set(o.items.map((x) => x && x.state).filter((x) => typeof x === 'string'))] : [];
+        if (st.length) parts.push('state=' + st.join('+'));
+        return parts.length ? ' ' + parts.join(' ') : '';
       }
     } catch (e) { /* egal */ }
     return '';
@@ -652,7 +662,8 @@
     recDom('Freunde: Eintrag vorher', it);
     click(it.querySelector('a.unfriend'));
     await confirmDialog('Entfreunden');
-    const ok = await waitFor(() => { const s = it.querySelector('.status'); return s && visible(s) ? s : null; }, 10000);
+    // 0.1.12: nach „Remove“ blendet xHamster die Aktionen aus (die Statuszeile erscheint nicht immer) – beides zählt
+    const ok = await waitFor(() => { const s = it.querySelector('.status'), ac = it.querySelector('.actions'); return (s && visible(s)) || !it.isConnected || (ac && !visible(ac)) ? true : null; }, 10000);
     recDom('Freunde: Eintrag nachher', it);
     recEvent(ok ? 'Entfreundet' : 'Entfreunden unsicher', { info: a.partner });
     next('invite', { unfriended: !!ok });
