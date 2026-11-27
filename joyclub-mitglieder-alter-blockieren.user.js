@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.14
+// @version      2.15
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -11226,7 +11226,7 @@ fragment ImageUIDataFragment on ImageUIData {
     GM_setValue(K_FLI + id, data);
     return id;
   }
-  // ---- 2.13: alle Bilder der Personen aus der Fickliste ----
+  // ---- 2.13/2.15: alle Bilder der Personen aus der Fickliste ----
   // Gesammelt beim Besuch des Profils (keine zusätzlichen Abrufe), nie gelöscht, gleiche Bilder nur einmal.
   // p.pics = [{ k, src, pf, at, h, full, ha }]; Bilddaten in jaf_flp_<k>: zuerst immer das Original; sobald
   // Home Assistant ein Bild hat, bleibt ab dem 6. Bild nur eine Vorschau.
@@ -11237,25 +11237,29 @@ fragment ImageUIDataFragment on ImageUIData {
   async function flPicHash(data) {
     try { const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(data))); return [...new Uint8Array(d)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join(''); } catch (e) { return ''; }
   }
-  // Bilder der Person auf der aktuellen Seite (Profilbild und Galerie), ohne Bilder anderer Mitglieder
-  function flPagePics(pid, doc = document) {
+  // Bilder auf der aktuellen Seite (Profilbild, Vorschau im Profil, Fotoalbum): JOYclub verlinkt jedes Bild mit
+  // „#media_id_0_<Bild-ID>_0_<Profil-ID>“ – so gehört jedes Bild sicher zu seinem Profil (Stand 11/2026).
+  // Ergebnis: Map Profil-ID → [{ k, src, pf }]
+  function flPagePics(doc = document) {
     const main = doc.querySelector('main.profile-container:not(.jaf-fl-tpl)') || doc.querySelector('main');
-    if (!main) return [];
-    const out = [], seen = new Set();
-    for (const el of main.querySelectorAll('[data-img_id]')) {
-      if (el.closest('[class*="jaf-"]')) continue;
-      const a = el.closest('a[href]');
-      if (a) { const m = (a.getAttribute('href') || '').match(/\/profile\/(\d+)/); if (m && m[1] !== String(pid)) continue; }
-      const id = el.getAttribute('data-img_id');
-      if (!id || seen.has(id)) continue;
-      const box = el.closest('j-avatar, picture') || el;
-      const srcs = [...box.querySelectorAll('source')];
-      const webp = srcs.find((x) => /webp/.test(x.getAttribute('type') || '')) || srcs[0];
+    const out = new Map();
+    if (!main) return out;
+    const seen = new Set();
+    for (const a of main.querySelectorAll('a[href*="media_id_"]')) {
+      if (a.closest('[class*="jaf-"]')) continue;
+      const m = (a.getAttribute('href') || '').match(/media_id_\d+_(\d+)_\d+_(\d+)/);
+      if (!m || seen.has(m[1])) continue;
+      const srcs = [...a.querySelectorAll('source')];
+      const webp = srcs.find((x) => /webp/.test(x.getAttribute('type') || '') || /\.webp/.test(x.getAttribute('srcset') || '')) || srcs[0];
       let u = webp ? flBestSrc(webp.getAttribute('srcset') || webp.getAttribute('data-srcset')) : '';
-      if (!u) { const img = box.querySelector('img'); u = (img && (img.currentSrc || img.getAttribute('data-src') || img.src)) || ''; }
+      if (!u) { const img = a.querySelector('img'); u = (img && (img.currentSrc || img.getAttribute('data-src') || img.src)) || ''; }
       if (!u || /^data:|\/_\.gif/.test(u)) continue;
-      seen.add(id);
-      out.push({ k: flPicKey('joyclub', id), src: new URL(u, location.href).href, pf: 'joyclub' });
+      seen.add(m[1]);
+      if (!out.has(m[2])) out.set(m[2], []);
+      // Profilbild und Vorschau sind quadratische Ausschnitte (/1-1/image_720_…); dasselbe Bild gibt es als /orig/image_1920_…
+      const abs = new URL(u, location.href).href;
+      const orig = abs.replace(/\/1-1\/image_\d+_/, '/orig/image_1920_');
+      out.get(m[2]).push(orig !== abs ? { k: flPicKey('joyclub', m[1]), src: orig, alt: abs, pf: 'joyclub' } : { k: flPicKey('joyclub', m[1]), src: abs, pf: 'joyclub' });
     }
     return out;
   }
@@ -11267,12 +11271,14 @@ fragment ImageUIDataFragment on ImageUIData {
     let n = 0;
     for (const f of found) {
       if (byK.has(f.k)) continue;
-      const data = await flFetchImage(f.src);
+      const img = async (u) => { const d = await flFetchImage(u); return /^data:image\//.test(d || '') ? d : ''; };
+      let src = f.src, data = await img(f.src);
+      if (!data && f.alt) { src = f.alt; data = await img(f.alt); }
       const h = data ? await flPicHash(data) : '';
       byK.add(f.k);
       if (h && byH.has(h)) continue; // dasselbe Bild unter neuer Kennung
       if (data) GM_setValue(K_FLP + f.k, data);
-      list.push({ k: f.k, src: f.src, pf: f.pf, at: Date.now(), h, full: data ? 1 : 0 });
+      list.push({ k: f.k, src, pf: f.pf, at: Date.now(), h, full: data ? 1 : 0 });
       if (h) byH.add(h);
       n++;
     }
@@ -11284,11 +11290,15 @@ fragment ImageUIDataFragment on ImageUIData {
     return n;
   }
   let flPicsAt = 0, flPicsBusy = false;
-  function flPicsTick(pid) {
+  // auf jeder Seite mit Profilbildern (Profil, Fotoalbum): Bilder aller Personen aus der Fickliste übernehmen
+  function flPicsTick() {
     if (flPicsBusy || Date.now() - flPicsAt < 5000) return;
     flPicsAt = Date.now();
+    const found = [...flPagePics()].filter(([uid]) => flGet(uid));
+    if (!found.length) return;
     flPicsBusy = true;
-    flAddPics(pid, flPagePics(pid)).catch((e) => console.warn('[Alter-Filter] Fickliste-Bilder', e)).finally(() => { flPicsBusy = false; });
+    (async () => { for (const [uid, l] of found) await flAddPics(uid, l); })()
+      .catch((e) => console.warn('[Alter-Filter] Fickliste-Bilder', e)).finally(() => { flPicsBusy = false; });
   }
   // lokale Kennzeichen setzen, ohne „geändert“ (kein erneuter Abgleich)
   function flPicFlag(k, patch) {
@@ -14279,6 +14289,8 @@ fragment ImageUIDataFragment on ImageUIData {
     // alte Adressen der externen Seiten → Ansicht auf dem eigenen Profil
     if (flExternPage() && flOwnPath()) { location.replace(flCarrierUrl('x-' + flExternSlug(), flArchivParam(), /[?&]flnav=1/.test(location.search) || flNavOn('x-' + flExternSlug()))); return; }
     if (flViewerPid()) { flViewerRender(); flInsertButtons(); }
+    // Bilder der Personen aus der Fickliste (Profil und Fotoalbum, auch nachgeladene) – höchstens alle 5 Sekunden
+    if (!flViewerPid() && /^\/profile\//.test(location.pathname)) flPicsTick();
     flOwnPills();
     flOwnBox();
     if (isProfilePage() && !isOwnProfile()) {
@@ -14318,8 +14330,6 @@ fragment ImageUIDataFragment on ImageUIData {
               } catch (e) { console.warn('[Alter-Filter] Fickliste-Archiv', e); }
             }, 2500);
           }
-          // Bilder: auch nachgeladene (Galerie beim Scrollen) – höchstens alle 5 Sekunden
-          if (profileAges().length) flPicsTick(pid);
         }
       }
     }
