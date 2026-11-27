@@ -28,7 +28,7 @@ Jeder Eintrag trägt:
 
 | Feld | Bedeutung |
 |---|---|
-| `id` | stabil; wird nie geändert. Vergeben vom anlegenden Skript: `p:<poppen-uid>` · `j:<JOYclub-Profil-ID>` · `x:<zufall>` (Person ohne Plattform-Profil). Kommt dieselbe Person später auf einer zweiten Plattform dazu, bleibt die alte `id`; das neue Profil steht in `profiles[]`. |
+| `id` | stabil; wird nie geändert. Vergeben vom anlegenden Skript: `p:<poppen-uid>` · `j:<JOYclub-Profil-ID>` · `xh:<xHamster-ID>` (seit xHamster 0.2.0) · `x:<zufall>` (Person ohne Plattform-Profil). Kommt dieselbe Person später auf einer zweiten Plattform dazu, bleibt die alte `id`; das neue Profil steht in `profiles[]`. |
 | `rev` | Versionszähler, wird bei jedem Schreiben um 1 erhöht |
 | `updatedAt` | Zeitpunkt der letzten Änderung (ms) |
 | `updatedBy` | `{ pf, ver, acc }`: Plattform-Code, Skriptversion, Account. **Veraltet:** `{ platform, account }` (Textvorlagen bis poppen 2.32) – beim Lesen `pf || platform` und `acc || account` verwenden, geschrieben wird nur noch `pf`/`ver`/`acc`. |
@@ -81,8 +81,8 @@ Eine Person je Eintrag. Alle Felder sind optional außer `id`.
 | `history[]` | `{ at, what }`: Verlauf als Klartext |
 | `ext` | Person ohne Plattform-Profil: `{ name, typ, city, short, texts, img (data-URL), gone }` |
 | `alias`, `aliasAt` | eigener Name des Nutzers für diese Person (bis 60 Zeichen) und Zeitpunkt; der neuere gewinnt. Home Assistant zeigt „alias (Nick)“ (seit poppen 2.49 / JOYclub 2.18) |
-| `thumb` | Vorschaubild (data-URL, JPEG/PNG/WebP, höchstens 150 px): schreibt nur das Skript der Plattform des Hauptprofils (poppen-Skript für poppen, JOYclub-Skript für JOYclub, poppen-Skript auch für eigene Externe mit `ext.img`); die anderen führen es mit und zeigen es an (seit poppen 2.51 / JOYclub 2.23) |
-| `pics[]` | alle Bilder der Person: `{ k, src, pf, at }` – `k` stabile Kennung (`joyclub-<Bild-ID>`, `poppen-<uid>-<hash>`), `src` Adresse in voller Auflösung, `pf` Plattform, `at` gefunden am (ms); Videos zusätzlich `v: 1, vid` (Video-ID); JOYclub (ab 2.19) mit `vuid` (Profil-ID) und leerem `src`, poppen (ab 2.50) mit der signierten HLS-Adresse in `src` und ihrem Ablauf `exp` (ms). Nie entfernen; gleiche `k` nur einmal. Bilddaten liegen nur lokal bzw. in Home Assistant (seit JOYclub 2.13 / poppen 2.48) |
+| `thumb` | Vorschaubild (data-URL, JPEG/PNG/WebP, höchstens 150 px): schreibt nur das Skript der Plattform des Hauptprofils (poppen-Skript für poppen, JOYclub-Skript für JOYclub, xHamster-Skript für xHamster, poppen-Skript auch für eigene Externe mit `ext.img`); die anderen führen es mit und zeigen es an (seit poppen 2.51 / JOYclub 2.23 / xHamster 0.2.0) |
+| `pics[]` | alle Bilder der Person: `{ k, src, pf, at }` – `k` stabile Kennung (`joyclub-<Bild-ID>`, `poppen-<uid>-<hash>`, `xhamster-<Foto-ID>`), `src` Adresse in voller Auflösung, `pf` Plattform, `at` gefunden am (ms); Videos zusätzlich `v: 1, vid` (Video-ID); JOYclub (ab 2.19) mit `vuid` (Profil-ID) und leerem `src`, poppen (ab 2.50) mit der signierten HLS-Adresse in `src` und ihrem Ablauf `exp` (ms). Nie entfernen; gleiche `k` nur einmal. Bilddaten liegen nur lokal bzw. in Home Assistant (seit JOYclub 2.13 / poppen 2.48) |
 | `imported` | Herkunft beim Import (Text) |
 | `created` | Anlagezeitpunkt |
 | `updated` | **veraltet**, Ersatz: `updatedAt` |
@@ -148,6 +148,16 @@ Mit JOYclub-Skript im Browser-Profil ist der JOYclub-Server maßgeblich (Regeln 
 - Danach ein Bericht je Vorlage: neu · übernommen · zusammengeführt · übersprungen (Grund) · gelöscht · Grenze von 100 erreicht.
 
 **Kontobindung (3.4):** Jedes Skript bindet seinen Tampermonkey-Speicher an genau ein Konto seiner Plattform (poppen: `vaf2_owner { uid, nick, seit }`). Ist ein anderes Konto angemeldet, bleibt das Skript komplett aus und schreibt weder in `fick` noch in `tpl`. Steht in `tpl` ein `owner`, der nicht unter den eigenen `ich`-Einträgen ist, schreibt das Skript ebenfalls weder in `tpl` noch in `fick` (poppen ab 2.37).
+
+### xHamster (seit Skript 0.2.0)
+- Hauptprofil `main: { pf: "xhamster", uid, nick, url }`, neue Einträge `id: "xh:<uid>"`. In `profiles[]` sucht das Skript
+  `pf: "xhamster"` über `uid`, Link (`/users/<nick>` und `/users/profiles/<nick>` gelten gleich) oder Nick.
+- `ich`: `{ id: "xhamster:<uid>", pf: "xhamster", uid, nick, url, at }`.
+- Liest `meta.poppen_gm` (nur `vaf2_settings` und die Wohnorte aus `vaf2_me`) und übernimmt daraus Altersgrenzen,
+  Bezeichnungen und Whitelist. Schreibt nichts in `meta` und nichts in `tpl`.
+- Eigene Brücke wie beim JOYclub-Skript (Kopie in `xh_bkm_<Ablage>`), dazu bettet es den Briefkasten auf poppen.de und
+  joyclub.de passiv ein. Aus `meta` kopiert es nur `schema`, `poppen_gm`, `termine_file` und `xhamster_…`.
+- Rahmen-Adresse `briefkasten.html#host=<Seite>&xh=<Tab>` (`xh=-` = nur Brücke) – bewusst ohne `tab=`.
 
 ### `arch`
 Reserviert für ein gemeinsames Profil-Archiv. Das poppen-Skript führt sein Archiv derzeit verschlüsselt lokal.

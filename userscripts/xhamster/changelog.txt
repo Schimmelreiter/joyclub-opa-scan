@@ -1,6 +1,18 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.2.0 (27.11.2026)
+- Gemeinsame Ablage (Briefkasten) wie bei poppen.de und JOYclub, mit eigener Brücke; dafür bettet das Skript den
+  Briefkasten auch auf poppen.de und joyclub.de passiv ein
+- Regeln von poppen.de: Altersgrenzen, Bezeichnungen (Ruhrgebiet: „Oppa“), markieren/ignorieren je Gruppe und Whitelist
+  aus der Einstellungs-Kopie des poppen-Skripts; die eigenen Altersgrenzen (Menü „Altersgrenzen“) entfallen
+- Markierung nach diesen Regeln in Dating-Suche (die Karten wurden bisher nicht erkannt), Anfragen, Freunden,
+  Blockierten und Nachrichtenliste; auch nachgeladene Personen
+- Fickliste im Profilkasten (Status setzen, entfernen, löschen), Vorschaubild, eigenes Profil in „ich“, Bilder aus
+  geöffneten Galerien
+- Opa-Scan: Probelauf und Blockieren über die Dating-Suche, erster Block geprüft, Pausen, Höchstzahl, Ausnahmen
+- Rekorder-Menüs nur noch für die Testkonten
+
 0.1.13 (27.11.2026)
 - Rekorder, Scan-Lauf und Aktionstest nur noch für die Testkonten des Entwicklers; der Rekorder geht dort alle 30 Minuten
   (nur bei Änderungen) an Home Assistant. Der Menü-Schalter kann ihn weiterhin ein- oder ausschalten

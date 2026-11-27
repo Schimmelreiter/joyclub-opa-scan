@@ -1,10 +1,9 @@
-# Swinger Companion – xHamster (Vorversion)
+# Swinger Companion – xHamster
 
-Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com). Version 0.1 sammelt vor allem, wie die Seiten
-aufgebaut sind und welche Anfragen sie stellen (Rekorder), damit die nächsten Versionen Fickliste, Bilder und
-Blockieren wie bei JOYclub und poppen.de bekommen können. Teil von [Swinger Companion](../../README.md).
+Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
+wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.1.13 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.2.0 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -14,15 +13,39 @@ Stand: Version 0.1.13 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Was es tut
 
-- **Profilkasten** unter dem Nick: Nummer, Alter, Ort, Beziehung zu Dir (Freund, blockiert …), Galerien, Videos, Website.
-- **Markierungen** in Dating-Suche, Freundschaftsanfragen, Freunden und Blockierten: Alter, Ort, online, Freund,
-  blockiert, **gelöscht** („retired“). Über der Altersgrenze (Menü *Altersgrenzen*, Vorgabe: Männer ab 60) wird
-  abgedunkelt oder ausgeblendet. Alle Angaben sind freiwillig – fehlt eine, bleibt sie leer.
+- **Regeln von poppen.de:** Altersgrenzen (Stufe 1, Stufe 2, „Ignorieren ab“), Bezeichnungen (Jungspund, Mann, Opa …,
+  im Ruhrgebiet „Oppa“), „markieren“/„ignorieren“ je Gruppe und die Whitelist kommen aus der Einstellungs-Kopie, die das
+  poppen-Skript im Briefkasten ablegt (alle 30 Minuten neu, Menü *Regeln von poppen.de neu laden*). Ohne poppen-Skript
+  gelten dessen Vorgaben: Männer ab 50 ignorieren, Frauen und Paare nur anzeigen. Geändert werden die Regeln nur im
+  poppen-Skript. Männer = male, Frauen = female, Paare = „Male and female couple“; andere Angaben bleiben ohne Gruppe.
+- **Markierungen** in Dating-Suche, Freundschaftsanfragen, Freunden, Blockierten und der Nachrichtenliste: Bezeichnung in
+  der Farbe der Stufe (rot = wird ignoriert), Alter, Ort, online, „bald über der Grenze“, Ausnahme (Whitelist, Freund,
+  Fickliste), blockiert, **gelöscht** („retired“). Ignorierte werden abgedunkelt; in der Dating-Suche auf Wunsch
+  ausgeblendet (Menü *Opas in der Dating-Suche ausblenden*).
+- **Profilkasten** unter dem Nick: Nummer, Bezeichnung, Alter, Ort, Beziehung zu Dir, Galerien, Videos, Website und die
+  **Fickliste** mit Knöpfen *Will ich*, *Gefickt*, *Nein, danke!*, *Nie wieder!*, *Status entfernen*, *Aus Fickliste
+  löschen*. Die Fickliste ist dieselbe wie bei poppen.de und JOYclub; steht die Person dort schon mit einem anderen
+  Hauptprofil (und dem xHamster-Profil unter „Auch auf …“), wird dieser Eintrag geändert. Neue Personen bekommen das
+  xHamster-Profil als Hauptprofil und ein Vorschaubild.
+- **Galerien:** Öffnest Du eine Galerie einer Person aus der Fickliste, kommen die Bilder in deren Bilderliste.
+- **Opa-Scan** (Menü): geht die Dating-Suche ab der „Ignorieren ab“-Grenze durch, je Land (Vorgabe de, at, ch).
+  - *Opa-Scan: Probelauf (zählt nur)* – blockiert nichts, zeigt Treffer und Gründe fürs Überspringen.
+  - *Opa-Scan: Opas blockieren* – mit Höchstzahl je Lauf (Vorgabe 200). Der erste Block wird geprüft (xHamster muss
+    „blocked“ melden), danach 2–5 s Pause je Block. Bei Fehler 503 wartet er mit steigendem Abstand.
+  - Ausgenommen: Whitelist, Freunde, Fickliste, man selbst, schon Blockierte, gelöschte Konten, Profile ohne Alter.
+  - Läuft im Hintergrund des Tabs weiter (auch nach Neuladen), *■ Anhalten* oder „Abbrechen“ im Kasten stoppt ihn.
 - **Fehler 503:** Die Seite wird mit steigendem Abstand (5 s, 10 s, 20 s … höchstens 5 Minuten) neu geladen.
 
-## Rekorder, Scan-Lauf, Aktionstest (Tampermonkey-Menü)
+## Gemeinsame Ablage (Briefkasten)
 
-- **Rekorder** (standardmäßig an): merkt sich je Seitentyp den Datenstand der Seite (`window.initials`) und alle
+Wie poppen- und JOYclub-Skript nutzt das Skript den unsichtbaren Briefkasten auf schimmelreiter.github.io (Format:
+[FORMAT.md](../../docs/FORMAT.md)). Weil Chrome den Speicher eingebetteter Seiten je besuchter Seite trennt, bettet das
+Skript den Briefkasten auch auf poppen.de und joyclub.de ein – dort ohne Oberfläche, nur zum Abgleich. Deshalb fragt
+Tampermonkey bei der Installation auch nach diesen Seiten.
+
+## Rekorder, Scan-Lauf, Aktionstest (nur Testkonten des Entwicklers)
+
+- **Rekorder** (nur für die Testkonten an, alle 30 Minuten an Home Assistant): merkt sich je Seitentyp den Datenstand der Seite (`window.initials`) und alle
   nachgeladenen Anfragen an xHamster – gekürzt (Listen auf 3 Beispiele) und geschwärzt (Zugangsdaten, Mailadressen,
   IP-Adressen; Nachrichtentexte nur als Länge, außer den eigenen Testnachrichten).
 - **Scan-Lauf:** ruft im aktuellen Tab nacheinander eigenes Profil, Freunde, Anfragen, alle Seiten der Blockierten,

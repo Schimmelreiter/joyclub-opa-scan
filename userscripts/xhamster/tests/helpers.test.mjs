@@ -59,3 +59,41 @@ test('opNames: x-api operation names and batch urls', () => {
   assert.equal(H.opNames('/api/front/friends/friendship', JSON.stringify({ userId: 1, action: 'remove' })), ' action=remove');
   assert.equal(H.opNames('/api/front/messages/model', JSON.stringify({ items: [{ state: 'deleted', id: 'x' }] })), ' state=deleted');
 });
+
+// 0.2.0: Regeln von poppen.de, Seitenwechsel im Opa-Scan, Brücke
+const s0 = src.indexOf('  const stable = '), s1 = src.indexOf('  function xhBkServer(');
+const r0 = src.indexOf('  const POP_SRC = '), r1 = src.indexOf('  // Ruhrgebiet:');
+const n0 = src.indexOf('  // Anfangszustand einer anderen Seite holen'), n1 = src.indexOf('  const GENDER_OF = ');
+const R = new Function(src.slice(s0, s1) + src.slice(r0, r1) + src.slice(n0, n1) + '; return { stable, bridgePick, popRules, initialsOf, nextPageUrl };')();
+test('popRules: stored poppen values win only while the source default is unchanged', () => {
+  const s = R.popRules({
+    'groups.m.src.interaktionen': { v: [30, 45, 55], src: [29, 48, 50] },   // wird auch zu „global“
+    'groups.w.ignore': { v: true, src: false },
+    'groups.p.src.global': { v: [20, 30, 40], src: [1, 2, 3] },             // Quelltext seitdem geändert → Vorgabe gilt
+    'whitelist.names': { v: [{ n: 'A' }], src: [{ n: 'B' }] },               // eigene Namen bleiben immer
+    'expert.debug': { v: true, src: false },                                // nicht übernommen
+  });
+  assert.deepEqual(s.groups.m.src.global, [30, 45, 55]);
+  assert.equal(s.groups.w.ignore, true);
+  assert.deepEqual(s.groups.p.src.global, [29, 48, 50]);
+  assert.deepEqual(s.whitelist.names, [{ n: 'A' }]);
+  assert.equal('debug' in s.expert, false);
+  assert.deepEqual(R.popRules(null).groups.m.src.suche, [29, 48, 50]);
+});
+test('initialsOf and nextPageUrl', () => {
+  const html = '<script>window.initials={"datingListComponent":{"users":[{"id":1}]}};</script><a href="https://xhamster.com/dating/de/2?gender=male&amp;minAge=50#result-block">2</a><a href="https://xhamster.com/dating/3?x=1">3</a>';
+  assert.equal(R.initialsOf(html).datingListComponent.users[0].id, 1);
+  assert.equal(R.nextPageUrl(html, 1), 'https://xhamster.com/dating/de/2?gender=male&minAge=50');
+  assert.equal(R.nextPageUrl(html, 2), 'https://xhamster.com/dating/3?x=1');
+  assert.equal(R.nextPageUrl(html, 3), '');
+  assert.equal(R.initialsOf('<p>kaputt</p>'), null);
+});
+test('bridgePick: newer wins, ties decided by content', () => {
+  const a = { id: 'x', updatedAt: 2, v: 1 }, b = { id: 'x', updatedAt: 3, v: 2 };
+  assert.equal(R.bridgePick('fick', a, b), b);
+  assert.equal(R.bridgePick('fick', b, a), b);
+  assert.equal(R.bridgePick('fick', null, a), a);
+  const c = { id: 'x', updatedAt: 3, v: 3 };
+  assert.equal(R.bridgePick('fick', b, c), R.bridgePick('fick', c, b));
+  assert.equal(R.bridgePick('meta', { k: 'schema', schema: 1 }, { k: 'schema', schema: 2 }).schema, 2);
+});

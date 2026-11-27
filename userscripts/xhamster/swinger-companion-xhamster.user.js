@@ -1,15 +1,19 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.13
-// @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
+// @version      0.2.0
+// @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
+// @match        https://www.poppen.de/*
+// @match        https://www.joyclub.de/*
+// @match        https://schimmelreiter.github.io/briefkasten.html*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=xhamster.com
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_addValueChangeListener
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      *
@@ -21,18 +25,242 @@
 
 (function () {
   'use strict';
-  if (window.top !== window) return;
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const VER = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '';
   const K = {
     rec: 'xh_rec', recOn: 'xh_rec_on', scan: 'xh_scan', act: 'xh_act', ha: 'xh_ha_url', partner: 'xh_partner',
-    lists: 'xh_lists', opa: 'xh_opa', tests: 'xh_testmsgs',
+    lists: 'xh_lists', opa: 'xh_opa', tests: 'xh_testmsgs', oscan: 'xh_oscan',
   };
   const now = () => Date.now();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const gm = (k, d) => { try { const v = GM_getValue(k, d); return v === undefined ? d : v; } catch (e) { return d; } };
   const gs = (k, v) => { try { GM_setValue(k, v); } catch (e) { /* voll? */ } };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+
+  // =====================================================================
+  // Briefkasten: gemeinsame Ablage „opa-gemeinsam“ (Formatdefinition: docs/FORMAT.md) – ab 0.2.0
+  // =====================================================================
+  // IndexedDB auf github.io, nur im unsichtbaren Briefkasten-Rahmen geöffnet. Seite ↔ Rahmen über den eigenen
+  // Tampermonkey-Speicher: Anfragen xh_rpcq_<Tab>, Antworten xh_rpcr_<Tab>, Lebenszeichen xh_rpca_<Tab>.
+  // Chrome trennt den Speicher eingebetteter Seiten nach der besuchten Seite: Der Briefkasten unter xhamster.com hat
+  // eine andere IndexedDB als unter poppen.de oder joyclub.de. Darum bettet dieses Skript den Briefkasten auch auf
+  // poppen.de und joyclub.de ein (passiv, ohne Oberfläche) und hält eine Kopie der Ablagen im eigenen Speicher
+  // (xh_bkm_<Ablage>); jeder Rahmen gleicht seine IndexedDB mit dieser Kopie ab, je Eintrag gewinnt der neuere Stand.
+  const BK_URL = 'https://schimmelreiter.github.io/briefkasten.html';
+  const BK_HOST = 'schimmelreiter.github.io';
+  const SHARED_DB = 'opa-gemeinsam';
+  const SHARED_SCHEMA = 1;
+  const SHARED_STORES = { meta: { keyPath: 'k' }, fick: { keyPath: 'id' }, tpl: { keyPath: 'id' }, ich: { keyPath: 'id' }, arch: { keyPath: 'id', autoIncrement: true, index: 'uid' } };
+  const VERSIONED = new Set(['fick', 'tpl']);
+  const BRIDGE_STORES = ['fick', 'tpl', 'ich', 'meta'];
+  // aus meta nur, was dieses Skript braucht (keine Schlüssel anderer Skripte in den eigenen Speicher)
+  const META_KEEP = /^(schema|poppen_gm|termine_file|xhamster_.*)$/;
+  const stable = (v) => (v === null || typeof v !== 'object') ? JSON.stringify(v) : Array.isArray(v) ? '[' + v.map(stable).join(',') + ']'
+    : '{' + Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
+  const bare = (v) => { if (!v || typeof v !== 'object') return v; const o = Object.assign({}, v); delete o.rev; return o; };
+  const sameEntry = (a, b) => stable(bare(a)) === stable(bare(b));
+  const tOf = (v) => Number((v && (v.updatedAt || v.at || v.updated || v.statusAt)) || 0);
+  // Gewinner zweier Stände desselben Eintrags (a = IndexedDB, b = Kopie); bei gleicher Zeit fest nach Inhalt
+  function bridgePick(store, a, b) {
+    if (!a) return b; if (!b) return a;
+    if (store === 'meta' && a.k === 'schema') return Number(b.schema || 0) > Number(a.schema || 0) ? b : a;
+    const ta = tOf(a), tb = tOf(b);
+    if (ta !== tb) return tb > ta ? b : a;
+    return stable(bare(b)) > stable(bare(a)) ? b : a;
+  }
+  function xhBkServer(parentTab) {
+    let dbp = null;
+    const sdb = () => dbp || (dbp = new Promise((resolve, reject) => {
+      const rq = indexedDB.open(SHARED_DB, 1);
+      rq.onupgradeneeded = () => {
+        const d = rq.result;
+        for (const [n, def] of Object.entries(SHARED_STORES)) {
+          if (d.objectStoreNames.contains(n)) continue;
+          const st = d.createObjectStore(n, { keyPath: def.keyPath, autoIncrement: !!def.autoIncrement });
+          if (def.index) st.createIndex(def.index, def.index, { unique: false });
+        }
+      };
+      rq.onsuccess = () => resolve(rq.result);
+      rq.onerror = () => { dbp = null; reject(rq.error); };
+    }));
+    const rp = (rq) => new Promise((res, rej) => { rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+    let bc = null; try { bc = new BroadcastChannel('opa-gemeinsam'); bc.onmessage = (e) => { const m = e.data || {}; if (m.store) { gs('xh_bkv_' + m.store, now()); bridgeSoon(); } }; } catch (e) { /* egal */ }
+    const notify = (store) => { gs('xh_bkv_' + store, now()); try { if (bc) bc.postMessage({ store, at: now(), by: 'xhamster' }); } catch (e) { /* egal */ } };
+    const defBy = () => ({ pf: 'xhamster', ver: VER });
+    async function op(o, a) {
+      const d = await sdb();
+      const store = a && a.s;
+      if (store && !SHARED_STORES[store]) throw new Error('unbekannte Ablage ' + store);
+      if (o === 'get') return rp(d.transaction(store).objectStore(store).get(a.k));
+      if (o === 'all') return rp(d.transaction(store).objectStore(store).getAll());
+      if (o === 'put' || o === 'del') {
+        // Lesen und Schreiben in EINER Transaktion; versionierte Ablagen mit Versionszähler gegen gleichzeitiges Schreiben
+        return new Promise((res, rej) => {
+          const t = d.transaction(store, 'readwrite'); const st = t.objectStore(store);
+          let out = null;
+          const key = o === 'del' ? a.k : a.v[SHARED_STORES[store].keyPath];
+          const doWrite = (cur) => {
+            if (VERSIONED.has(store)) {
+              const curRev = (cur && cur.rev) || 0;
+              if ('expect' in a && a.expect !== null && a.expect !== curRev) { out = { conflict: cur }; return; }
+              if ('expect' in a && a.expect === null && cur && !cur.deleted) { out = { conflict: cur }; return; }
+              const v = o === 'del' ? Object.assign({}, cur || { [SHARED_STORES[store].keyPath]: key }, { deleted: true }) : Object.assign({}, a.v);
+              if (o !== 'del') delete v.deleted;
+              v.rev = curRev + 1; v.updatedAt = now(); v.updatedBy = a.by || defBy();
+              st.put(v); out = { ok: true, rev: v.rev, v };
+            } else if (o === 'del') { st.delete(key); out = { ok: true }; } else { st.put(a.v); out = { ok: true }; }
+          };
+          if (key === undefined || key === null) { const r = st.put(a.v); r.onsuccess = () => { out = { ok: true, id: r.result }; }; } else { const g = st.get(key); g.onsuccess = () => doWrite(g.result); }
+          t.oncomplete = () => { if (out && out.ok && store !== 'meta') notify(store); if (out && out.ok) bridgeSoon(); res(out); };
+          t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+        });
+      }
+      if (o === 'count') return rp(d.transaction(store).objectStore(store).count());
+      throw new Error('unbekannter Aufruf ' + o);
+    }
+    (async () => { // Formatversion festhalten (nur erhöhen, nie senken)
+      try { const d = await sdb(); const cur = await rp(d.transaction('meta').objectStore('meta').get('schema')); if (!cur || cur.schema < SHARED_SCHEMA) await rp(d.transaction('meta', 'readwrite').objectStore('meta').put({ k: 'schema', schema: SHARED_SCHEMA, minRead: Math.max(1, (cur && cur.minRead) || 1) })); } catch (e) { /* egal */ }
+    })();
+    const bmKey = (s) => 'xh_bkm_' + s;
+    function bridgeWrite(d, store, list) {
+      const kp = SHARED_STORES[store].keyPath, versioned = VERSIONED.has(store);
+      return new Promise((res, rej) => {
+        const t = d.transaction(store, 'readwrite'); const st = t.objectStore(store); let n = 0;
+        for (const v of list) {
+          const g = st.get(v[kp]);
+          g.onsuccess = () => {
+            const cur = g.result;
+            if (cur && (sameEntry(cur, v) || bridgePick(store, cur, v) === cur)) return;
+            const w = Object.assign({}, v);
+            if (versioned) w.rev = ((cur && cur.rev) || 0) + 1;
+            st.put(w); n++;
+          };
+        }
+        t.oncomplete = () => res(n); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+      });
+    }
+    let bridgeBusy = false, bridgeAgain = false, bridgeTimer = 0;
+    async function bridge() {
+      if (bridgeBusy) { bridgeAgain = true; return; }
+      bridgeBusy = true;
+      try {
+        do {
+          bridgeAgain = false;
+          const d = await sdb();
+          for (const store of BRIDGE_STORES) {
+            const kp = SHARED_STORES[store].keyPath;
+            const local = new Map();
+            for (const v of await rp(d.transaction(store).objectStore(store).getAll())) if (store !== 'meta' || META_KEEP.test(String(v[kp]))) local.set(String(v[kp]), v);
+            const mir = Object.assign({}, gm(bmKey(store), {}) || {});
+            const toIdb = []; let mirChanged = false;
+            for (const key of new Set([...local.keys(), ...Object.keys(mir)])) {
+              if (store === 'meta' && !META_KEEP.test(key)) { if (key in mir) { delete mir[key]; mirChanged = true; } continue; }
+              const a = local.get(key), b = mir[key];
+              if (a && b && sameEntry(a, b)) continue;
+              if (bridgePick(store, a, b) === a) { mir[key] = bare(a); mirChanged = true; } else toIdb.push(b);
+            }
+            const n = toIdb.length ? await bridgeWrite(d, store, toIdb) : 0;
+            if (mirChanged) gs(bmKey(store), mir);
+            if (n && store !== 'meta') notify(store);
+          }
+        } while (bridgeAgain);
+        gs('xh_bkm_at', now());
+      } catch (e) { console.warn('[xHamster-SC] Briefkasten-Brücke', e); } finally { bridgeBusy = false; }
+    }
+    function bridgeSoon() { clearTimeout(bridgeTimer); bridgeTimer = setTimeout(bridge, 400); }
+    for (const store of BRIDGE_STORES) { try { GM_addValueChangeListener(bmKey(store), (n, o, v, remote) => { if (remote) bridgeSoon(); }); } catch (e) { /* egal */ } }
+    setTimeout(bridge, 300);
+    setInterval(bridge, 60000);
+    if (!parentTab) return;
+    const qk = 'xh_rpcq_' + parentTab, rk = 'xh_rpcr_' + parentTab, ak = 'xh_rpca_' + parentTab;
+    const doneIds = new Set();
+    let busy = false, again = false;
+    async function pump() {
+      if (busy) { again = true; return; }
+      busy = true;
+      try {
+        do {
+          again = false;
+          for (const r of gm(qk, []) || []) {
+            if (doneIds.has(r.id)) continue;
+            doneIds.add(r.id);
+            let ans;
+            try { ans = { id: r.id, v: await op(r.op, r.args) }; } catch (e) { ans = { id: r.id, err: (e && e.message) || String(e) }; }
+            const out = (gm(rk, []) || []).slice(-40); out.push(ans); gs(rk, out);
+          }
+        } while (again);
+      } finally { busy = false; }
+    }
+    try { GM_addValueChangeListener(qk, () => pump()); } catch (e) { /* egal */ }
+    const beat = () => gs(ak, now());
+    beat(); setInterval(beat, 5000);
+    setInterval(pump, 3000);
+    pump();
+  }
+  // Rahmen in die besuchte Seite einbetten (nur im obersten Fenster, einmal je Seite)
+  const TAB_ID = (() => { let t = ''; try { t = sessionStorage.getItem('xh_tab_id') || ''; if (!t) { t = now().toString(36) + Math.random().toString(36).slice(2, 8); sessionStorage.setItem('xh_tab_id', t); } } catch (e) { t = 'x' + now().toString(36); } return t; })();
+  function bkEnsureFrame(withTab) {
+    if (window.top !== window) return;
+    const put = () => {
+      if (document.getElementById('xhsc-briefkasten') || !document.documentElement) return;
+      const f = document.createElement('iframe');
+      f.id = 'xhsc-briefkasten';
+      // Kennung des Tabs in „xh=“ (nicht „tab=“): sonst bedient auch der Rahmen des poppen-Skripts diesen Tab und hinterlässt Reste
+      f.src = `${BK_URL}#host=${location.hostname}&xh=${withTab ? encodeURIComponent(TAB_ID) : '-'}`;
+      f.setAttribute('aria-hidden', 'true'); f.tabIndex = -1;
+      f.style.cssText = 'position:fixed;width:0;height:0;border:0;left:-9999px;top:-9999px;visibility:hidden';
+      document.documentElement.appendChild(f);
+    };
+    if (withTab) put(); else setTimeout(put, Math.floor(Math.random() * 1500));
+  }
+  // Aufrufe an den eigenen Rahmen
+  const SH = (() => {
+    const qk = 'xh_rpcq_' + TAB_ID, rk = 'xh_rpcr_' + TAB_ID, ak = 'xh_rpca_' + TAB_ID;
+    const pend = new Map();
+    let seq = 0, listening = false;
+    function listen() {
+      if (listening) return; listening = true;
+      try {
+        GM_addValueChangeListener(rk, (n, o, v) => {
+          const done = [];
+          for (const r of v || []) { const p = pend.get(r.id); if (!p) continue; pend.delete(r.id); done.push(r.id); if (r.err) p.rej(new Error(r.err)); else p.res(r.v); }
+          if (done.length) gs(qk, (gm(qk, []) || []).filter((x) => !done.includes(x.id) && pend.has(x.id)));
+        });
+      } catch (e) { console.warn('[xHamster-SC] Ablage', e); }
+      window.addEventListener('pagehide', () => { try { GM_deleteValue(qk); GM_deleteValue(rk); GM_deleteValue(ak); } catch (e) { /* egal */ } });
+    }
+    const alive = () => now() - (gm(ak, 0) || 0) < 15000;
+    async function call(op, args, timeout = 15000) {
+      listen();
+      bkEnsureFrame(true);
+      const t0 = now();
+      while (!alive()) { if (now() - t0 > timeout) throw new Error('Briefkasten nicht erreichbar'); await sleep(250); }
+      return new Promise((res, rej) => {
+        const id = (++seq) + '.' + now().toString(36);
+        pend.set(id, { res, rej });
+        const q = gm(qk, []) || []; q.push({ id, op, args }); gs(qk, q);
+        setTimeout(() => { if (pend.has(id)) { pend.delete(id); gs(qk, (gm(qk, []) || []).filter((x) => x.id !== id)); rej(new Error('Briefkasten antwortet nicht')); } }, timeout);
+      });
+    }
+    return { call, alive };
+  })();
+
+  // Betriebsart nach Seite
+  if (location.hostname === BK_HOST) {
+    const m = /[#&]xh=([^&]*)/.exec(location.hash || '');
+    if (window.top !== window && /\/briefkasten\.html$/.test(location.pathname) && m) {
+      const tab = decodeURIComponent(m[1]);
+      try { xhBkServer(tab === '-' ? '' : tab); } catch (e) { console.warn('[xHamster-SC] Briefkasten-Ablage', e); }
+    }
+    return;
+  }
+  if (/(^|\.)(poppen|joyclub)\.de$/.test(location.hostname)) {
+    // passiv: nur den Briefkasten einbetten (Abgleich der Ablagen), keine Oberfläche, keine Eingriffe
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => bkEnsureFrame(false), { once: true }); else bkEnsureFrame(false);
+    return;
+  }
+  if (window.top !== window) return;
 
   // =====================================================================
   // Hilfen (rein, getestet)
@@ -221,8 +449,9 @@
           const url = typeof input === 'string' ? input : (input && typeof input.url === 'string' && input.url) || String((input && input.href) || input || '');
           const method = (init && init.method) || (input && input.method) || 'GET';
           const body = init && init.body;
+          if (/\/x-api(\?|$)/.test(url) && /post/i.test(method)) captureHdr((init && init.headers) || (input && input.headers));
           const p = of.apply(this, arguments);
-          p.then((res) => { try { res.clone().text().then((t) => recReq(method, url, body, res.status, t, res.headers.get('content-type'))).catch(() => {}); } catch (e) { /* egal */ } }).catch(() => {});
+          p.then((res) => { try { res.clone().text().then((t) => { recReq(method, url, body, res.status, t, res.headers.get('content-type')); ingest(url, t); }).catch(() => {}); } catch (e) { /* egal */ } }).catch(() => {});
           return p;
         };
         nf.__xhRec = true;
@@ -232,15 +461,18 @@
     try {
       const XP = W.XMLHttpRequest.prototype;
       if (!XP.__xhRec) {
-        const oo = XP.open, os = XP.send;
-        XP.open = function (m, u) { this.__xhm = m; this.__xhu = String((u && u.href) || u || ''); return oo.apply(this, arguments); };
+        const oo = XP.open, os = XP.send, oh = XP.setRequestHeader;
+        XP.open = function (m, u) { this.__xhm = m; this.__xhu = String((u && u.href) || u || ''); this.__xhh = {}; return oo.apply(this, arguments); };
+        XP.setRequestHeader = function (k, v) { try { if (this.__xhh) this.__xhh[k] = v; } catch (e) { /* egal */ } return oh.apply(this, arguments); };
         XP.send = function (b) {
           const x = this;
+          try { if (/\/x-api(\?|$)/.test(x.__xhu || '') && /post/i.test(x.__xhm || '')) captureHdr(x.__xhh); } catch (e) { /* egal */ }
           try {
             x.addEventListener('loadend', () => {
               try {
                 const t = x.responseType === '' || x.responseType === 'text' ? x.responseText : x.responseType === 'json' ? JSON.stringify(x.response) : '';
                 recReq(x.__xhm, x.__xhu, b, x.status, t, x.getResponseHeader('content-type'));
+                ingest(x.__xhu, t);
               } catch (e) { /* egal */ }
             });
           } catch (e) { /* egal */ }
@@ -249,6 +481,12 @@
         XP.__xhRec = true;
       }
     } catch (e) { /* egal */ }
+  }
+  // nachgeladene Personen (Dating „mehr“, Nachrichtenliste, Freunde Seite 2 …) für die Markierung merken
+  function ingest(url, t) {
+    if (!t || t.length > 3e6 || !/^\s*[[{]/.test(t)) return;
+    try { if (!/xhamster/.test(new URL(url, location.origin).hostname)) return; } catch (e) { return; }
+    try { peopleWalk(JSON.parse(t)); } catch (e) { /* egal */ }
   }
   const routeName = () => { const m = document.querySelector('meta[name="sentry-route-name"]'); try { return m ? decodeURIComponent(m.content) : pathPattern(location.href); } catch (e) { return pathPattern(location.href); } };
   const initials = () => { try { return W.initials || null; } catch (e) { return null; } };
@@ -289,7 +527,7 @@
     box.id = 'xhsc-box';
     box.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483646;width:360px;max-height:50vh;overflow:auto;background:#1f2125;color:#eee;border:1px solid #444;border-radius:10px;font:12.5px/1.4 system-ui,sans-serif;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5)';
     box.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>Swinger Companion · xHamster</b><span><button data-a="stop" style="background:#c62828;color:#fff;border:0;border-radius:6px;padding:2px 8px;cursor:pointer">Abbrechen</button> <button data-a="hide" style="background:#444;color:#fff;border:0;border-radius:6px;padding:2px 8px;cursor:pointer">✕</button></span></div><div data-s style="margin:6px 0;color:#9ec5ff"></div><div data-l style="white-space:pre-wrap;font:11.5px/1.35 ui-monospace,monospace;color:#bbb"></div>';
-    box.querySelector('[data-a=stop]').onclick = () => { gs(K.scan, null); gs(K.act, null); uiStatus('Abgebrochen.'); };
+    box.querySelector('[data-a=stop]').onclick = () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); uiStatus('Abgebrochen.'); };
     box.querySelector('[data-a=hide]').onclick = () => box.remove();
     document.body.appendChild(box);
     return box;
@@ -298,7 +536,7 @@
   function uiLog(t) {
     logLines.push(new Date().toLocaleTimeString() + ' ' + t);
     if (logLines.length > 60) logLines.shift();
-    const b = (gm(K.scan, null) || gm(K.act, null)) ? uiBox() : box;
+    const b = (gm(K.scan, null) || gm(K.act, null) || gm(K.oscan, null)) ? uiBox() : box;
     if (b && b.isConnected) b.querySelector('[data-l]').textContent = logLines.join('\n');
   }
 
@@ -772,32 +1010,272 @@
   }
 
   // =====================================================================
-  // Anzeige auf den Seiten: Profilkasten, Alters-Markierung (Dating, Anfragen, Freunde, Blockierte)
+  // Regeln von poppen.de (ab 0.2.0): Altersgrenzen, Bezeichnungen, Whitelist aus der Einstellungs-Kopie des
+  // poppen-Skripts im Briefkasten (meta.poppen_gm). Ohne Kopie gelten die Vorgaben des poppen-Skripts.
   // =====================================================================
-  const opa = () => Object.assign({ male: 60, female: 0, couple: 0, hide: false }, gm(K.opa, {}) || {});
-  function opaSetup() {
-    const o = opa();
-    const v = prompt('Markieren ab Alter (0 = aus) für Männer, Frauen, Paare – z. B. 60,0,0:', `${o.male},${o.female},${o.couple}`);
-    if (v == null) return;
-    const [m, f, c] = v.split(/[,; ]+/).map((x) => Math.max(0, parseInt(x, 10) || 0));
-    o.male = m || 0; o.female = f || 0; o.couple = c || 0;
-    o.hide = confirm('Markierte ganz ausblenden? (Abbrechen = nur abdunkeln)');
-    gs(K.opa, o);
+  const POP_SRC = ['global', 'interaktionen', 'besucher', 'party', 'gruppen', 'suche'];
+  const ages3 = (a, b, c) => Object.fromEntries(POP_SRC.map((k) => [k, [a, b, c]]));
+  const POP_DEFAULTS = {
+    groups: {
+      m: { visual: true, ignore: true, types: ['m'], src: ages3(29, 48, 50), labels: ['Jungspund', 'Jungspunde', 'Mann', 'Männer', 'Opa', 'Opas'] },
+      w: { visual: false, ignore: false, types: ['w'], src: ages3(29, 48, 50), labels: ['junge Frau', 'junge Frauen', 'Frau', 'Frauen', 'Oma', 'Omas'] },
+      p: { visual: false, ignore: false, types: ['p'], separate: false, coupleMode: 'any', src: ages3(29, 48, 50), srcW: ages3(29, 48, 50), srcM: ages3(29, 48, 50),
+        sugarDaddy: { on: false, gap: 15 }, sugarMom: { on: false, gap: 15 }, labels: ['junges Paar', 'junge Paare', 'Paar', 'Paare', 'Geronto-Paar', 'Geronto-Paare'] },
+    },
+    warnYears: 1,
+    watch: true,
+    whitelist: { names: [], prefixes: ['Pop-MOD-'] },
+    expert: { sharedLimits: true },
+  };
+  const AGE_MAX = 99;
+  const openTop = (x) => (x >= AGE_MAX ? Infinity : x);
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const getPath = (o, p) => p.split('.').reduce((x, k) => (x == null ? undefined : x[k]), o);
+  function setPath(o, p, v) { const ks = p.split('.'); let x = o; for (let i = 0; i < ks.length - 1; i++) { if (x[ks[i]] == null || typeof x[ks[i]] !== 'object') x[ks[i]] = {}; x = x[ks[i]]; } x[ks[ks.length - 1]] = v; }
+  function flatten(o, pre = '', out = {}) { for (const [k, v] of Object.entries(o)) { const p = pre ? pre + '.' + k : k; if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length) flatten(v, p, out); else out[p] = v; } return out; }
+  // gespeicherte poppen-Einstellungen ({ Pfad: { v, src } }, nur Abweichungen) auf die Vorgaben legen – wie loadSettings()
+  // im poppen-Skript: Hat sich der Quelltext-Wert seitdem geändert, gilt der neue Quelltext-Wert
+  function popRules(stored) {
+    const s = clone(POP_DEFAULTS);
+    const st = Object.assign({}, stored || {});
+    const flatDef = flatten(POP_DEFAULTS);
+    for (const gk of Object.keys(POP_DEFAULTS.groups)) for (const key of ['src', 'srcW', 'srcM']) {
+      const pre = `groups.${gk}.${key}`;
+      if (!(pre + '.global' in st) && st[pre + '.interaktionen']) st[pre + '.global'] = Object.assign({}, st[pre + '.interaktionen']);
+    }
+    for (const [p, e] of Object.entries(st)) {
+      if (!e || typeof e !== 'object' || !('v' in e)) continue;
+      if (!/^(groups\.|warnYears$|watch$|whitelist\.(names|prefixes)$|expert\.sharedLimits$)/.test(p)) continue;
+      if (p === 'whitelist.names') { if (Array.isArray(e.v)) setPath(s, p, clone(e.v)); continue; }
+      const def = p in flatDef ? flatDef[p] : getPath(POP_DEFAULTS, p);
+      if (def !== undefined && stable(def) !== stable(e.src)) continue;
+      setPath(s, p, clone(e.v));
+    }
+    for (const g of Object.values(s.groups)) for (const key of ['src', 'srcW', 'srcM']) {
+      if (!g[key]) continue;
+      for (const k of POP_SRC) if (Array.isArray(g[key][k])) g[key][k] = g[key][k].map((x) => Math.max(18, Math.min(AGE_MAX, Number(x) || 18)));
+    }
+    return s;
   }
-  function overLimit(p) {
-    if (!p || p.age == null) return false;
-    const o = opa();
-    const lim = /couple/.test(p.gender) ? o.couple : /female/.test(p.gender) ? o.female : /male/.test(p.gender) ? o.male : 0;
-    return lim > 0 && p.age >= lim;
+  // Ruhrgebiet: „Oppa“ statt „Opa“ (wie im poppen-Skript; Wohnorte aus dessen eigenem Profil)
+  const RUHR = ['bochum', 'bottrop', 'dortmund', 'duisburg', 'essen', 'gelsenkirchen', 'hagen', 'hamm', 'herne', 'mülheim an der ruhr', 'mülheim',
+    'oberhausen', 'castrop-rauxel', 'datteln', 'dorsten', 'gladbeck', 'haltern am see', 'herten', 'marl', 'oer-erkenschwick', 'recklinghausen', 'waltrop',
+    'bergkamen', 'bönen', 'fröndenberg', 'holzwickede', 'kamen', 'lünen', 'schwerte', 'selm', 'unna', 'werne', 'breckerfeld', 'ennepetal', 'gevelsberg',
+    'hattingen', 'herdecke', 'schwelm', 'sprockhövel', 'wetter', 'witten', 'alpen', 'dinslaken', 'hamminkeln', 'hünxe', 'kamp-lintfort', 'moers',
+    'neukirchen-vluyn', 'rheinberg', 'schermbeck', 'sonsbeck', 'voerde', 'wesel', 'xanten'];
+  const REGIONAL = { Opa: 'Oppa', Opas: 'Oppas', Oma: 'Omma', Omas: 'Ommas' };
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const ruhrOf = (cities) => (cities || []).some((c) => RUHR.includes(norm(c).replace(/\s*\(.*\)$/, '')));
+  // Stand: { at, src: 'poppen'|'vorgabe', stored, ruhr }
+  const POPK = 'xh_poprules';
+  let rulesCache = null;
+  function rules() {
+    if (rulesCache) return rulesCache;
+    const r = gm(POPK, null) || {};
+    rulesCache = popRules(r.stored);
+    rulesCache.ruhr = !!r.ruhr;
+    rulesCache.from = r.src === 'poppen' ? `poppen.de (Stand ${new Date(r.popAt || r.at || 0).toLocaleString()})` : 'Vorgaben des poppen-Skripts';
+    return rulesCache;
   }
-  function badgeHtml(p) {
+  async function rulesRefresh(force = false) {
+    const cur = gm(POPK, null);
+    if (!force && cur && now() - (cur.at || 0) < 30 * 60000) return false;
+    let r = null;
+    try { r = await SH.call('get', { s: 'meta', k: 'poppen_gm' }, 20000); } catch (e) { recEvent('Briefkasten nicht erreichbar', { info: String(e && e.message || e) }); gs(POPK, Object.assign({}, cur || {}, { at: now() })); return false; }
+    const data = (r && r.data) || null;
+    const next = data && data.vaf2_settings !== undefined
+      ? { at: now(), src: 'poppen', popAt: r.at || 0, popVer: r.ver || '', stored: data.vaf2_settings || {}, ruhr: ruhrOf(((data.vaf2_me || {}).cities) || []) }
+      : { at: now(), src: 'vorgabe', stored: {}, ruhr: false };
+    const changed = !cur || stable(cur.stored || {}) !== stable(next.stored) || cur.ruhr !== next.ruhr;
+    gs(POPK, next); rulesCache = null;
+    return changed;
+  }
+  function labelsOf(gk, s = rules()) {
+    const l = [...(s.groups[gk].labels || POP_DEFAULTS.groups[gk].labels)];
+    if (s.ruhr) for (const i of [4, 5]) if (REGIONAL[l[i]]) l[i] = REGIONAL[l[i]];
+    return l;
+  }
+  // xHamster-Geschlecht → Gruppe der poppen-Regeln (Paare aus Mann und Frau; übrige Paar- und Trans-Angaben bleiben ohne Gruppe)
+  const groupOfGender = (g) => (g === 'male' ? 'm' : g === 'female' ? 'w' : g === 'couple' ? 'p' : null);
+  const fickXhIds = () => new Set(gm('xh_fick_ids', []) || []);
+  function whiteOf(p, s = rules()) {
+    const n = norm(p.nick);
+    if (n && (s.whitelist.names || []).some((x) => norm(x && x.n) === n)) return 'Whitelist';
+    if (n && (s.whitelist.prefixes || []).some((x) => x && n.startsWith(norm(x)))) return 'Whitelist (Präfix)';
+    const lists = gm(K.lists, {}) || {};
+    if (p.relation === 'friend' || (lists.friends || []).includes(p.id)) return 'Freund';
+    if (p.id && fickXhIds().has(p.id)) return 'Fickliste';
+    const m = me();
+    if (m && p.id === m.id) return 'ich';
+    return '';
+  }
+  // Einstufung wie im poppen-Skript (eine Altersangabe je Profil, auch bei Paaren)
+  // src: 'suche' (Dating) oder 'interaktionen' (Anfragen, Nachrichten, Freunde) – gilt nur, wenn die Grenzen getrennt sind
+  function classify(p, src = 'suche', s = rules()) {
+    const r = { gk: groupOfGender(p && p.gender), stage: 0, ignore: false, near: false, white: '', label: '', lim: null, reason: '' };
+    if (!p) return r;
+    r.white = whiteOf(p, s);
+    if (p.age == null || !r.gk) return r;
+    const grp = s.groups[r.gk];
+    const set = grp.src;
+    const lim = (s.expert.sharedLimits ? set.global : set[src]) || set.interaktionen;
+    r.lim = lim;
+    r.stage = p.age <= openTop(lim[0]) ? 1 : p.age <= openTop(lim[1]) ? 2 : 3;
+    const over = p.age >= lim[2];
+    r.near = !over && p.age + (s.warnYears || 0) >= lim[2] && !!s.watch;
+    r.label = labelsOf(r.gk, s)[(r.stage - 1) * 2];
+    r.ignore = !!grp.ignore && over && !r.white;
+    if (r.ignore) r.reason = `über der Grenze (${p.age} ≥ ${lim[2]})`;
+    if (r.white) { r.near = false; r.reason = r.white; }
+    r.visual = !!grp.visual;
+    return r;
+  }
+  const STAGE_COL = { 1: '#43a047', 2: '#ffb74d', 3: '#ef6c00' };
+
+  // =====================================================================
+  // Personen, die die Seite kennt (Anfangszustand und nachgeladene Antworten) – für die Markierung
+  // =====================================================================
+  const People = { byId: new Map(), byNick: new Map(), byUrl: new Map() };
+  const urlKey = (u) => String(u || '').toLowerCase().split(/[?#]/)[0].replace(/\/users\/profiles\//, '/users/').replace(/\/+$/, '');
+  function peopleAdd(u) {
+    const p = personOf(u);
+    if (!p || !p.id || !p.nick) return;
+    const old = People.byId.get(p.id);
+    // ein vollständigeres älteres Bild (mit Alter) nicht durch ein ärmeres ersetzen
+    if (old && old.age != null && p.age == null) { p.age = old.age; p.gender = p.gender || old.gender; }
+    People.byId.set(p.id, p);
+    People.byNick.set(p.nick.toLowerCase(), p);
+    if (p.url) People.byUrl.set(urlKey(p.url), p);
+  }
+  function peopleWalk(o, d = 0) {
+    if (!o || typeof o !== 'object' || d > 9) return;
+    if (Array.isArray(o)) { for (const x of o.slice(0, 400)) peopleWalk(x, d + 1); return; }
+    if (o.id != null && typeof o.name === 'string' && (o.personalInfo || o.pageURL || o.retired === true) && /user/i.test(o.modelName || 'user')) peopleAdd(o);
+    for (const k in o) if (o[k] && typeof o[k] === 'object' && k !== 'layout') peopleWalk(o[k], d + 1);
+  }
+
+  // =====================================================================
+  // Gemeinsame Fickliste (ab 0.2.0)
+  // =====================================================================
+  const FSTAT = { want: 'Will ich', done: 'Gefickt', no: 'Nein, danke!', never: 'Nie wieder!' };
+  const FCOL = { want: '#ffb74d', done: '#43a047', no: '#9e9e9e', never: '#e53935' };
+  let fickCache = null, fickAt = 0;
+  async function fickAll(force = false) {
+    if (!force && fickCache && now() - fickAt < 60000) return fickCache;
+    const l = await SH.call('all', { s: 'fick' }, 20000);
+    fickCache = (l || []).filter((x) => x && !x.deleted); fickAt = now();
+    const ids = new Set();
+    for (const r of fickCache) for (const pr of [r.main, ...(r.profiles || [])]) if (pr && pr.pf === 'xhamster' && pr.uid && !pr.dead) ids.add(String(pr.uid));
+    gs('xh_fick_ids', [...ids]); rulesCache = null;
+    return fickCache;
+  }
+  const isXh = (pr, p) => !!pr && pr.pf === 'xhamster' && ((pr.uid && String(pr.uid) === p.id) || (pr.url && p.url && urlKey(pr.url) === urlKey(p.url)) || (!pr.uid && !pr.url && pr.nick && norm(pr.nick) === norm(p.nick)));
+  function fickFind(list, p) { return list.find((r) => isXh(r.main, p) || (r.profiles || []).some((x) => isXh(x, p) && !x.dead && !x.deleted && !x.gone)) || null; }
+  const fickBy = () => ({ pf: 'xhamster', ver: VER, acc: (me() || {}).nick || '' });
+  async function fickPut(v, expect) {
+    const r = await SH.call('put', { s: 'fick', v, expect, by: fickBy() }, 20000);
+    fickCache = null;
+    return r;
+  }
+  // Status setzen (status null = ohne Status); legt die Person bei Bedarf neu an (Hauptprofil xHamster)
+  async function fickSetStatus(p, status) {
+    for (let i = 0; i < 3; i++) {
+      const list = await fickAll(true);
+      const cur = fickFind(list, p);
+      const at = now();
+      let v, expect;
+      if (cur) {
+        v = clone(cur); expect = cur.rev || 0;
+        v.status = status; v.statusAt = at;
+        const prof = (v.profiles || []).find((x) => isXh(x, p));
+        if (prof && prof.status !== undefined && !prof.sync) { prof.status = status; prof.statusAt = at; }
+        if (v.main && v.main.pf === 'xhamster' && isXh(v.main, p)) Object.assign(v.main, { uid: p.id, nick: p.nick, url: p.url || v.main.url });
+      } else {
+        if (!status) return { ok: true };
+        expect = null;
+        v = { id: 'xh:' + p.id, main: { pf: 'xhamster', uid: p.id, nick: p.nick, url: p.url || profileUrl(p.nick) }, profiles: [], status, statusAt: at, created: at, history: [] };
+      }
+      v.history = (v.history || []).concat([{ at, what: `${status ? 'Status „' + FSTAT[status] + '“' : 'Status entfernt'} (xHamster)` }]).slice(-200);
+      const r = await fickPut(v, expect);
+      if (r && r.ok) { fickThumb(r.v, p).catch(() => {}); return r; }
+    }
+    throw new Error('Fickliste: gleichzeitig geändert, bitte noch einmal');
+  }
+  async function fickDelete(p) {
+    const list = await fickAll(true);
+    const cur = fickFind(list, p);
+    if (!cur) return;
+    if (!(cur.main && cur.main.pf === 'xhamster') || (cur.profiles || []).length) throw new Error('Die Person hat weitere Profile – dort löschen oder nur den Status entfernen.');
+    await SH.call('del', { s: 'fick', k: cur.id, expect: cur.rev || 0, by: fickBy() }, 20000);
+    fickCache = null;
+  }
+  // Vorschaubild (höchstens 150 px) – nur, wenn xHamster das Hauptprofil ist
+  function gmBlob(url) {
+    return new Promise((res, rej) => GM_xmlhttpRequest({ method: 'GET', url, responseType: 'blob', timeout: 30000, onload: (r) => (r.status === 200 && r.response ? res(r.response) : rej(new Error('Bild ' + r.status))), onerror: () => rej(new Error('Bild nicht ladbar')), ontimeout: () => rej(new Error('Zeitüberschreitung')) }));
+  }
+  async function thumbData(url) {
+    const bm = await createImageBitmap(await gmBlob(url));
+    const s = Math.min(1, 150 / Math.max(bm.width, bm.height));
+    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(bm.width * s)); c.height = Math.max(1, Math.round(bm.height * s));
+    c.getContext('2d').drawImage(bm, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.82);
+  }
+  async function fickThumb(rec, p) {
+    if (!rec || !rec.main || rec.main.pf !== 'xhamster' || !isXh(rec.main, p) || !p.thumb) return;
+    if (rec.thumb && now() - (gm('xh_thumb_' + rec.id, 0) || 0) < 7 * 86400000) return;
+    const t = await thumbData(p.thumb);
+    gs('xh_thumb_' + rec.id, now());
+    if (t === rec.thumb) return;
+    const v = clone(rec); v.thumb = t;
+    await fickPut(v, rec.rev || 0);
+  }
+  // Bilder aus geöffneten Galerien einer Person der Fickliste übernehmen (pics[])
+  async function fickGalleryPics() {
+    const g = (initials() || {}).galleryPage;
+    if (!g || !Array.isArray(g.photoItems) || !g.photoItems.length) return;
+    const a = ((g.infoProps || {}).authorInfoProps) || {};
+    if (!a.authorLink) return;
+    const p = { id: '', nick: a.authorName || '', url: a.authorLink };
+    const list = await fickAll();
+    const cur = fickFind(list, p);
+    if (!cur) return;
+    const have = new Set((cur.pics || []).map((x) => x.k));
+    const add = g.photoItems.filter((x) => x && x.id && x.imgSrc && !x.isBlurredMedia && !have.has('xhamster-' + x.id)).map((x) => ({ k: 'xhamster-' + x.id, src: x.imgSrc, pf: 'xhamster', at: now() }));
+    if (!add.length) return;
+    const v = clone(cur); v.pics = (v.pics || []).concat(add);   // nie entfernen (FORMAT.md)
+    const r = await fickPut(v, cur.rev || 0);
+    if (r && r.ok) uiToast(`${add.length} Bilder in die Fickliste übernommen (${esc(p.nick)})`);
+  }
+  // eigenes Profil in „ich“ eintragen (einmal am Tag)
+  async function ichPut() {
+    const m = me();
+    if (!m || !m.id || now() - (gm('xh_ich_at', 0) || 0) < 86400000) return;
+    await SH.call('put', { s: 'ich', v: { id: 'xhamster:' + m.id, pf: 'xhamster', uid: m.id, nick: m.nick, url: profileUrl(m.nick), at: now() } }, 20000);
+    gs('xh_ich_at', now());
+  }
+  function uiToast(html) {
+    if (!document.body) return;
+    const t = document.createElement('div');
+    t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483647;background:#1f2125;color:#eee;border:1px solid #444;border-radius:8px;padding:8px 14px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.5)';
+    t.innerHTML = html;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 5000);
+  }
+
+  // =====================================================================
+  // Anzeige auf den Seiten: Profilkasten, Markierung nach den poppen-Regeln (Dating, Anfragen, Freunde, Blockierte, Nachrichten)
+  // =====================================================================
+  const opa = () => Object.assign({ hide: false }, gm(K.opa, {}) || {});
+  function badgeHtml(p, c) {
     const bits = [];
     if (p.retired) bits.push('<b style="color:#ff7875">gelöscht</b>');
+    if (c && c.label && (c.visual || c.ignore)) bits.push(`<b style="color:${c.ignore ? '#e53935' : STAGE_COL[c.stage] || '#ccc'}">${esc(c.label)}</b>`);
     if (p.age != null) bits.push(`${p.age} J.`);
     if (p.city) bits.push(esc(p.city));
     if (p.online) bits.push('<span style="color:#7bd88f">online</span>');
+    if (c && c.near) bits.push('<span style="color:#ef6c00">bald über der Grenze</span>');
+    if (c && c.white) bits.push(`<span style="color:#9ec5ff">${esc(c.white)}</span>`);
     const lists = gm(K.lists, {}) || {};
-    if ((lists.friends || []).includes(p.id)) bits.push('<span style="color:#9ec5ff">Freund</span>');
     if ((lists.blocked || []).includes(p.id)) bits.push('<span style="color:#ffb74d">blockiert</span>');
     return bits.join(' · ');
   }
@@ -815,61 +1293,291 @@
     };
     if (/^\/my\/friends/.test(location.pathname)) take('friends', ini.friendsUsersCollection, ini.friendsUsersPaging);
     if (/^\/my\/blocked-users/.test(location.pathname)) take('blocked', ini.blockedUsersCollection, ini.blockedUsersPaging);
-    if (ch) gs(K.lists, lists);
+    if (ch) { gs(K.lists, lists); rulesCache = null; }
   }
+  const srcOfPage = () => (/^\/dating/.test(location.pathname) ? 'suche' : 'interaktionen');
   function decorate() {
-    const ini = initials() || {};
-    const users = [].concat(ini.requestsUsersCollection || [], ((ini.datingListComponent || {}).users) || [], ini.friendsUsersCollection || [], ini.blockedUsersCollection || []);
-    const byUrl = new Map(), byNick = new Map();
-    for (const u of users) { const p = personOf(u); if (!p) continue; if (p.url) byUrl.set(p.url.toLowerCase(), p); if (p.nick) byNick.set(p.nick.toLowerCase(), p); }
-    if (!byUrl.size && !byNick.size) return;
+    if (!People.byId.size) return;
+    const src = srcOfPage();
     const items = document.querySelectorAll('.item.friend, [class*="card"], [class*="Card"], li');
     for (const it of items) {
       if (it.querySelector('.xhsc-badge') || it.closest('#xhsc-box')) continue;
-      const a = it.querySelector('a[href*="/users/"]');
+      // 0.2.0: in der Dating-Suche ist die Karte selbst der Link
+      const a = it.matches('a[href*="/users/"]') ? it : it.querySelector('a[href*="/users/"]');
       const r = it.querySelector('.retired');
+      const un = it.matches('.conversation-list-item') ? it.querySelector('.username') : null;
       let p = null;
-      if (a) p = byUrl.get(a.href.split(/[?#]/)[0].toLowerCase()) || null;
-      if (!p && r) p = byNick.get(r.textContent.trim().toLowerCase()) || null;
+      if (a) p = People.byUrl.get(urlKey(a.href)) || null;
+      if (!p && r) p = People.byNick.get(r.textContent.trim().toLowerCase()) || null;
+      if (!p && un) p = People.byNick.get(un.textContent.trim().toLowerCase()) || null;
       if (!p) continue;
       // nur die kleinste passende Karte schmücken
       if ([...it.querySelectorAll('.item.friend, [class*="card"], [class*="Card"], li')].some((c) => c.querySelector('a[href*="/users/"]'))) continue;
-      const html = badgeHtml(p);
+      const c = classify(p, src);
+      const html = badgeHtml(p, c);
       if (!html) continue;
       const b = document.createElement('div');
       b.className = 'xhsc-badge';
       b.style.cssText = 'font:11.5px/1.3 system-ui,sans-serif;color:#ccc;margin-top:2px';
       b.innerHTML = html;
-      (it.querySelector('.info') || it).appendChild(b);
-      if (overLimit(p)) { if (opa().hide) it.style.display = 'none'; else { it.style.opacity = '.35'; it.title = `über der Altersgrenze (${p.age})`; } }
+      (it.querySelector('.info, .conversation-meta, [class*="userInfo-"]') || it).appendChild(b);
+      // bei jedem Neuzeichnen (z. B. nach neuen Regeln) setzen, nicht nur hinzufügen
+      it.style.display = ''; it.style.opacity = ''; it.removeAttribute('title');
+      if (c.ignore) { if (opa().hide && src === 'suche') it.style.display = 'none'; else { it.style.opacity = '.35'; it.title = `${c.label}: ${c.reason}`; } }
       if (p.retired) it.style.opacity = '.5';
     }
   }
-  function profileBox() {
-    if (!/^\/users\/[^/]+\/?$/.test(location.pathname) || document.getElementById('xhsc-prof')) return;
+  // Profilseite: Steckbrief aus dem HTML („I am: Name, 51 years old, male, heterosexual“)
+  function profilePerson() {
     const ini = initials() || {};
     const dm = ini.displayUserModel;
-    const h = document.querySelector('.user-name');
-    if (!dm || !h) return;
+    if (!dm || !dm.id) return null;
     const info = {};
     for (const r of document.querySelectorAll('.info-row')) {
       const l = r.querySelector('.label'), v = r.querySelector('.value');
       if (l && v) info[l.textContent.replace(/:\s*$/, '').trim()] = v.textContent.replace(/\s+/g, ' ').trim();
     }
-    const age = (/(\d{1,3}) years old/.exec(info['I am'] || '') || [])[1];
+    const iam = info['I am'] || '';
+    const age = (/(\d{1,3}) years old/.exec(iam) || [])[1];
+    const gender = /\bcouple\b/i.test(iam) ? (/male and female couple/i.test(iam) || /^\s*[^,]*,\s*\d+ years old, couple\b/i.test(iam) ? 'couple' : 'other_couple') : /\bfemale\b/i.test(iam) ? 'female' : /\bmale\b/i.test(iam) ? 'male' : '';
+    return { id: String(dm.id), nick: dm.name || '', url: dm.pageURL || location.href.split(/[?#]/)[0], thumb: dm.thumbURL || '', retired: !!dm.retired, relation: dm.currentUserRelation || '', age: age ? +age : null, gender, city: info.From || '', info };
+  }
+  function profileBox() {
+    if (!/^\/users\/(profiles\/)?[^/]+\/?$/.test(location.pathname) || document.getElementById('xhsc-prof')) return;
+    const h = document.querySelector('.user-name');
+    const p = profilePerson();
+    if (!p || !h) return;
+    const ini = initials() || {};
     const c = ini.counters || {};
-    const bits = [`#${dm.id}`];
-    if (age) bits.push(age + ' J.');
-    if (info.From) bits.push(esc(info.From));
-    if (dm.currentUserRelation && dm.currentUserRelation !== 'none') bits.push(esc(dm.currentUserRelation));
+    const cl = classify(p, 'interaktionen');
+    const bits = [`#${p.id}`];
+    if (cl.label && (cl.visual || cl.ignore)) bits.push(`<b style="color:${cl.ignore ? '#e53935' : STAGE_COL[cl.stage]}">${esc(cl.label)}</b>`);
+    if (p.age != null) bits.push(p.age + ' J.');
+    if (p.city) bits.push(esc(p.city));
+    if (p.relation && p.relation !== 'none') bits.push(esc(p.relation));
+    if (cl.near) bits.push('<span style="color:#ef6c00">bald über der Grenze</span>');
+    if (cl.white && cl.white !== 'ich') bits.push(`<span style="color:#9ec5ff">${esc(cl.white)}</span>`);
     if (c.galleries != null) bits.push(`${c.galleries} Galerien`);
     if (c.videos != null) bits.push(`${c.videos} Videos`);
-    if (info.Website) bits.push(`<a href="${esc(info.Website)}" target="_blank" rel="noopener" style="color:#9ec5ff">${esc(info.Website.replace(/^https?:\/\//, ''))}</a>`);
+    if (p.info.Website) bits.push(`<a href="${esc(p.info.Website)}" target="_blank" rel="noopener" style="color:#9ec5ff">${esc(p.info.Website.replace(/^https?:\/\//, ''))}</a>`);
     const d = document.createElement('div');
     d.id = 'xhsc-prof';
     d.style.cssText = 'font:12.5px/1.4 system-ui,sans-serif;color:#ccc;margin:4px 0 6px';
-    d.innerHTML = bits.join(' · ');
+    d.innerHTML = `<div>${bits.join(' · ')}</div>`;
     h.after(d);
+    if (cl.white === 'ich') return;
+    const f = document.createElement('div');
+    f.style.cssText = 'margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center';
+    d.appendChild(f);
+    const btn = (label, col, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.style.cssText = `background:${col};color:#fff;border:0;border-radius:6px;padding:2px 9px;cursor:pointer;font:12px system-ui,sans-serif`; b.onclick = fn; f.appendChild(b); return b; };
+    const draw = async (msg) => {
+      f.innerHTML = '<span style="color:#999">Fickliste …</span>';
+      let cur = null;
+      try { cur = fickFind(await fickAll(), p); } catch (e) { f.innerHTML = `<span style="color:#ff7875">Fickliste: ${esc(e.message)}</span>`; return; }
+      f.innerHTML = '';
+      const lab = document.createElement('span');
+      lab.innerHTML = 'Fickliste: ' + (cur ? `<b style="color:${FCOL[cur.status] || '#ccc'}">${esc(FSTAT[cur.status] || 'ohne Status')}</b>${cur.main && cur.main.pf !== 'xhamster' ? ` (Hauptprofil ${esc(cur.main.pf)}: ${esc(cur.main.nick || cur.alias || '')})` : ''}` : 'nicht eingetragen');
+      f.appendChild(lab);
+      const set = (st) => async () => { try { await fickSetStatus(p, st); draw(); } catch (e) { draw(); uiToast(esc(e.message)); } };
+      for (const [k, v] of Object.entries(FSTAT)) if (!cur || cur.status !== k) btn(v, FCOL[k], set(k));
+      if (cur && cur.status) btn('Status entfernen', '#555', set(null));
+      if (cur && cur.main && cur.main.pf === 'xhamster' && !(cur.profiles || []).length) btn('Aus Fickliste löschen', '#555', async () => { if (!confirm(`${p.nick} aus der Fickliste löschen?`)) return; try { await fickDelete(p); draw(); } catch (e) { uiToast(esc(e.message)); } });
+      if (msg) uiToast(msg);
+    };
+    draw();
+  }
+
+  // =====================================================================
+  // Opa-Scan (ab 0.2.0): Dating-Suche nach den poppen-Regeln durchgehen und Opas blockieren
+  // Erst Probelauf (zählt nur), dann Blockieren: der erste Block wird geprüft, danach Pausen von 2–5 s.
+  // Ausgenommen: Whitelist, Freunde, Fickliste, man selbst, schon Blockierte, gelöschte Konten.
+  // =====================================================================
+  let apiHdr = null;                       // Kopfzeilen der Seite für /x-api (nur im Arbeitsspeicher)
+  const HDR_SKIP = /^(content-length|cookie|host|content-type)$/i;
+  function captureHdr(h) {
+    if (!h) return;
+    const out = {};
+    try {
+      if (typeof h.forEach === 'function' && !Array.isArray(h)) h.forEach((v, k) => { if (!HDR_SKIP.test(k)) out[k] = v; });
+      else if (Array.isArray(h)) for (const [k, v] of h) { if (!HDR_SKIP.test(k)) out[k] = v; }
+      else for (const k of Object.keys(h)) if (!HDR_SKIP.test(k)) out[k] = h[k];
+    } catch (e) { return; }
+    if (Object.keys(out).length && (!apiHdr || stable(Object.keys(apiHdr).sort()) !== stable(Object.keys(out).sort()))) recEvent('Kopfzeilen für /x-api', { info: Object.keys(out).sort().join(', ') });
+    apiHdr = out;
+  }
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = (Math.random() * 16) | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16); }));
+  async function blockUser(id, state = true) {
+    const body = [{ name: 'entityBlockModelSync', requestData: { model: { id: null, $id: uuid(), modelName: 'entityBlockModel', itemState: 'created', entityModel: 'userModel', entityID: Number(id), state } } }];
+    const res = await W.fetch('/x-api', { method: 'POST', credentials: 'include', headers: Object.assign({ accept: 'application/json, text/plain, */*' }, apiHdr || {}, { 'content-type': 'application/json' }), body: JSON.stringify(body) });
+    const t = await res.text();
+    let j = null; try { j = JSON.parse(t); } catch (e) { j = null; }
+    const e = (Array.isArray(j) && j[0] && j[0].extras) || {};
+    return { ok: res.status === 200 && e.result === true, rel: e.currentUserRelation || '', msg: e.message || '', status: res.status };
+  }
+  // Anfangszustand einer anderen Seite holen, ohne hinzugehen
+  function initialsOf(html) {
+    const i = html.indexOf('window.initials=');
+    if (i < 0) return null;
+    const s = html.indexOf('{', i);
+    const e = html.indexOf('</script>', s);
+    if (s < 0 || e < 0) return null;
+    try { return JSON.parse(html.slice(s, e).replace(/;\s*$/, '')); } catch (x) { return null; }
+  }
+  // Link zur nächsten Ergebnisseite aus dem Seitenquelltext (Muster …/dating[/<land>]/<n+1>?…#result-block)
+  function nextPageUrl(html, page) {
+    const re = /href="(https:\/\/xhamster\.com\/dating[^"]*)"/g;
+    let m;
+    while ((m = re.exec(html))) {
+      const u = m[1].replace(/&amp;/g, '&');
+      try { const x = new URL(u); if (new RegExp('/' + (page + 1) + '$').test(x.pathname)) return x.origin + x.pathname + x.search; } catch (e) { /* weiter */ }
+    }
+    return '';
+  }
+  const GENDER_OF = { m: 'male', w: 'female', p: 'couple' };
+  function oscanPlan(s = rules()) {
+    const out = [];
+    for (const gk of ['m', 'w', 'p']) {
+      const g = s.groups[gk];
+      if (!g.ignore) continue;
+      const lim = (s.expert.sharedLimits ? g.src.global : g.src.suche) || g.src.interaktionen;
+      out.push({ gk, gender: GENDER_OF[gk], minAge: lim[2] });
+    }
+    return out;
+  }
+  function oscanStart(mode) {
+    const plan = oscanPlan();
+    if (!plan.length) { alert('Nach den poppen-Regeln wird keine Gruppe ignoriert – nichts zu tun.'); return; }
+    const cty = prompt('Länder (Kürzel, durch Komma getrennt; leer = alle):', gm('xh_oscan_cty', 'de,at,ch'));
+    if (cty == null) return;
+    gs('xh_oscan_cty', cty);
+    let max = 0;
+    if (mode === 'block') {
+      const v = prompt('Höchstens so viele in diesem Lauf blockieren:', String(gm('xh_oscan_max', 200)));
+      if (v == null) return;
+      max = Math.max(1, parseInt(v, 10) || 200); gs('xh_oscan_max', max);
+      const dry = gm('xh_oscan_last', null);
+      if (!dry || dry.mode !== 'dry' || now() - (dry.at || 0) > 86400000) { if (!confirm('Seit einem Tag kein Probelauf. Trotzdem gleich blockieren?')) return; }
+    }
+    const countries = cty.split(/[,; ]+/).map((x) => x.trim().toLowerCase()).filter((x) => /^[a-z]{2}$/.test(x));
+    const st = { mode, plan, countries: countries.length ? countries : [''], pi: 0, ci: 0, page: 1, url: '', seen: 0, hits: 0, done: 0, fail: 0, skip: {}, verified: false, max, started: now(), list: [], err: 0 };
+    gs(K.oscan, st);
+    recEvent('Opa-Scan gestartet', { info: `${mode} · ${plan.map((x) => x.gender + '≥' + x.minAge).join(', ')} · ${st.countries.join(',') || 'alle'}` });
+    oscanRun();
+  }
+  function oscanUrl(st) {
+    if (st.url) return st.url;
+    const pl = st.plan[st.pi];
+    const c = st.countries[st.ci];
+    const q = new URLSearchParams({ gender: pl.gender, maxAge: '99', minAge: String(pl.minAge), sort: 'activity' });
+    return `${location.origin}/dating${c ? '/' + c : ''}?${q}`;
+  }
+  let oscanBusy = false;
+  async function oscanRun() {
+    if (oscanBusy) return;
+    oscanBusy = true;
+    try {
+      const lockMine = () => { const l = gm('xh_oscan_lock', null); return !l || l.tab === TAB_ID || now() - l.at > 30000; };
+      if (!lockMine()) { uiStatus('Opa-Scan läuft in einem anderen Tab.'); return; }
+      await fickAll().catch(() => null);
+      for (;;) {
+        let st = gm(K.oscan, null);
+        if (!st) { uiStatus('Opa-Scan angehalten.'); break; }
+        if (!lockMine()) { uiStatus('Opa-Scan läuft in einem anderen Tab.'); break; }
+        gs('xh_oscan_lock', { tab: TAB_ID, at: now() });
+        if (st.pi >= st.plan.length) { oscanDone(st, 'fertig'); break; }
+        const pl = st.plan[st.pi];
+        const url = oscanUrl(st);
+        uiStatus(`Opa-Scan (${st.mode === 'dry' ? 'Probelauf' : 'Blockieren'}): ${pl.gender} ab ${pl.minAge}, ${st.countries[st.ci] || 'alle Länder'}, Seite ${st.page} · ${st.hits} Treffer · ${st.done} blockiert`);
+        let html = '';
+        try {
+          const res = await W.fetch(url, { credentials: 'include' });
+          if (res.status === 503 || res.status === 429) throw Object.assign(new Error('Server ' + res.status), { retry: true });
+          if (res.status !== 200) throw new Error('Seite ' + res.status);
+          html = await res.text();
+        } catch (e) {
+          st.err = (st.err || 0) + 1;
+          if (e.retry && st.err <= 6) { const w = retryDelay(st.err); uiLog(`${e.message} – neuer Versuch in ${Math.round(w / 1000)} s`); gs(K.oscan, st); await sleep(w); continue; }
+          oscanDone(st, 'abgebrochen: ' + e.message); break;
+        }
+        st.err = 0;
+        const ini = initialsOf(html);
+        const users = (((ini || {}).datingListComponent || {}).users) || [];
+        if (ini) peopleWalk(users);
+        const lists = gm(K.lists, {}) || {};
+        const blocked = new Set(lists.blocked || []);
+        for (const u of users) {
+          if (!gm(K.oscan, null)) break;
+          const p = personOf(u);
+          if (!p || !p.id) continue;
+          st.seen++;
+          if (p.retired) { st.skip.gelöscht = (st.skip.gelöscht || 0) + 1; continue; }
+          const cc = ((u.personalInfo || {}).geo || {}).countryCode;
+          if (st.countries[st.ci] && cc && cc.toLowerCase() !== st.countries[st.ci]) { st.skip['anderes Land'] = (st.skip['anderes Land'] || 0) + 1; continue; }
+          const c = classify(p, 'suche');
+          if (!c.ignore) { const why = c.white || (p.age == null ? 'ohne Alter' : 'unter der Grenze'); st.skip[why] = (st.skip[why] || 0) + 1; continue; }
+          if (blocked.has(p.id)) { st.skip['schon blockiert'] = (st.skip['schon blockiert'] || 0) + 1; continue; }
+          st.hits++;
+          if (st.list.length < 3000) st.list.push({ id: p.id, nick: p.nick, age: p.age, city: p.city, g: p.gender });
+          if (st.mode !== 'block') continue;
+          if (st.done >= st.max) break;
+          let r;
+          try { r = await blockUser(p.id, true); } catch (e) { r = { ok: false, msg: e.message }; }
+          if (r.ok) {
+            st.done++;
+            blocked.add(p.id);
+            lists.blocked = [...blocked]; gs(K.lists, lists);
+            uiLog(`blockiert: ${p.nick} (${p.age}, ${p.city || '?'})`);
+            if (!st.verified) {
+              st.verified = true;
+              recEvent('Opa-Scan: erster Block geprüft', { info: `Beziehung danach: ${r.rel || '?'}` });
+              if (r.rel && r.rel !== 'blocked') { gs(K.oscan, st); oscanDone(st, `abgebrochen: nach dem Blockieren meldet xHamster „${r.rel}“ statt „blocked“`); return; }
+            }
+          } else {
+            st.fail++;
+            uiLog(`nicht blockiert: ${p.nick} – ${r.msg || 'Status ' + r.status}`);
+            recEvent('Opa-Scan: Block fehlgeschlagen', { info: `${r.status || ''} ${r.msg || ''}`.trim() });
+            if (!st.verified || st.fail >= 3) { gs(K.oscan, st); oscanDone(st, 'abgebrochen: Blockieren klappt nicht' + (r.msg ? ` (${r.msg})` : '')); return; }
+          }
+          gs(K.oscan, st);
+          gs('xh_oscan_lock', { tab: TAB_ID, at: now() });
+          await sleep(2000 + Math.random() * 3000);
+        }
+        if (!gm(K.oscan, null)) { uiStatus('Opa-Scan angehalten.'); break; }
+        if (st.mode === 'block' && st.done >= st.max) { oscanDone(st, `Höchstzahl ${st.max} erreicht`); break; }
+        const next = users.length ? nextPageUrl(html, st.page) : '';
+        if (next && st.page < 200) { st.page++; st.url = next; } else {
+          st.page = 1; st.url = ''; st.ci++;
+          if (st.ci >= st.countries.length) { st.ci = 0; st.pi++; }
+        }
+        gs(K.oscan, st);
+        await sleep(2500 + Math.random() * 3000);
+      }
+    } finally { oscanBusy = false; }
+  }
+  function oscanDone(st, why) {
+    gs(K.oscan, null);
+    gs('xh_oscan_lock', null);
+    const sum = { mode: st.mode, at: now(), why, seen: st.seen, hits: st.hits, done: st.done, fail: st.fail, skip: st.skip, list: st.list.slice(0, 3000) };
+    gs('xh_oscan_last', sum);
+    recEvent('Opa-Scan beendet', { info: `${st.mode}: ${why} · ${st.seen} gesehen · ${st.hits} Treffer · ${st.done} blockiert · ${st.fail} Fehler` });
+    const skip = Object.entries(st.skip).map(([k, v]) => `${k} ${v}`).join(', ');
+    uiStatus(`Opa-Scan ${why}: ${st.seen} gesehen, ${st.hits} ${st.mode === 'dry' ? 'würden blockiert' : 'Treffer'}, ${st.done} blockiert${st.fail ? `, ${st.fail} Fehler` : ''}.`);
+    uiLog(`Übersprungen: ${skip || '–'}`);
+    if (st.mode === 'dry' && st.list.length) uiLog('Beispiele: ' + st.list.slice(0, 15).map((x) => `${x.nick} (${x.age})`).join(', '));
+  }
+  function rulesInfo() {
+    const s = rules();
+    const lines = [`Regeln: ${s.from}`];
+    for (const gk of ['m', 'w', 'p']) {
+      const g = s.groups[gk];
+      const lim = (s.expert.sharedLimits ? g.src.global : g.src.suche) || [];
+      const l = labelsOf(gk, s);
+      lines.push(`${{ m: 'Männer', w: 'Frauen', p: 'Paare' }[gk]}: ${l[0]} bis ${lim[0]}, ${l[2]} bis ${lim[1]}, ${l[4]} ab ${lim[2]} · markieren ${g.visual ? 'ja' : 'nein'} · ignorieren ${g.ignore ? 'ja' : 'nein'}`);
+    }
+    lines.push(`Whitelist: ${(s.whitelist.names || []).length} Namen, Präfixe ${(s.whitelist.prefixes || []).join(', ') || '–'}`);
+    const last = gm('xh_oscan_last', null);
+    if (last) lines.push(`Letzter Opa-Scan (${last.mode === 'dry' ? 'Probelauf' : 'Blockieren'}, ${new Date(last.at).toLocaleString()}): ${last.why}, ${last.hits} Treffer, ${last.done} blockiert`);
+    alert(lines.join('\n'));
   }
 
   // =====================================================================
@@ -877,18 +1585,22 @@
   // =====================================================================
   hookNetwork();
   // 0.1.7: zuerst, damit es auch bei schnellem Neuladen erreichbar ist
-  try { GM_registerMenuCommand('■ Scan-Lauf / Aktionstest anhalten', () => { gs(K.scan, null); gs(K.act, null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); }); } catch (e) { /* egal */ }
+  try { GM_registerMenuCommand('■ Anhalten (Opa-Scan, Scan-Lauf, Aktionstest)', () => { gs(K.scan, null); gs(K.act, null); gs(K.oscan, null); gs('xh_oscan_lock', null); gs('xh_accept', 0); uiStatus('Angehalten.'); recEvent('Von Hand angehalten'); }); } catch (e) { /* egal */ }
+  try { GM_registerMenuCommand('Opa-Scan: Probelauf (zählt nur)', () => oscanStart('dry')); } catch (e) { /* egal */ }
+  try { GM_registerMenuCommand('Opa-Scan: Opas blockieren', () => oscanStart('block')); } catch (e) { /* egal */ }
+  try { GM_registerMenuCommand('Regeln von poppen.de anzeigen', rulesInfo); } catch (e) { /* egal */ }
+  try { GM_registerMenuCommand('Regeln von poppen.de neu laden', async () => { await rulesRefresh(true); rulesInfo(); }); } catch (e) { /* egal */ }
+  try { GM_registerMenuCommand(`Opas in der Dating-Suche ${opa().hide ? 'nur abdunkeln' : 'ausblenden'}`, () => { const o = opa(); o.hide = !o.hide; gs(K.opa, o); alert(o.hide ? 'Opas werden in der Dating-Suche ausgeblendet (ab dem nächsten Laden).' : 'Opas werden nur abgedunkelt (ab dem nächsten Laden).'); }); } catch (e) { /* egal */ }
   if (recGate()) try { GM_registerMenuCommand('Scan-Lauf starten', scanStart); } catch (e) { /* egal */ }
   if (recGate()) try { GM_registerMenuCommand('Aktionstest starten (mit Partnerkonto)', actStart); } catch (e) { /* egal */ }
   if (recGate()) try { GM_registerMenuCommand('Freundschaftsanfrage des Partners annehmen', acceptPartner); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Rekorder an Home Assistant senden', recToHa); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Rekorder exportieren (Datei)', recExportFile); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand(`Rekorder ${recOn() ? 'ausschalten' : 'einschalten'}`, () => { gs(K.recOn, !recOn()); alert('Rekorder ' + (recOn() ? 'an' : 'aus') + ' (gilt ab dem nächsten Laden).'); }); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Rekorder: Vorgabe wiederherstellen (nur Testkonten)', () => { GM_deleteValue(K.recOn); alert('Rekorder läuft jetzt nur für die Testkonten.'); }); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Rekorder leeren', () => { if (confirm('Alles Gesammelte löschen?')) { recBuf = null; GM_deleteValue(K.rec); } }); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Partnerkonto eintragen', () => { const v = prompt('Nick des Partnerkontos (leer = Vorgabe):', gm(K.partner, '') || partner()); if (v != null) gs(K.partner, v.trim()); }); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Altersgrenzen', opaSetup); } catch (e) { /* egal */ }
-  try { GM_registerMenuCommand('Home-Assistant-Adresse eintragen', haSetup); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Rekorder an Home Assistant senden', recToHa); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Rekorder exportieren (Datei)', recExportFile); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand(`Rekorder ${recOn() ? 'ausschalten' : 'einschalten'}`, () => { gs(K.recOn, !recOn()); alert('Rekorder ' + (recOn() ? 'an' : 'aus') + ' (gilt ab dem nächsten Laden).'); }); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Rekorder: Vorgabe wiederherstellen (nur Testkonten)', () => { GM_deleteValue(K.recOn); alert('Rekorder läuft jetzt nur für die Testkonten.'); }); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Rekorder leeren', () => { if (confirm('Alles Gesammelte löschen?')) { recBuf = null; GM_deleteValue(K.rec); } }); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Partnerkonto eintragen', () => { const v = prompt('Nick des Partnerkontos (leer = Vorgabe):', gm(K.partner, '') || partner()); if (v != null) gs(K.partner, v.trim()); }); } catch (e) { /* egal */ }
+  if (recGate()) try { GM_registerMenuCommand('Home-Assistant-Adresse eintragen', haSetup); } catch (e) { /* egal */ }
 
   // Fehler 503 (Server überlastet): mit steigendem Abstand neu laden, das fängt sich von selbst
   function is503() {
@@ -916,6 +1628,13 @@
     setInterval(() => recToHa(true).catch(() => {}), 30 * 60000);
     recPage();
     collect();
+    peopleWalk(initials());
+    // gemeinsame Ablage: Regeln von poppen.de, Fickliste, eigenes Profil
+    (async () => {
+      try { if (await rulesRefresh()) { for (const b of document.querySelectorAll('.xhsc-badge')) b.remove(); const pb = document.getElementById('xhsc-prof'); if (pb) pb.remove(); } } catch (e) { /* egal */ }
+      try { await fickAll(); await ichPut(); await fickGalleryPics(); } catch (e) { recEvent('Fickliste nicht erreichbar', { info: String(e && e.message || e) }); }
+    })();
+    if (gm(K.oscan, null)) setTimeout(oscanRun, 3000);
     if (gm(K.scan, null)) setTimeout(scanTick, 2500);
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
@@ -929,5 +1648,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady, { once: true }); else onReady();
 
   // für Tests
-  if (typeof W.__xhscTest === 'function') W.__xhscTest({ shrink, maskStr, maskUrl, pathPattern, ageOf, personOf, censorDiff, MSG_VARIANTS });
+  if (typeof W.__xhscTest === 'function') W.__xhscTest({ shrink, maskStr, maskUrl, pathPattern, ageOf, personOf, censorDiff, MSG_VARIANTS, popRules, classify, labelsOf, initialsOf, nextPageUrl, oscanPlan, fickFind, bridgePick, urlKey, peopleWalk, People, ruhrOf });
 })();
