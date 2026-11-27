@@ -158,6 +158,11 @@ Mit JOYclub-Skript im Browser-Profil ist der JOYclub-Server maßgeblich (Regeln 
 - Eigene Brücke wie beim JOYclub-Skript (Kopie in `xh_bkm_<Ablage>`), dazu bettet es den Briefkasten auf poppen.de und
   joyclub.de passiv ein. Aus `meta` kopiert es nur `schema`, `poppen_gm`, `termine_file` und `xhamster_…`.
 - Rahmen-Adresse `briefkasten.html#host=<Seite>&xh=<Tab>` (`xh=-` = nur Brücke) – bewusst ohne `tab=`.
+- `pics[]` (seit 0.3.0): Bilder `k: "xhamster-<Foto-ID>"` mit `src`; Short Videos `k: "xhamster-s<ID>"`, `v: 1`, `vid`,
+  `page` (Seite des Videos), `short: 1`; Videos `k: "xhamster-v<ID>"`, `v: 1`, `vid`, `page`. `src` bleibt bei Videos
+  leer (Adressen gelten nur kurz und nur für die eigene IP). `off: true` = nicht synchronisieren (Eintrag bleibt).
+  Bilddaten und Videos schickt nur das xHamster-Skript an Home Assistant; das JOYclub-Skript (ab 2.25) meldet sie nur
+  in der Liste und lässt `off`-Einträge weg.
 
 ### `arch`
 Reserviert für ein gemeinsames Profil-Archiv. Das poppen-Skript führt sein Archiv derzeit verschlüsselt lokal.

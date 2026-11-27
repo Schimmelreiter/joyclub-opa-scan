@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.2.11
-// @description  Swinger Companion für xHamster: Opas markieren und blockieren nach den Regeln des poppen-Skripts, gemeinsame Fickliste, Profilkasten; Rekorder für die Testkonten
+// @version      0.3.0
+// @description  Swinger Companion für xHamster: Opas markieren und blockieren (Regeln von poppen.de oder eigene), gemeinsame Fickliste mit Bildern und Videos für Home Assistant, Textvorlagen, ohne Werbung; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
 // @match        https://www.poppen.de/*
@@ -273,7 +273,9 @@
   const DROP_K = /^(layout|gtmSettings|uiStats|bannerPrefix|bannerBottom|sponsor\w*|popunder\w*|xhlMlSource|staticDomain|redirectLandingParams|userStatsParams|ecommerceData|isServiceWorker\w*|ampServiceWorkerInstallUrl|relatedData|photoRelated\w*|bannerRightDesktopProps|momentsItemsStats)$/;
   const MAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
   const IP_RE = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
-  function maskStr(s) { return String(s).replace(MAIL_RE, '[mail]').replace(IP_RE, '[ip]'); }
+  // 0.3.0: auch IPv6 (mindestens vier Gruppen, damit Uhrzeiten wie 12:30:45 bleiben)
+  const IP6_RE = /\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b/gi;
+  function maskStr(s) { return String(s).replace(MAIL_RE, '[mail]').replace(IP6_RE, '[ip]').replace(IP_RE, '[ip]'); }
   function maskUrl(u) {
     try {
       const x = new URL(u, location.origin);
@@ -450,6 +452,7 @@
           const method = (init && init.method) || (input && input.method) || 'GET';
           const body = init && init.body;
           if (/\/x-api(\?|$)/.test(url) && /post/i.test(method)) captureHdr((init && init.headers) || (input && input.headers));
+          mediaUrlSeen(url);
           const p = of.apply(this, arguments);
           p.then((res) => { try { res.clone().text().then((t) => { recReq(method, url, body, res.status, t, res.headers.get('content-type')); ingest(url, t); }).catch(() => {}); } catch (e) { /* egal */ } }).catch(() => {});
           return p;
@@ -462,7 +465,7 @@
       const XP = W.XMLHttpRequest.prototype;
       if (!XP.__xhRec) {
         const oo = XP.open, os = XP.send, oh = XP.setRequestHeader;
-        XP.open = function (m, u) { this.__xhm = m; this.__xhu = String((u && u.href) || u || ''); this.__xhh = {}; return oo.apply(this, arguments); };
+        XP.open = function (m, u) { this.__xhm = m; this.__xhu = String((u && u.href) || u || ''); this.__xhh = {}; mediaUrlSeen(this.__xhu); return oo.apply(this, arguments); };
         XP.setRequestHeader = function (k, v) { try { if (this.__xhh) this.__xhh[k] = v; } catch (e) { /* egal */ } return oh.apply(this, arguments); };
         XP.send = function (b) {
           const x = this;
@@ -1070,6 +1073,7 @@
   const ruhrOf = (cities) => (cities || []).some((c) => RUHR.includes(norm(c).replace(/\s*\(.*\)$/, '')));
   // Stand: { at, src: 'poppen'|'vorgabe', stored, ruhr }
   const POPK = 'xh_poprules';
+  const OWNK = 'xh_own_rules';
   let rulesCache = null;
   function rules() {
     if (rulesCache) return rulesCache;
@@ -1079,6 +1083,18 @@
     rulesCache.popG = r.popG || [];
     rulesCache.sextype = r.sextype || [];
     rulesCache.from = r.src === 'poppen' ? `poppen.de (Stand ${new Date(r.popAt || r.at || 0).toLocaleString('de-DE')})` : 'Vorgaben des poppen-Skripts';
+    // 0.3.0: eigene Werte je Gruppe (Einstellungsseite) gehen den poppen-Werten vor: { m: { lim: [a, b, c], visual, ignore } }
+    rulesCache.own = {};
+    const own = gm(OWNK, {}) || {};
+    for (const gk of ['m', 'w', 'p']) {
+      const o = own[gk];
+      if (!o || typeof o !== 'object') continue;
+      const g = rulesCache.groups[gk];
+      if (Array.isArray(o.lim) && o.lim.length === 3) { const l = o.lim.map((x) => Math.max(18, Math.min(AGE_MAX, Number(x) || 18))); for (const k of POP_SRC) { g.src[k] = [...l]; if (g.srcW) g.srcW[k] = [...l]; if (g.srcM) g.srcM[k] = [...l]; } }
+      if ('visual' in o) g.visual = !!o.visual;
+      if ('ignore' in o) g.ignore = !!o.ignore;
+      rulesCache.own[gk] = true;
+    }
     return rulesCache;
   }
   async function rulesRefresh(force = false) {
@@ -1518,7 +1534,8 @@
     }).join('') + (meets.length > 8 ? `<div style="opacity:.6">… und ${meets.length - 8} weitere</div>` : '') : '';
     const notes = String(r.notes || '').trim();
     const noteHtml = notes ? `<div style="font-weight:600;margin:6px 0 2px">Anmerkung</div><div class="xhsc-fl-note" style="white-space:pre-wrap;max-height:7.5em;overflow:hidden;cursor:pointer" title="Klicken: ganz anzeigen">${esc(notes)}</div>` : '';
-    const right = meetHtml || noteHtml ? meetHtml + noteHtml : '<span style="opacity:.5">Keine Treffen, keine Anmerkung.</span>';
+    const vidHtml = flVideosHtml(r);
+    const right = (meetHtml || noteHtml ? meetHtml + noteHtml : '<span style="opacity:.5">Keine Treffen, keine Anmerkung.</span>') + vidHtml;
     return `<div class="item friend xhsc-fl-item" style="float:none;width:auto;display:flex;gap:16px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(128,128,128,.25)">
       <div style="display:flex;gap:12px;flex:0 0 340px;min-width:0"><div class="image-container avatar-container normal">${mainUrl ? `<a href="${esc(mainUrl)}" target="_blank" rel="noopener">${img}</a>` : img}</div>
       <div class="info" style="min-width:0;overflow-wrap:anywhere"><div class="info-line">${mainUrl ? `<a href="${esc(mainUrl)}" target="_blank" rel="noopener">${name}</a>` : name}</div><div>${st}</div><div style="font-size:12px;opacity:.85;line-height:1.4;margin-top:2px">${links}</div></div></div>
@@ -1549,6 +1566,7 @@
         .sort((a, b) => flName(a).localeCompare(flName(b), 'de', { sensitivity: 'base' }));
       l.innerHTML = rows.length ? rows.map(flItemHtml).join('') : '<span style="opacity:.6">Keine Einträge.</span>';
       for (const n of l.querySelectorAll('.xhsc-fl-note')) n.onclick = () => { n.style.maxHeight = n.style.maxHeight ? '' : '7.5em'; };
+      for (const c of l.querySelectorAll('input[data-vid]')) c.onchange = async () => { await videoToggle(c.dataset.rec, c.dataset.vid, !!c.checked); if (c.checked) mediaUpload().catch(() => {}); };
     };
     q.oninput = draw;
     draw();
@@ -1630,6 +1648,38 @@
     st.id = 'xhsc-nav-css';
     st.textContent = '[data-role="header-top-menu"] [data-nav-item-id="cams"],[data-role="header-top-menu"] [data-nav-item-id="premium"],[data-role="header-top-menu"] [data-nav-item-id="flirtify"],[data-role="header-top-menu"] li[data-nav-item-id="cams"],[data-role="header-top-menu"] li[data-nav-item-id="premium"],[data-role="header-top-menu"] li[data-nav-item-id="flirtify"]{display:none!important}';
     (document.head || document.documentElement).appendChild(st);
+    adCss(gm('xh_ad_prefix', ''));
+  }
+  // =====================================================================
+  // Werbung (ab 0.3.0): xHamster gibt allen Werbe-Blöcken eine zufällige Vorsilbe vor die Klassennamen (bannerPrefix
+  // in den Seitendaten, wechselt). Alles, dessen Klasse oder data-role damit beginnt, wird ausgeblendet. Dazu als
+  // zweiter Weg: Blöcke mit Links zu Cams, Premium und Nude Chat (/cam/out, /fh/out, /ff/out) und Cam-Vorschauen.
+  // =====================================================================
+  const AD_LINK = 'a[href*="/cam/out"], a[href*="/fh/out"], a[href*="/ff/out"], [data-cam-autoplay-driven], .cam-preview-video';
+  const AD_BOX = '[class*="cam-wgt"], [class*="widget"], [class*="Widget"], [class*="banner"], [class*="Banner"], [class*="promo"], [class*="Promo"]';
+  function adCss(prefix) {
+    if (!/^[A-Za-z0-9_-]{4,40}$/.test(prefix || '')) return;
+    let st = document.getElementById('xhsc-ad-css');
+    if (st && st.dataset.p === prefix) return;
+    if (!st) { st = document.createElement('style'); st.id = 'xhsc-ad-css'; (document.head || document.documentElement).appendChild(st); }
+    st.dataset.p = prefix;
+    const p = prefix.replace(/["\\]/g, '');
+    st.textContent = `[class^="${p}"],[class*=" ${p}"],[data-role^="${p}"]{display:none!important}`;
+  }
+  function adHide() {
+    const ini = initials() || {};
+    const p = ini.bannerPrefix;
+    if (p && p !== gm('xh_ad_prefix', '')) gs('xh_ad_prefix', p);
+    if (p) adCss(p);
+    for (const a of document.querySelectorAll(AD_LINK)) {
+      if (a.closest('[data-role="header-top-menu"], #xhsc-box, .xhsc-set, .xhsc-fl-list') || a.dataset.xhscAd) continue;
+      const box = a.closest(AD_BOX) || a;
+      // nie ganze Seitenbereiche: der Block darf keine Profile, Videos oder Nachrichten der Seite enthalten
+      const big = box.querySelector('a[href*="/users/"], a[href*="/videos/"]:not([href*="/cam/"]), .message, [data-role="user-list"]');
+      const el = big ? a : box;
+      el.style.setProperty('display', 'none', 'important');
+      a.dataset.xhscAd = '1';
+    }
   }
   // gesuchtes Geschlecht wie mopSeek() im poppen-Skript; ohne poppen-Profil nach dem eigenen xHamster-Geschlecht
   function mopSeek(s = rules()) {
@@ -1642,22 +1692,44 @@
     if (t === 'tv') return (s.moppel.types || []).includes('pw') ? 'w' : 'm';
     return gay ? 'm' : 'w';
   }
-  const mopUrl = () => `${location.origin}/dating?${new URLSearchParams({ gender: mopSeek() === 'm' ? 'male' : 'female', body: 'large', sort: 'activity' })}`;
+  // 0.3.0: eigene Länder (Vorgabe de) und Altersobergrenze = ein Jahr unter „Ignorieren ab“ der gesuchten Gruppe
+  const mopCountries = () => String(gm('xh_mop_cty', 'de') || '').split(/[,; ]+/).map((x) => x.trim().toLowerCase()).filter((x) => /^[a-z]{2}$/.test(x));
+  function mopUrl(cc) {
+    const s = rules();
+    const g = mopSeek(s);
+    const grp = s.groups[g];
+    const lim = (s.expert.sharedLimits ? grp.src.global : grp.src.suche) || grp.src.interaktionen;
+    const q = { gender: g === 'm' ? 'male' : 'female', body: 'large' };
+    if (lim && lim[2] < AGE_MAX) q.maxAge = String(Math.max(18, lim[2] - 1));
+    q.sort = 'activity';
+    return `${location.origin}/dating${cc ? '/' + cc : ''}?${new URLSearchParams(q)}`;
+  }
+  const ccName = (cc) => { try { return new Intl.DisplayNames(['de'], { type: 'region' }).of(cc.toUpperCase()) || cc.toUpperCase(); } catch (e) { return cc.toUpperCase(); } };
   function mopNav() {
     const s = rules();
     const ps = document.querySelector('[data-role="header-top-menu"] [data-nav-item-id="pornstars"]');
     const old = document.querySelector('[data-role="header-top-menu"] .xhsc-mop-nav');
-    if (!s.moppel.on) { if (old) old.remove(); return; }
-    if (!ps || old) return;
+    const ccs = mopCountries();
+    const sig = `${s.moppel.on}|${ccs.join(',')}|${mopUrl(ccs[0] || '')}|${(s.moppel.labels || [])[5] || ''}`;
+    if (old && old.dataset.sig !== sig) old.remove();
+    if (!s.moppel.on) return;
+    if (!ps || (old && old.isConnected && old.dataset.sig === sig)) return;
     const a0 = ps.querySelector('a');
-    const ic0 = a0 && a0.querySelector('.xh-icon');
+    const ic0 = a0 && a0.querySelector('.xh-icon:not([class*="arrowIcon"])');
     const tx0 = a0 && a0.querySelector('[class*="linkText-"]');
+    const arr0 = a0 && a0.querySelector('[class*="arrowIcon"]');
+    const ul0 = ps.querySelector('ul.dropdown');
+    const li0 = ul0 && ul0.querySelector('li a');
     if (!a0) return;
+    const many = ccs.length > 1;
     const d = document.createElement('div');
-    d.className = String(ps.className).replace(/\bxh-dropdown\b/, '').trim() + ' xhsc-mop-nav';
+    d.className = String(ps.className).replace(/\bxh-dropdown\b/, many ? 'xh-dropdown' : '').trim() + ' xhsc-mop-nav';
+    d.dataset.sig = sig;
     const label = (s.moppel.labels || [])[5] || 'XXL';
-    d.innerHTML = `<a class="${esc(a0.className)}" href="${esc(mopUrl())}" tabindex="-1"><span class="${esc(ic0 ? ic0.className : 'xh-icon')}">${xxlIconSvg(mopSeek())}</span> <div class="${esc(tx0 ? tx0.className : '')}"></div></a>`;
-    d.querySelector('div').textContent = label;
+    const sub = many ? `<ul class="${esc(ul0 ? ul0.className : 'dropdown')}">${ccs.map((cc) => `<li><a class="${esc(li0 ? li0.className : '')}" href="${esc(mopUrl(cc))}"></a></li>`).join('')}</ul>` : '';
+    d.innerHTML = `<a class="${esc(a0.className)}" href="${esc(mopUrl(ccs[0] || ''))}" tabindex="-1"><span class="${esc(ic0 ? ic0.className : 'xh-icon')}">${xxlIconSvg(mopSeek())}</span> <div class="${esc(tx0 ? tx0.className : '')}"></div>${many && arr0 ? arr0.outerHTML : ''}</a>${sub}`;
+    d.querySelector('a > div').textContent = label;
+    d.querySelectorAll('ul a').forEach((x, i) => { x.textContent = ccName(ccs[i]); });
     ps.before(d);
   }
 
@@ -1687,27 +1759,76 @@
   function setRow(label, html, tip) {
     return `<div class="xs-k">${esc(label)}${tip ? `<small>${esc(tip)}</small>` : ''}</div><div>${html}</div>`;
   }
+  // Schieberegler mit drei Griffen (Stufe 1 bis, Stufe 2 bis, Ignorieren ab) – Farben wie die Markierungen
+  const SLIDER_CSS = `.xhsc-set .xs-grp{padding:10px 0 14px;border-bottom:1px solid rgba(128,128,128,.18)}
+.xhsc-set .xs-grp:last-of-type{border-bottom:0}
+.xhsc-set .xs-gh{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.xhsc-set .xs-gh b{font-size:15px;min-width:80px}
+.xhsc-set .xs-src{font-size:12.5px;opacity:.7}
+.xhsc-set .xs-src.own{opacity:1;color:#ffb74d}
+.xhsc-set .xs-mini{border:1px solid rgba(128,128,128,.5);background:transparent;color:inherit;border-radius:14px;padding:2px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+.xhsc-set .xs-slider{position:relative;height:30px;max-width:620px;margin:4px 0 2px}
+.xhsc-set .xs-track{position:absolute;left:9px;right:9px;top:12px;height:6px;border-radius:3px;background:#555;overflow:hidden}
+.xhsc-set .xs-seg{position:absolute;top:0;bottom:0}
+.xhsc-set .xs-slider input[type=range]{position:absolute;left:0;top:4px;width:100%;margin:0;background:transparent;pointer-events:none;-webkit-appearance:none;appearance:none;height:22px;outline:none}
+.xhsc-set .xs-slider input[type=range]::-webkit-slider-runnable-track{background:transparent;height:22px}
+.xhsc-set .xs-slider input[type=range]::-moz-range-track{background:transparent}
+.xhsc-set .xs-slider input[type=range]::-webkit-slider-thumb{pointer-events:auto;-webkit-appearance:none;width:18px;height:18px;margin-top:2px;border-radius:50%;background:#fff;border:2px solid #333;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.5)}
+.xhsc-set .xs-slider input[type=range]::-moz-range-thumb{pointer-events:auto;width:15px;height:15px;border-radius:50%;background:#fff;border:2px solid #333;cursor:pointer}
+.xhsc-set .xs-vals{font-size:13.5px;margin:2px 0 8px}
+.xhsc-set .xs-vals b{font-variant-numeric:tabular-nums}
+.xhsc-set .xs-sw{display:flex;gap:28px;align-items:center;flex-wrap:wrap}
+.xhsc-set .xs-sw span{display:inline-flex;align-items:center;gap:10px}`;
+  const GROUP_NAME = { m: 'Männer', w: 'Frauen', p: 'Paare' };
+  const effLim = (g, s) => [...((s.expert.sharedLimits ? g.src.global : g.src.suche) || g.src.interaktionen)];
+  function grpHtml(gk, s) {
+    const g = s.groups[gk]; const l = labelsOf(gk, s); const x = effLim(g, s);
+    const own = !!s.own[gk];
+    const sw = (k, on, lab) => `<span><input type="checkbox" class="switcher" id="xhsc-g-${gk}-${k}" data-g="${gk}" data-sw="${k}" ${on ? 'checked' : ''}><label for="xhsc-g-${gk}-${k}" class="switcher-visible"></label>${lab}</span>`;
+    return `<div class="xs-grp" data-g="${gk}">
+      <div class="xs-gh"><b>${GROUP_NAME[gk]}</b><span class="xs-src${own ? ' own' : ''}">${own ? 'eigene Werte für xHamster' : 'wie poppen.de'}</span>${own ? `<button type="button" class="xs-mini" data-reset="${gk}">Wieder wie poppen.de</button>` : ''}</div>
+      <div class="xs-slider" data-g="${gk}"><div class="xs-track"><div class="xs-seg" data-s="1" style="background:${STAGE_COL[1]}"></div><div class="xs-seg" data-s="2" style="background:${STAGE_COL[2]}"></div><div class="xs-seg" data-s="3" style="background:${STAGE_COL[3]}"></div><div class="xs-seg" data-s="4" style="background:#e53935"></div></div>
+      ${x.map((v, i) => `<input type="range" min="18" max="${AGE_MAX}" step="1" value="${v}" data-i="${i}" aria-label="${['Stufe 1 bis', 'Stufe 2 bis', 'Ignorieren ab'][i]}">`).join('')}</div>
+      <div class="xs-vals" data-g="${gk}" data-l="${esc(JSON.stringify([l[0], l[2], l[4]]))}"></div>
+      <div class="xs-sw">${sw('visual', g.visual, 'markieren')}${sw('ignore', g.ignore, 'ignorieren')}</div></div>`;
+  }
+  // Segmente und Text eines Reglers nach den aktuellen Werten
+  function sliderPaint(box, gk) {
+    const sl = box.querySelector(`.xs-slider[data-g="${gk}"]`);
+    const v = [...sl.querySelectorAll('input')].map((i) => +i.value);
+    const pct = (a) => ((a - 18) / (AGE_MAX - 18)) * 100;
+    const seg = (n, a, b) => { const e = sl.querySelector(`.xs-seg[data-s="${n}"]`); e.style.left = pct(a) + '%'; e.style.width = Math.max(0, pct(b) - pct(a)) + '%'; };
+    seg(1, 18, v[0]); seg(2, v[0], v[1]); seg(3, v[1], v[2]); seg(4, v[2], AGE_MAX);
+    const vals = box.querySelector(`.xs-vals[data-g="${gk}"]`);
+    const l = JSON.parse(vals.dataset.l);
+    const top = (a) => (a >= AGE_MAX ? 'offen' : a);
+    vals.innerHTML = `${esc(l[0])} bis <b>${top(v[0])}</b> · ${esc(l[1])} bis <b>${top(v[1])}</b> · ${esc(l[2])} ab <b>${v[2] >= AGE_MAX ? '–' : v[2]}</b>`;
+  }
+  function ownSet(gk, patch) {
+    const own = gm(OWNK, {}) || {};
+    const s = rules();
+    const cur = own[gk] || { lim: effLim(s.groups[gk], s), visual: !!s.groups[gk].visual, ignore: !!s.groups[gk].ignore };
+    own[gk] = Object.assign(cur, patch);
+    gs(OWNK, own); rulesCache = null;
+  }
   function setPanelHtml() {
     const s = rules();
     const o = opa();
     const last = gm('xh_oscan_last', null);
-    const lim = (g) => (s.expert.sharedLimits ? g.src.global : g.src.suche) || [];
-    const yes = (v, red) => (v ? `<b${red ? ' style="color:#e53935"' : ''}>ja</b>` : '<span style="opacity:.6">nein</span>');
-    const grp = ['m', 'w', 'p'].map((gk) => {
-      const g = s.groups[gk]; const l = labelsOf(gk, s); const x = lim(g);
-      return `<tr><td>${{ m: 'Männer', w: 'Frauen', p: 'Paare' }[gk]}</td><td>${esc(l[0])} bis ${x[0]}</td><td>${esc(l[2])} bis ${x[1]}</td><td>${esc(l[4])} ab ${x[2]}</td><td>${yes(g.visual)}</td><td>${yes(g.ignore, true)}</td></tr>`;
-    }).join('');
     const sw = (id, on) => `<input type="checkbox" class="switcher" id="${id}" ${on ? 'checked' : ''}><label for="${id}" class="switcher-visible"></label>`;
     const lastTxt = last ? `${last.mode === 'dry' ? 'Probelauf' : 'Blockieren'} am ${esc(new Date(last.at).toLocaleString('de-DE'))}: ${esc(last.why)} · ${last.seen} gesehen · ${last.hits} Treffer · ${last.done} blockiert${last.fail ? ` · ${last.fail} Fehler` : ''}` : '<span style="opacity:.6">noch keiner</span>';
     const fromPoppen = (gm(POPK, null) || {}).src === 'poppen';
-    return `<style>${SET_CSS}</style>
-      <section><h3>Regeln von poppen.de</h3>
-      <p class="xs-note">Altersgrenzen, Bezeichnungen und Whitelist kommen aus dem poppen-Skript und werden dort geändert.</p>
-      <table><tr><th></th><th>Stufe 1</th><th>Stufe 2</th><th>Stufe 3 (Grenze)</th><th>markieren</th><th>ignorieren</th></tr>${grp}</table>
-      <div class="xs-grid">
+    const ha = haParse(gm(K.ha, ''));
+    const ms = mediaStats();
+    return `<style>${SET_CSS}${SLIDER_CSS}</style>
+      <section><h3>Altersgrenzen</h3>
+      <p class="xs-note">Vorgabe sind die Werte von poppen.de. Was Du hier verschiebst, gilt nur für xHamster.</p>
+      ${['m', 'w', 'p'].map((gk) => grpHtml(gk, s)).join('')}</section>
+      <section><h3>Von poppen.de</h3><div class="xs-grid">
       ${setRow('Stand', fromPoppen ? esc(s.from) : '<span class="xs-warn">Vorgaben des poppen-Skripts – keine Einstellungs-Kopie von poppen.de gefunden</span>', fromPoppen ? '' : 'poppen.de einmal mit installiertem xHamster-Skript öffnen, dann „Regeln neu laden“')}
-      ${setRow('Whitelist', `${(s.whitelist.names || []).length} Namen · Präfixe: ${esc((s.whitelist.prefixes || []).join(', ') || '–')}`, 'dazu immer: Freunde, Fickliste, Du selbst')}
+      ${setRow('Bezeichnungen und Whitelist', `${(s.whitelist.names || []).length} Namen · Präfixe: ${esc((s.whitelist.prefixes || []).join(', ') || '–')}`, 'dazu immer: Freunde, Fickliste, Du selbst')}
       ${setRow('Moppel-Liebhaber', s.moppel.on ? `an – Link „${esc((s.moppel.labels || [])[5] || 'XXL')}“ in der Kopfzeile` : 'aus')}
+      ${s.moppel.on ? setRow(`Länder für „${(s.moppel.labels || [])[5] || 'XXL'}“`, `<input class="xs-in" data-k="mopcty" value="${esc(gm('xh_mop_cty', 'de'))}">`, 'Kürzel, durch Komma getrennt; mehrere = Aufklappmenü') : ''}
       </div>
       <div class="xs-btns"><button type="button" class="xh-button black" data-a="reload">Regeln neu laden</button></div></section>
       <section><h3>Anzeige</h3><div class="xs-grid">
@@ -1718,7 +1839,11 @@
       ${setRow('Höchstens je Lauf blockieren', `<input class="xs-in" data-k="max" type="number" min="1" value="${esc(gm('xh_oscan_max', 200))}" style="max-width:120px">`)}
       ${setRow('Letzter Lauf', lastTxt)}
       </div>
-      <div class="xs-btns"><button type="button" class="xh-button black" data-a="dry">Probelauf (zählt nur)</button><button type="button" class="xh-button red" data-a="block">${OWs()} blockieren</button></div></section>`;
+      <div class="xs-btns"><button type="button" class="xh-button black" data-a="dry">Probelauf (zählt nur)</button><button type="button" class="xh-button red" data-a="block">${OWs()} blockieren</button></div></section>
+      <section><h3>Home Assistant</h3><div class="xs-grid">
+      ${setRow('Adresse', `${ha ? '<span>eingetragen</span> ' : '<span class="xs-warn">nicht eingetragen</span> '}<input class="xs-in" data-k="ha" type="password" autocomplete="off" placeholder="neue Adresse einfügen" style="max-width:360px;margin-top:6px">`, 'aus Home Assistant: Swinger Companion › Konfigurieren (gleiche Adresse wie beim JOYclub-Skript)')}
+      ${setRow('Bilder und Videos der Fickliste', `${ms.pics} Bilder · ${ms.shorts} Short Videos · ${ms.videosOn} von ${ms.videos} Videos · ${ms.sent} an Home Assistant geschickt${ms.waiting ? ` · ${ms.waiting} warten` : ''}`, 'Videos: bis 5 je Person alle, sonst einzeln einschalten')}
+      </div></section>`;
   }
   function setBind(box) {
     const q = (sel) => box.querySelector(sel);
@@ -1726,9 +1851,28 @@
     q('#xhsc-set-hide').onchange = (e) => { const o = opa(); o.hide = !!e.target.checked; gs(K.opa, o); };
     q('[data-k=cty]').onchange = (e) => gs('xh_oscan_cty', e.target.value.trim());
     q('[data-k=max]').onchange = (e) => gs('xh_oscan_max', Math.max(1, parseInt(e.target.value, 10) || 200));
+    const mc = q('[data-k=mopcty]'); if (mc) mc.onchange = (e) => gs('xh_mop_cty', e.target.value.trim());
+    q('[data-k=ha]').onchange = (e) => { const v = e.target.value.trim(); if (!v) return; if (!haParse(v)) { uiToast('Das ist keine gültige Adresse.'); return; } gs(K.ha, v); setFill(box); uiToast('Home-Assistant-Adresse gespeichert.'); };
     // Start mit den Werten dieser Seite (ohne Rückfragen nach Land und Höchstzahl)
     q('[data-a=dry]').onclick = () => oscanStart('dry', true);
     q('[data-a=block]').onclick = () => oscanStart('block', true);
+    for (const gk of ['m', 'w', 'p']) {
+      const ins = [...box.querySelectorAll(`.xs-slider[data-g="${gk}"] input`)];
+      ins.forEach((inp, i) => {
+        inp.addEventListener('input', () => {
+          // Reihenfolge halten: Stufe 1 ≤ Stufe 2 ≤ Ignorieren ab
+          const v = ins.map((x) => +x.value);
+          if (i < 2 && v[i] > v[i + 1]) v[i] = v[i + 1];
+          if (i > 0 && v[i] < v[i - 1]) v[i] = v[i - 1];
+          inp.value = v[i];
+          sliderPaint(box, gk);
+        });
+        inp.addEventListener('change', () => { ownSet(gk, { lim: ins.map((x) => +x.value) }); setFill(box); });
+      });
+      sliderPaint(box, gk);
+    }
+    for (const c of box.querySelectorAll('input[data-sw]')) c.onchange = () => { ownSet(c.dataset.g, { [c.dataset.sw]: !!c.checked }); setFill(box); };
+    for (const b of box.querySelectorAll('[data-reset]')) b.onclick = () => { const own = gm(OWNK, {}) || {}; delete own[b.dataset.reset]; gs(OWNK, own); rulesCache = null; setFill(box); };
   }
   function setFill(box) { box.innerHTML = setPanelHtml(); setBind(box); }
   // linke Leiste: Eintrag „Opa-Schutz“ hinter „Privacy“ (Vorlage: ein vorhandener Eintrag)
@@ -1788,31 +1932,457 @@
   function setCheckHash() { if (onEditPage() && location.hash === SET_HASH) setOpen(); }
 
   // =====================================================================
+  // Textvorlagen im Messenger (ab 0.3.0): Knopf rechts neben den Smileys. Die gemeinsamen Vorlagen (Briefkasten, Ablage
+  // „tpl“) stehen in JOYclub-Schreibweise; ihre Smileys werden in xHamster-Smileys (`:name:`) übersetzt, sonst in
+  // Unicode-Emoji (Tabelle aus der Smiley-Liste des poppen-Skripts). Mit „https://“ im Text kommen 10 Sternchen und ein
+  // Leerzeichen an den Anfang der Nachricht (sonst ersetzt xHamster die Zeichen 2–9 durch Sternchen, siehe NOTIZEN).
+  // =====================================================================
+  const JOY2XH = {"*danke*":":pray:","*thankyou*":":pray:","*g*":":smile:",":)":":smile:",":-)":":smile:","*kuss*":":kiss:","*schleck4*":":kiss:","*top*":":thumbsup:","*ggg*":":grin:",":D":":grin:",":-D":":grin:","*lol*":":joy:",":lol:":":joy:","*smile*":":relaxed:","*gg*":":smiley:","*zwinker*":":wink:",";)":":wink:",";-)":":wink:","*zwinker2*":":wink:",":wink:":":wink:","*xd*":":laughing:","*achtung*":"❗",":!:":"❗","*exclaim*":"❗","*alarm*":"🚨","*knuddel*":"🤗","*wink*":":wave:","*grins*":":grin:","*mrgreen*":":grin:",":mrgreen:":":grin:","*fiesgrins*":":smiling_imp:",":twisted:":":smiling_imp:","*twisted*":":smiling_imp:","*lach*":":laughing:","*haha*":":laughing:","*rotfl*":"🤣","*rofl*":"🤣","*haumichwech*":"🤣","*freu*":":smiley:","*juhu*":"🥳","*juchu*":"🥳","*happy*":":relaxed:","*witz*":":laughing:","*traenenlach*":":joy:","*aetsch*":":stuck_out_tongue:","*baeh*":":stuck_out_tongue:",":P":":stuck_out_tongue:",":-P":":stuck_out_tongue:",":razz:":":stuck_out_tongue:","*razz*":":stuck_out_tongue:","*selbstgefall*":":smirk:","*goofy*":"🤪","*oh*":":hushed:",":o":":hushed:",":-o":":hushed:",":surprised:":":hushed:","*surprised*":":hushed:","*oh2*":":hushed:","*schock*":":scream:",":shock:":":scream:","*shock*":":scream:","*panik*":"😨","*umfall*":":dizzy_face:","*gr*":":angry:",":x":":angry:","*gr2*":":imp:",":evil:":":imp:","*evil*":":imp:","*gr3*":":rage:","*gleichplatz*":"🤬","*uah*":":confounded:","*motz*":":triumph:","*fluch*":"🤬","*basta*":":triumph:","*freundchen*":":angry:","*kommmalherfreundchen*":":angry:","*blauesauge*":"🤕","*headcrash*":"🤕","*grimasse*":"😬","*snief*":":disappointed:",":(":":disappointed:",":-(":":disappointed:",":sad:":":disappointed:","*sad*":":disappointed:","*snief2*":":cry:",":cry:":":cry:","*cry*":":cry:","*heul*":":sob:","*heul2*":":sob:","*snief3*":":sob:","*flenn*":":sob:","*traurig*":":pensive:","*liebeskummer*":":broken_heart:","*troest*":"🤗","*keks*":"🤗","*muede*":":|",":|":":|",":-|":":|",":neutral:":":|","*neutral*":":|","*morgen*":":|","*gaehn*":"🥱","*gaehn2*":"🥱","*zzz*":"💤","*heia*":":sleeping:","*heia2*":":sleeping:","*baby2*":"👶","*tel*":"📞","*blabla*":"💬","*bla*":"💬","*bla2*":"💬","*lalala*":"🎶","*schweig*":"🤐","*fluester*":"🤫","*dafuer*":":thumbsup:","*dagegen*":"👎","*flop*":"👎","*top2*":":thumbsup:","*bravo*":":clap:","*zugabe*":":clap:","*spitze*":":ok_hand:","*tomaten*":"🍅","*wow*":"😲","*sabber*":"🤤","*umpf*":"🤢","*arg*":"🤢","*pfui*":"🤢","*victory*":":v:","*hi5*":":raised_hands:","*hutab*":"🎩","*100*":":100:","*wuerg*":"🤮","*wuerg2*":"🤮","*ko*":":dizzy_face:","*crazy2*":":dizzy_face:","*aspirin*":"💊","*sternchen*":":dizzy:","*3tagewach*":"😩","*schnupfen*":"🤧","*hatschi*":"🤧","*gehirnschnecke*":"🐌","*schwester*":"🧑‍⚕️","*mundschutz*":":mask:","*essen*":"🍴","*grill*":"🍖","*bier*":":beer:","*eis*":":icecream:","*lolli*":":lollipop:","*torte*":":birthday:","*muffin*":"🧁","*tee*":"🍵","*wein*":":wine_glass:","*cocktail*":":cocktail:","*fliege2*":"🦟","*whiskey*":"🥃","*prost*":":beer:","*party*":":beer:","*cheers*":"🥂","*stoesschen*":"🥂","*sekt*":"🍾","*party2*":"🍾","*zig*":"🚬","*troet*":":tada:","*twist*":"💃","*yo*":"💃","*walk*":"💃","*dance*":"💃","*boogie*":"💃","*hicks*":"🥴","*hochleb*":":raised_hands:","*stammtisch*":":beer:","*feuerwerk*":"🎆","*knuddel2*":"😚","*knutsch*":"😚","*knutsch2*":"😚","*friends*":"👫","*bussi*":"😙","*kuss2*":":kiss:","*herz*":":heart:","*herz2*":"💕","*herz3*":"💗","*herz4*":"💖","*love*":":heart:","*love2*":":heart:","*love3*":":heart:","*love4*":":heart:","*love5*":":heart_eyes:","*blume*":"🌹","*blumezupf*":":blossom:","*blumenschenk*":":bouquet:","*roseschenk*":"🌹","*geschenk*":":gift:","*osolemio*":"🎤","*hochzeit*":"💒","*kuss3*":":kissing_heart:","*bussi2*":":kissing_heart:","*knutsch3*":":kissing_heart:","*knutsch4*":":kissing_heart:","*blume2*":"🌷","*sweetkiss*":":kissing_heart:","*liebguck*":"🥰","*anbet*":"🙇","*floet*":":kissing_face:","*skeptisch*":"🤨","*pueh*":":expressionless:","*schmoll*":":expressionless:","*stolzbin*":":relieved:","*autsch*":"🤕","*cool*":":sunglasses:","8)":":sunglasses:","8-)":":sunglasses:","*cool2*":":sunglasses:","*aua*":"🤕","*huch*":"😲","*oh3*":"😲","*oh4*":"😲","*hae*":":confused:",":?":":confused:","*nixweiss*":"🤷","*naund*":"🤷","*schiefguck*":":confused:",":/":":confused:",":-/":":confused:",":confused:":":confused:","*confused*":":confused:","*roll*":"🙄",":roll:":"🙄","*sarkasmus*":"🙄","*gruebel*":"🤔","*nachdenk*":"🤔","*kopfklatsch*":"🤦","*rotwerd*":":flushed:",":oops:":":flushed:",":redface:":":flushed:","*redface*":":flushed:","*schaem*":":flushed:","*angsthab*":":cold_sweat:","*ballaballa*":"🤪","*blumenwiese*":":blossom:","*vielglueck*":"🍀","*augenzu*":":see_no_evil:","*tanz*":"💃","*tanz2*":"💃","*tipp*":"💻","*les*":"📰","*mail*":"✉","*duschen*":"🚿","*wc*":"🚽","*omm*":":innocent:","*huhu*":":wave:","*bye*":":wave:","*fahr*":"🚗","*knips*":"📷","*film*":"🎥","*meld*":"🙋","*knicks*":"🙇","*popcorn*":"🍿","*popcorn2*":"🍿","*puh*":":sweat_smile:","*clown*":"🤡","*sing*":"🎸","*strick*":"🧶","*putz*":"🧹","*tauch*":"🏊","*fussball*":"⚽","*spanner*":"👀","*zocker*":"🎮","*megaphon*":"📢","*pumpi*":":muscle:","*pumpi2*":":muscle:","*fernglas*":"🔭","*engel*":":innocent:","*engel2*":"👼","*oma*":"👵","*opa*":"👴","*baby*":"👶","*bauarbeiter*":"👷","*polizei*":"👮","*maler*":"🎨","*koenig*":":crown:","*koenigin*":"👸","*dj*":"🎧","*rock*":"🎸","*gitarre*":"🎸","*drummer*":"🥁","*piano*":"🎹","*nikolaus*":"🎅","*teufel*":":smiling_imp:","*angel*":"👼","*wahrsager*":"🔮","*katze*":":cat:","*kuh*":"🐮","*huhn*":"🐔","*dance2*":"🐔","*schwein*":":pig:","*hund*":":dog:","*schmetterling*":"🦋","*bug*":"🐛","*einhorn*":"🦄","*fuchs*":"🦊","*schnecke*":"🐌","*wolf*":"🐺","*hamster*":":hamster:","*sonne*":"☀","*regen*":"☔","*frier*":"🥶","*schwitz*":":sweat:","*regenbogen*":":rainbow:","*pfeil*":"➡",":arrow:":"➡","*arrow*":"➡","*frage*":"❓",":?:":"❓","*question*":"❓","*idee*":"💡",":idea:":"💡","*idea*":"💡","*foto*":"📷","*beep*":"🚨","*hilfe*":"🆘","*help*":"🆘","*happybirthday*":":birthday:","*deutschland*":"🇩🇪","*bayern*":"Bayern","*bw*":"Baden-Württemberg","*berlin*":"Berlin","*brandenburg*":"Brandenburg","*bremen*":"Bremen","*hamburg*":"Hamburg","*hessen*":"Hessen","*mv*":"Mecklenburg-Vorpommern","*niedersachsen*":"Niedersachsen","*nrw*":"Nordrhein-Westfalen","*rheinland*":"Rheinland-Pfalz","*saarland*":"Saarland","*sachsen*":"Sachsen","*anhalt*":"Sachsen-Anhalt","*schleswig*":"Schleswig-Holstein","*thueringen*":"Thüringen","*oesterreich*":"🇦🇹","*schweiz*":"🇨🇭","*niederlande*":"🇳🇱"};
+  const JOY_TOK = Object.keys(JOY2XH).sort((a, b) => b.length - a.length);
+  function joyToXh(text) {
+    const s = String(text || ''), out = [];
+    let i = 0;
+    while (i < s.length) {
+      const rest = s.slice(i);
+      if (/^(https?:\/\/|www\.)/i.test(rest)) { const m = rest.match(/^\S+/); out.push(m[0]); i += m[0].length; continue; }
+      const hit = JOY_TOK.find((t) => s.startsWith(t, i));
+      if (hit) { out.push(JOY2XH[hit]); i += hit.length; continue; }
+      out.push(s[i]); i++;
+    }
+    return out.join('');
+  }
+  const STARS = '**********';
+  const needStars = (t) => /https?:\/\//i.test(t) && !String(t).startsWith(STARS);
+  let tplCache = null, tplAt = 0;
+  async function tplAll() {
+    if (tplCache && now() - tplAt < 60000) return tplCache;
+    const l = await SH.call('all', { s: 'tpl' }, 20000);
+    tplCache = (l || []).filter((x) => x && !x.deleted && x.name).sort((a, b) => String(a.name).localeCompare(String(b.name), 'de', { sensitivity: 'base' }));
+    tplAt = now();
+    return tplCache;
+  }
+  // an der Schreibmarke einfügen (wie Strg+V: Zeilenumbrüche bleiben), dann bei Links die Sternchen vorn
+  function tplInsert(ed, text) {
+    ed.focus();
+    const t = joyToXh(text).replace(/\r\n?/g, '\n');
+    let dt = null;
+    try { dt = new DataTransfer(); dt.setData('text/plain', t); } catch (e) { dt = null; }
+    const handled = dt ? !ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })) : false;
+    if (!handled) { try { document.execCommand('insertText', false, t); } catch (e) { ed.append(t); } }
+    const full = (ed.innerText || ed.textContent || '');
+    if (needStars(full)) {
+      try {
+        const r = document.createRange(); r.setStart(ed, 0); r.collapse(true);
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        document.execCommand('insertText', false, STARS + ' ');
+      } catch (e) { ed.prepend(STARS + ' '); }
+    }
+    ed.dispatchEvent(new InputEvent('input', { bubbles: true, data: t, inputType: 'insertText' }));
+  }
+  const TPL_ICON = '<path d="M4 3h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H8l-4 3v-3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm2 3v1.6h8V6H6Zm0 3v1.6h5.5V9H6Z"/>';
+  function tplButton() {
+    const emo = document.querySelector('[class*="emojiDropdown-"]');
+    if (!emo || emo.parentElement.querySelector('.xhsc-tpl')) return;
+    const btn0 = emo.querySelector('button');
+    const w = document.createElement('div');
+    w.className = 'xhsc-tpl';
+    w.style.cssText = 'position:relative;display:inline-flex';
+    w.innerHTML = `<button type="button" class="${esc(btn0 ? btn0.className : '')}" data-tooltip="Textvorlage einfügen" title="Textvorlage einfügen"><span class="${esc((btn0 && btn0.querySelector('span') || {}).className || '')}"><svg viewBox="0 0 20 20" width="20" fill="currentColor">${TPL_ICON}</svg></span></button>`;
+    emo.after(w);
+    w.querySelector('button').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); tplMenu(w); });
+  }
+  async function tplMenu(w) {
+    const old = document.getElementById('xhsc-tpl-dd');
+    if (old) { old.remove(); return; }
+    const dd = document.createElement('div');
+    dd.id = 'xhsc-tpl-dd';
+    dd.style.cssText = 'position:absolute;right:0;bottom:calc(100% + 6px);z-index:2147483640;width:340px;max-height:360px;overflow:auto;background:#25272b;border:1px solid #3a3d43;border-radius:10px;padding:6px 0;box-shadow:0 8px 24px rgba(0,0,0,.6);font:13.5px/1.4 system-ui,sans-serif;color:#fff;text-align:left';
+    dd.innerHTML = '<div style="padding:8px 14px;opacity:.6">Lade die Textvorlagen …</div>';
+    w.appendChild(dd);
+    setTimeout(() => document.addEventListener('click', function off(ev) { if (!dd.contains(ev.target)) { dd.remove(); document.removeEventListener('click', off, true); } }, true), 0);
+    let l;
+    try { l = await tplAll(); } catch (e) { dd.innerHTML = `<div style="padding:8px 14px;color:#ff7875">Textvorlagen nicht erreichbar: ${esc(e.message)}</div>`; return; }
+    if (!l.length) { dd.innerHTML = '<div style="padding:8px 14px;opacity:.6">Keine Textvorlagen. Angelegt werden sie im JOYclub- oder poppen-Skript.</div>'; return; }
+    dd.innerHTML = '';
+    for (const t of l) {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:7px 14px;cursor:pointer';
+      const pv = joyToXh(t.text || '').replace(/\s+/g, ' ').slice(0, 90);
+      row.innerHTML = `<div style="font-weight:600"></div><div style="opacity:.65;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>`;
+      row.children[0].textContent = t.name; row.children[1].textContent = pv;
+      row.addEventListener('mouseenter', () => { row.style.background = '#33363c'; });
+      row.addEventListener('mouseleave', () => { row.style.background = ''; });
+      row.addEventListener('click', (ev) => {
+        ev.stopPropagation(); dd.remove();
+        const ed = [...document.querySelectorAll('.xh-editable-content[contenteditable]')].find((x) => x.isConnected) || null;
+        if (!ed) { uiToast('Kein Eingabefeld gefunden.'); return; }
+        tplInsert(ed, t.text || '');
+      });
+      dd.appendChild(row);
+    }
+  }
+
+  // =====================================================================
+  // Bilder und Videos der Fickliste an Home Assistant (ab 0.3.0)
+  //  - Sammeln (im Hintergrund, eine Person je Lauf, je Person einmal am Tag): alle Bilder aller Galerien, alle Short
+  //    Videos, die Liste der Videos. Bilder und Shorts kommen in pics[] des gemeinsamen Eintrags (k: xhamster-<Foto-ID>,
+  //    xhamster-s<ID>), Videos nur, wenn sie synchronisiert werden (xhamster-v<ID>): bis 5 je Person alle, sonst einzeln
+  //    eingeschaltet (Videoseite oder Fickliste). Ausgeschaltete bleiben eingetragen, aber mit off: true.
+  //  - Schicken: Bilder und Shorts lädt das Skript selbst (die Adressen gelten nur kurz und nur für die eigene IP).
+  //    Videos: xHamster verschlüsselt ihre Adresse in den Seitendaten; das Skript merkt sich die Videoliste (m3u8), die
+  //    der Player beim Öffnen der Videoseite lädt, und schickt das Video dann (gilt etwa 3 Stunden).
+  //  - Home Assistant nimmt nur Bilder an, die eine Fickliste-Lieferung (JOYclub-Skript) schon gemeldet hat; sonst kommt
+  //    „unknown picture“ und das Skript versucht es eine Stunde später wieder.
+  // =====================================================================
+  const MEDIA_K = 'xh_media';      // { <Eintrag-ID>: { nick, uid, scanAt, videos: [{ id, title, thumb, url }], von: { <ID>: bool } } }
+  const VURL_K = 'xh_vurl';        // { <Video-ID>: { u, at } } – zuletzt gesehene Videoliste (m3u8) je Video
+  const DONE_K = 'xh_ha_done';     // [k, …] schon in Home Assistant
+  const WAIT_K = 'xh_ha_wait';     // { k: Zeitpunkt } – Home Assistant wollte es noch nicht
+  const VIDEO_AUTO_MAX = 5;
+  const media = () => gm(MEDIA_K, {}) || {};
+  const nickOfUrl = (u) => { const m = /\/users\/(?:profiles\/)?([^/?#]+)/i.exec(String(u || '')); return m ? decodeURIComponent(m[1]) : ''; };
+  function xhProfileOf(rec) {
+    for (const pr of [rec.main, ...(rec.profiles || [])]) {
+      if (!pr || pr.pf !== 'xhamster' || pr.dead || pr.deleted || pr.gone) continue;
+      const nick = nickOfUrl(pr.url) || pr.nick || pr.name || '';
+      if (nick) return { nick, uid: pr.uid ? String(pr.uid) : '' };
+    }
+    return null;
+  }
+  function videoOn(mrec, vid) {
+    const v = (mrec.von || {})[vid];
+    if (v === true || v === false) return v;
+    return (mrec.videos || []).length <= VIDEO_AUTO_MAX;
+  }
+  function mediaStats() {
+    let pics = 0, shorts = 0, videos = 0, videosOn = 0;
+    const done = new Set(gm(DONE_K, []) || []);
+    const wait = gm(WAIT_K, {}) || {};
+    for (const [id, m] of Object.entries(media())) {
+      pics += m.nPics || 0; shorts += m.nShorts || 0;
+      videos += (m.videos || []).length;
+      videosOn += (m.videos || []).filter((v) => videoOn(m, v.id)).length;
+      void id;
+    }
+    return { pics, shorts, videos, videosOn, sent: done.size, waiting: Object.keys(wait).length };
+  }
+  async function getHtml(url) {
+    for (let n = 1; n <= 4; n++) {
+      const res = await W.fetch(url, { credentials: 'include' });
+      if (res.status === 200) return res.text();
+      if (res.status !== 503 && res.status !== 429) throw new Error(`${url}: ${res.status}`);
+      await sleep(retryDelay(n));
+    }
+    throw new Error(`${url}: überlastet`);
+  }
+  // Links der Form …/<pfad>/<n> auf die Seite n+1 (Galerien, Videos, Shorts eines Profils)
+  function nextLink(html, base, page) {
+    const re = /href="([^"]+)"/g;
+    let m;
+    while ((m = re.exec(html))) {
+      const u = m[1].replace(/&amp;/g, '&');
+      try { const x = new URL(u, location.origin); if (x.pathname.replace(/\/+$/, '') === base + '/' + (page + 1)) return x.origin + x.pathname + x.search; } catch (e) { /* weiter */ }
+    }
+    return '';
+  }
+  // alle Seiten einer Liste eines Profils (videos, shorts, photos) → Einträge
+  async function listPages(nick, kind, pick, maxPages = 30) {
+    const base = `/users/${encodeURIComponent(nick.toLowerCase())}/${kind}`;
+    let url = location.origin + base, page = 1;
+    const out = [];
+    while (url && page <= maxPages) {
+      const html = await getHtml(url);
+      const ini = initialsOf(html);
+      const items = ini ? pick(ini) : [];
+      if (!items.length) break;
+      out.push(...items);
+      url = nextLink(html, base, page); page++;
+      await sleep(1500 + Math.random() * 1500);
+    }
+    return out;
+  }
+  async function galleryPhotos(gurl) {
+    const out = [];
+    let url = gurl, page = 1;
+    while (url && page <= 40) {
+      const ini = initialsOf(await getHtml(url));
+      const g = ini && ini.galleryPage;
+      if (!g) break;
+      for (const x of g.photoItems || []) if (x && x.id && x.imgSrc && !x.isBlurredMedia) out.push({ k: 'xhamster-' + x.id, src: x.imgSrc, pf: 'xhamster', at: now() });
+      const pg = g.paginationProps || {};
+      if (!pg.lastPageNumber || page >= pg.lastPageNumber || !pg.pageLinkTemplate) break;
+      page++; url = String(pg.pageLinkTemplate).replace('{#}', page);
+      await sleep(1200 + Math.random() * 1200);
+    }
+    return out;
+  }
+  // eine Person einsammeln und ihren Eintrag ergänzen (pics nur hinzufügen, nie entfernen)
+  async function mediaCollectOne(rec) {
+    const xp = xhProfileOf(rec);
+    if (!xp) return;
+    const ms = media();
+    const m = ms[rec.id] || { von: {} };
+    const gals = await listPages(xp.nick, 'photos', (ini) => (((ini.contentComponent || {}).items) || []).filter((g) => g && g.pageURL && !g.isBlurred));
+    const pics = [];
+    for (const g of gals) { try { pics.push(...await galleryPhotos(g.pageURL)); } catch (e) { recEvent('Medien: Galerie nicht lesbar', { info: String(e.message || e).slice(0, 120) }); } }
+    const shorts = await listPages(xp.nick, 'shorts', (ini) => (((ini.videoListComponent || {}).videoThumbProps) || []).filter((v) => v && v.id));
+    const vids = await listPages(xp.nick, 'videos', (ini) => (((ini.videoListComponent || {}).videoThumbProps) || []).filter((v) => v && v.id && v.videoType !== 'moment'));
+    m.nick = xp.nick; m.uid = xp.uid; m.scanAt = now();
+    m.nPics = pics.length; m.nShorts = shorts.length;
+    m.videos = vids.map((v) => ({ id: String(v.id), title: v.title || '', thumb: v.thumbURL || '', url: v.pageURL || '', dur: v.duration || 0 }));
+    ms[rec.id] = m; gs(MEDIA_K, ms);
+    const add = [
+      ...pics,
+      ...shorts.map((v) => ({ k: 'xhamster-s' + v.id, src: '', pf: 'xhamster', at: now(), v: 1, vid: String(v.id), page: v.pageURL || '', short: 1 })),
+      ...m.videos.filter((v) => videoOn(m, v.id)).map((v) => ({ k: 'xhamster-v' + v.id, src: '', pf: 'xhamster', at: now(), v: 1, vid: v.id, page: v.url })),
+    ];
+    await picsMerge(rec.id, add, []);
+  }
+  // pics eines Eintrags ergänzen (neue k anhängen) und ein-/ausschalten (off), mit Versionsprüfung
+  async function picsMerge(recId, add, offKeys, onKeys = []) {
+    for (let i = 0; i < 3; i++) {
+      const cur = (await fickAll(true)).find((r) => r.id === recId);
+      if (!cur) return;
+      const v = clone(cur);
+      const have = new Map((v.pics || []).map((x) => [x.k, x]));
+      let ch = false;
+      for (const x of add) if (!have.has(x.k)) { (v.pics = v.pics || []).push(x); have.set(x.k, x); ch = true; }
+      for (const k of offKeys) { const x = have.get(k); if (x && !x.off) { x.off = true; ch = true; } }
+      for (const k of onKeys) { const x = have.get(k); if (x && x.off) { delete x.off; ch = true; } }
+      if (!ch) return;
+      const r = await fickPut(v, cur.rev || 0);
+      if (r && r.ok) return;
+    }
+  }
+  // Video ein- oder ausschalten (Videoseite, Fickliste)
+  async function videoToggle(recId, vid, on) {
+    const ms = media();
+    const m = ms[recId];
+    if (!m) return;
+    m.von = Object.assign({}, m.von || {}, { [vid]: !!on });
+    gs(MEDIA_K, ms);
+    const v = (m.videos || []).find((x) => x.id === vid) || { id: vid, url: '' };
+    if (on) await picsMerge(recId, [{ k: 'xhamster-v' + vid, src: '', pf: 'xhamster', at: now(), v: 1, vid, page: v.url }], [], ['xhamster-v' + vid]);
+    else await picsMerge(recId, [], ['xhamster-v' + vid]);
+  }
+  function videoOwner(vid) {
+    for (const [id, m] of Object.entries(media())) if ((m.videos || []).some((v) => v.id === String(vid))) return id;
+    return '';
+  }
+
+  // ---------- an Home Assistant ----------
+  async function haAsk(obj) {
+    const a = haParse(gm(K.ha, ''));
+    if (!a) throw new Error('Home-Assistant-Adresse fehlt');
+    const key = await crypto.subtle.importKey('raw', b64url(a.key), 'AES-GCM', false, ['encrypt', 'decrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(Object.assign({ format: 'swinger-companion', v: 1 }, obj))));
+    const res = await haPost(a.url, { v: 1, iv: b64(iv), data: b64(ct) });
+    if (res.status < 200 || res.status >= 300) throw new Error('Home Assistant antwortet mit ' + res.status);
+    const env = JSON.parse(res.responseText || '{}');
+    return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data))));
+  }
+  function gmGet(url, type, headers) {
+    return new Promise((resolve, reject) => GM_xmlhttpRequest({ method: 'GET', url, responseType: type, timeout: 180000, headers: Object.assign({ Referer: 'https://xhamster.com/' }, headers || {}),
+      onload: (x) => (x.status >= 200 && x.status < 300 ? resolve(x) : reject(new Error('HTTP ' + x.status))),
+      onerror: () => reject(new Error('nicht erreichbar')), ontimeout: () => reject(new Error('Zeitüberschreitung')) }));
+  }
+  const PART = 5 << 20;
+  // HLS wie im JOYclub-Skript: beste Qualität, Teile der Reihe nach (fMP4 mit Init-Teil oder MPEG-TS)
+  async function hlsParts(src, onPart) {
+    const master = String((await gmGet(src, 'text')).response || '');
+    const lines = master.split(/\r?\n/);
+    let best = '', bw = -1;
+    for (let i = 0; i < lines.length; i++) { const m = /BANDWIDTH=(\d+)/.exec(lines[i]); if (m && +m[1] > bw && lines[i + 1]) { bw = +m[1]; best = lines[i + 1].trim(); } }
+    const pl = best ? new URL(best, src).href : src;
+    const list = best ? String((await gmGet(pl, 'text')).response || '') : master;
+    if (/#EXT-X-KEY:METHOD=(?!NONE)/.test(list)) throw new Error('Video ist verschlüsselt');
+    const segs = list.split(/\r?\n/).filter((l) => l && !l.startsWith('#')).map((l) => new URL(l.trim(), pl).href);
+    if (!segs.length) throw new Error('Video ohne Inhalt');
+    const init = /#EXT-X-MAP:[^\n]*URI="([^"]+)"/.exec(list);
+    const mime = init || /\.(m4s|mp4)(\?|$)/i.test(segs[0]) ? 'video/mp4' : 'video/mp2t';
+    if (init) segs.unshift(new URL(init[1], pl).href);
+    for (let i = 0; i < segs.length; i++) await onPart(new Uint8Array((await gmGet(segs[i], 'arraybuffer')).response), i === segs.length - 1, mime);
+  }
+  // ein Video in Teilen von höchstens 5 MB schicken (Home Assistant setzt sie zusammen); load(cb) liefert die Stücke
+  async function haVideo(pid, k, load) {
+    const resume = Number((await haAsk({ kind: 'vidresume', pid, k })).next) || 0;
+    let part = 0, ok = false;
+    await load(async (bytes, last, mime) => {
+      for (let off = 0; off < bytes.length || (off === 0 && !bytes.length); off += PART) {
+        const chunk = bytes.subarray(off, off + PART), i = part++, end = last && off + PART >= bytes.length;
+        if (i < resume) continue;
+        const r = await haAsk({ kind: 'vidpart', pid, k, i, last: end, mime: mime || 'video/mp4', data: b64(chunk) });
+        if (!r.ok) throw new Error(r.error || 'Video abgelehnt');
+        if (end) ok = true;
+        if (!bytes.length) break;
+      }
+    });
+    return ok;
+  }
+  // Adresse eines Short Videos aus seiner Seite (MP4 bevorzugt, sonst HLS)
+  async function shortSource(pageUrl) {
+    const html = (await getHtml(pageUrl)).replace(/\\\//g, '/');
+    const mp4 = /https:\/\/video\d*\.xhcdn\.com\/key=[^"'\s\\]+?\.mp4[^"'\s\\]*/.exec(html);
+    if (mp4) return { mp4: mp4[0].replace(/&amp;/g, '&') };
+    const hls = /https:\/\/video[\w-]*\.xhcdn\.com\/[^"'\s\\]+?\.m3u8[^"'\s\\]*/.exec(html);
+    if (hls) return { hls: hls[0].replace(/&amp;/g, '&') };
+    return null;
+  }
+  // Videoliste (m3u8), die der Player gerade lädt, dem Video der Seite zuordnen
+  function mediaUrlSeen(url) {
+    try {
+      if (!/\.m3u8(\?|$)/i.test(url) || !/xhcdn\.com/i.test(url)) return;
+      const vm = (initials() || {}).videoModel;
+      if (!vm || !vm.id || !/^\/videos\//.test(location.pathname)) return;
+      const all = gm(VURL_K, {}) || {};
+      const cur = all[String(vm.id)];
+      // die Hauptliste (ohne Auflösung im Namen) vor den Teil-Listen
+      if (cur && now() - cur.at < 3600000 && /multi=|master|_TPL_/.test(cur.u) && !/multi=|master|_TPL_/.test(url)) return;
+      for (const [k, v] of Object.entries(all)) if (now() - v.at > 4 * 3600000) delete all[k];
+      all[String(vm.id)] = { u: url, at: now() };
+      gs(VURL_K, all);
+      setTimeout(() => mediaUpload().catch(() => {}), 3000);
+    } catch (e) { /* egal */ }
+  }
+  let mediaBusy = false;
+  const mediaLockMine = () => { const l = gm('xh_media_lock', null); return !l || l.tab === TAB_ID || now() - l.at > 120000; };
+  async function mediaUpload() {
+    if (mediaBusy || !haParse(gm(K.ha, '')) || !mediaLockMine()) return;
+    mediaBusy = true;
+    const t0 = now();
+    try {
+      const done = new Set(gm(DONE_K, []) || []);
+      const wait = gm(WAIT_K, {}) || {};
+      const vurl = gm(VURL_K, {}) || {};
+      const list = await fickAll(true);
+      for (const rec of list) {
+        for (const p of rec.pics || []) {
+          if (now() - t0 > 240000) return;
+          if (!p || p.pf !== 'xhamster' || !p.k || p.off || done.has(p.k) || (wait[p.k] && now() - wait[p.k] < 3600000)) continue;
+          gs('xh_media_lock', { tab: TAB_ID, at: now() });
+          let ok = false, why = '';
+          try {
+            if (!p.v) {
+              const x = await gmGet(p.src, 'blob');
+              const blob = x.response;
+              const mime = (blob && blob.type) || 'image/jpeg';
+              const buf = new Uint8Array(await blob.arrayBuffer());
+              const r = await haAsk({ kind: 'pic', pid: rec.id, k: p.k, mime: /^image\//.test(mime) ? mime : 'image/jpeg', data: b64(buf) });
+              ok = !!r.ok; why = r.error || '';
+            } else if (p.short) {
+              const src = await shortSource(p.page);
+              if (!src) { why = 'keine Adresse'; } else if (src.mp4) {
+                ok = await haVideo(rec.id, p.k, async (cb) => { const x = await gmGet(src.mp4, 'arraybuffer'); await cb(new Uint8Array(x.response), true, 'video/mp4'); });
+              } else ok = await haVideo(rec.id, p.k, (cb) => hlsParts(src.hls, cb));
+            } else {
+              const u = vurl[p.vid];
+              if (!u || now() - u.at > 2.5 * 3600000) { continue; } // wird beim nächsten Öffnen des Videos geladen
+              ok = await haVideo(rec.id, p.k, (cb) => hlsParts(u.u, cb));
+            }
+          } catch (e) { why = String((e && e.message) || e); }
+          if (ok) { done.add(p.k); delete wait[p.k]; gs(DONE_K, [...done].slice(-20000)); }
+          else { wait[p.k] = now(); if (!/unknown picture/.test(why)) recEvent('Medien: nicht an Home Assistant', { info: `${p.k}: ${why}`.slice(0, 160) }); }
+          gs(WAIT_K, wait);
+          await sleep(800);
+        }
+      }
+    } finally { mediaBusy = false; }
+  }
+  async function mediaCollect() {
+    if (!mediaLockMine()) return;
+    const list = await fickAll(true);
+    const ms = media();
+    const due = list.filter((r) => xhProfileOf(r) && now() - ((ms[r.id] || {}).scanAt || 0) > 24 * 3600000);
+    if (!due.length) return;
+    gs('xh_media_lock', { tab: TAB_ID, at: now() });
+    try { await mediaCollectOne(due[0]); } catch (e) { recEvent('Medien: Sammeln fehlgeschlagen', { info: String(e.message || e).slice(0, 160) }); }
+  }
+  let mediaTimer = 0;
+  function mediaStart() {
+    if (mediaTimer) return;
+    const run = async () => { try { await mediaCollect(); await mediaUpload(); } catch (e) { /* nächster Lauf */ } };
+    mediaTimer = setInterval(run, 5 * 60000);
+    setTimeout(run, 20000);
+  }
+  // Schalter auf der Videoseite zwischen „Favorite“ und „Comments“
+  function videoSyncButton() {
+    if (!/^\/videos\//.test(location.pathname)) return;
+    const vm = (initials() || {}).videoModel;
+    if (!vm || !vm.id) return;
+    const recId = videoOwner(vm.id);
+    const fav = document.querySelector('.controls__main-actions [data-role="favorites-control"]');
+    if (!recId || !fav) return;
+    let w = fav.parentElement.querySelector('.xhsc-vsync');
+    const m = media()[recId];
+    const on = videoOn(m, String(vm.id));
+    if (!w) {
+      const b0 = fav.querySelector('button');
+      w = document.createElement('div');
+      w.className = 'controls__main-action xhsc-vsync';
+      w.innerHTML = `<button type="button" class="${esc(b0 ? b0.className : '')}"><span class="${esc((b0 && b0.querySelector('span') || {}).className || '')}"><svg viewBox="0 0 20 20" width="20" fill="currentColor"><path d="M10 2a8 8 0 1 1-7.4 5h2.2A6 6 0 1 0 10 4V6L6.5 3 10 0v2Zm-1 5h2v4.2l3 1.8-1 1.7-4-2.4V7Z"/></svg></span> <span class="${esc((b0 && b0.querySelector('[class*="text-"]') || {}).className || '')}" data-t></span></button>`;
+      fav.after(w);
+      w.querySelector('button').addEventListener('click', async () => {
+        const cur = videoOn(media()[recId], String(vm.id));
+        await videoToggle(recId, String(vm.id), !cur);
+        videoSyncButton();
+        if (!cur) { uiToast('Wird an Home Assistant geschickt, sobald der Player die Videoliste geladen hat.'); setTimeout(() => mediaUpload().catch(() => {}), 2000); }
+      });
+    }
+    const t = on ? 'Nicht synchronisieren' : 'Synchronisieren';
+    const tx = w.querySelector('[data-t]');
+    if (tx.textContent !== t) tx.textContent = t;
+    w.querySelector('button').title = on ? 'Dieses Video geht an Home Assistant – klicken zum Ausschalten' : 'Dieses Video an Home Assistant schicken';
+  }
+  // Abschnitt „Videos (n)“ einer Person in der Fickliste
+  function flVideosHtml(r) {
+    const m = media()[r.id];
+    if (!m || !(m.videos || []).length) return '';
+    const vurl = gm(VURL_K, {}) || {}, done = new Set(gm(DONE_K, []) || []);
+    const rows = m.videos.map((v) => {
+      const on = videoOn(m, v.id);
+      const st = done.has('xhamster-v' + v.id) ? 'in Home Assistant' : on ? (vurl[v.id] && now() - vurl[v.id].at < 2.5 * 3600000 ? 'wird geschickt' : 'wird beim nächsten Öffnen des Videos geschickt') : '';
+      return `<div style="display:flex;gap:8px;align-items:center;margin:4px 0">
+        <input type="checkbox" class="switcher" id="xhsc-v-${esc(r.id)}-${esc(v.id)}" data-rec="${esc(r.id)}" data-vid="${esc(v.id)}" ${on ? 'checked' : ''}><label for="xhsc-v-${esc(r.id)}-${esc(v.id)}" class="switcher-visible"></label>
+        ${v.thumb ? `<img src="${esc(v.thumb)}" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:4px">` : ''}
+        <a href="${esc(v.url)}" target="_blank" rel="noopener" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(v.title || v.id)}</a>
+        <span style="opacity:.6;font-size:12px;white-space:nowrap">${esc(st)}</span></div>`;
+    }).join('');
+    return `<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">Videos (${m.videos.length})${m.videos.length > VIDEO_AUTO_MAX ? ' <span style="font-weight:400;opacity:.6">– mehr als 5: einzeln einschalten</span>' : ''}</summary>${rows}</details>`;
+  }
+
+  // =====================================================================
   // Opa-Scan (ab 0.2.0): Dating-Suche nach den poppen-Regeln durchgehen und Opas blockieren
   // Erst Probelauf (zählt nur), dann Blockieren: der erste Block wird geprüft, danach Pausen von 2–5 s.
   // Ausgenommen: Whitelist, Freunde, Fickliste, man selbst, schon Blockierte, gelöschte Konten.
   // =====================================================================
   let apiHdr = null;                       // Kopfzeilen der Seite für /x-api (nur im Arbeitsspeicher)
   const HDR_SKIP = /^(content-length|cookie|host|content-type)$/i;
+  let ownReq = false, hdrLogged = false;   // eigene Anfragen des Skripts nicht als Vorlage nehmen
   function captureHdr(h) {
-    if (!h) return;
+    if (!h || ownReq) return;
     const out = {};
     try {
       if (typeof h.forEach === 'function' && !Array.isArray(h)) h.forEach((v, k) => { if (!HDR_SKIP.test(k)) out[k] = v; });
       else if (Array.isArray(h)) for (const [k, v] of h) { if (!HDR_SKIP.test(k)) out[k] = v; }
       else for (const k of Object.keys(h)) if (!HDR_SKIP.test(k)) out[k] = h[k];
     } catch (e) { return; }
-    if (Object.keys(out).length && (!apiHdr || stable(Object.keys(apiHdr).sort()) !== stable(Object.keys(out).sort()))) recEvent('Kopfzeilen für /x-api', { info: Object.keys(out).sort().join(', ') });
+    // 0.3.0: einmal je Seite und nur bei neuer Zusammensetzung
+    if (Object.keys(out).length && (!hdrLogged || stable(Object.keys(apiHdr || {}).sort()) !== stable(Object.keys(out).sort()))) { hdrLogged = true; recEvent('Kopfzeilen für /x-api', { info: Object.keys(out).sort().join(', ') }); }
     apiHdr = out;
   }
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = (Math.random() * 16) | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16); }));
   async function blockUser(id, state = true) {
     const body = [{ name: 'entityBlockModelSync', requestData: { model: { id: null, $id: uuid(), modelName: 'entityBlockModel', itemState: 'created', entityModel: 'userModel', entityID: Number(id), state } } }];
-    const res = await W.fetch('/x-api', { method: 'POST', credentials: 'include', headers: Object.assign({ accept: 'application/json, text/plain, */*' }, apiHdr || {}, { 'content-type': 'application/json' }), body: JSON.stringify(body) });
+    let res;
+    ownReq = true;
+    try { res = W.fetch('/x-api', { method: 'POST', credentials: 'include', headers: Object.assign({ accept: 'application/json, text/plain, */*' }, apiHdr || {}, { 'content-type': 'application/json' }), body: JSON.stringify(body) }); } finally { ownReq = false; }
+    res = await res;
     const t = await res.text();
     let j = null; try { j = JSON.parse(t); } catch (e) { j = null; }
     const e = (Array.isArray(j) && j[0] && j[0].extras) || {};
-    return { ok: res.status === 200 && e.result === true, rel: e.currentUserRelation || '', msg: e.message || '', status: res.status };
+    // 0.3.0: Antwort bei Fehlern für den Rekorder (gekürzt, geschwärzt)
+    return { ok: res.status === 200 && e.result === true, rel: e.currentUserRelation || '', msg: e.message || '', status: res.status, text: res.status === 200 && e.result === true ? '' : maskStr(String(t || '').slice(0, 400)) };
   }
   // Anfangszustand einer anderen Seite holen, ohne hinzugehen
   function initialsOf(html) {
@@ -1925,6 +2495,7 @@
           try { r = await blockUser(p.id, true); } catch (e) { r = { ok: false, msg: e.message }; }
           if (r.ok) {
             st.done++;
+            st.failRun = 0;
             blocked.add(p.id);
             lists.blocked = [...blocked]; gs(K.lists, lists);
             uiLog(`blockiert: ${p.nick} (${p.age}, ${p.city || '?'})`);
@@ -1935,9 +2506,12 @@
             }
           } else {
             st.fail++;
+            st.failRun = (st.failRun || 0) + 1;
+            st.skip['Block abgelehnt'] = (st.skip['Block abgelehnt'] || 0) + 1;
             uiLog(`nicht blockiert: ${p.nick} – ${r.msg || 'Status ' + r.status}`);
-            recEvent('Opa-Scan: Block fehlgeschlagen', { info: `${r.status || ''} ${r.msg || ''}`.trim() });
-            if (!st.verified || st.fail >= 3) { gs(K.oscan, st); oscanDone(st, 'abgebrochen: Blockieren klappt nicht' + (r.msg ? ` (${r.msg})` : '')); return; }
+            recEvent('Opa-Scan: Block fehlgeschlagen', { info: `${r.status || ''} ${r.msg || ''}`.trim(), resp: r.text || '' });
+            // 0.3.0: einzelne Fehler überspringen; abbrechen erst nach 3 Fehlern hintereinander (oder wenn schon der erste scheitert)
+            if (!st.verified || st.failRun >= 3) { gs(K.oscan, st); oscanDone(st, 'abgebrochen: Blockieren klappt nicht' + (r.msg ? ` (${r.msg})` : '')); return; }
           }
           gs(K.oscan, st);
           gs('xh_oscan_lock', { tab: TAB_ID, at: now() });
@@ -2096,13 +2670,13 @@
     // gemeinsame Ablage: Regeln von poppen.de, Fickliste, eigenes Profil
     (async () => {
       try { if (await rulesRefresh()) { for (const b of document.querySelectorAll('.xhsc-badge')) b.remove(); const pb = document.getElementById('xhsc-prof'); if (pb) pb.remove(); const mn = document.querySelector('.xhsc-mop-nav'); if (mn) mn.remove(); } } catch (e) { /* egal */ }
-      try { await fickAll(); await ichPut(); await fickGalleryPics(); } catch (e) { recEvent('Fickliste nicht erreichbar', { info: String(e && e.message || e) }); }
+      try { await fickAll(); await ichPut(); await fickGalleryPics(); mediaStart(); } catch (e) { recEvent('Fickliste nicht erreichbar', { info: String(e && e.message || e) }); }
     })();
     if (gm(K.oscan, null)) setTimeout(oscanRun, 3000);
     if (gm(K.scan, null)) setTimeout(scanTick, 2500);
     if (gm(K.act, null)) setTimeout(actTick, 2500);
     if (Date.now() - (gm('xh_accept', 0) || 0) < 120000) setTimeout(acceptPartner, 2500);
-    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); mopNav(); setMenu(); } catch (e) { /* egal */ } };
+    const tick = () => { try { profileBox(); decorate(); flTab(); flButton(); mopNav(); setMenu(); adHide(); tplButton(); videoSyncButton(); } catch (e) { /* egal */ } };
     navCss();
     // Nutzer-Menü: entsteht erst beim Öffnen – sofort ergänzen
     try { new MutationObserver(() => { try { ddInsert(); } catch (e) { /* egal */ } }).observe(document.body, { childList: true, subtree: true }); } catch (e) { /* egal */ }

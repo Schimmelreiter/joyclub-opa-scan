@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.24
+// @version      2.25
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -11596,6 +11596,7 @@ fragment ImageUIDataFragment on ImageUIData {
     const out = [], seen = new Set(drop);
     for (const l of lists) for (const x of l || []) {
       if (!x || !x.k) continue;
+      if (x.off) continue; // 2.25: ausgeschaltet (z. B. Video von xHamster, das nicht synchronisiert werden soll)
       if (seen.has(x.k)) {
         // Video von poppen: die Adresse mit der spätesten Gültigkeit gewinnt
         const o = x.v && x.exp && out.find((y) => y.k === x.k);
@@ -16027,6 +16028,8 @@ fragment ImageUIDataFragment on ImageUIData {
       const x = persons.find((y) => y.id === pid);
       const pic = x && (x.pics || []).find((y) => y.k === k);
       if (!pic) continue;
+      // 2.25: Bilder und Videos von xHamster schickt das xHamster-Skript selbst (Adressen nur kurz und nur für die eigene IP gültig)
+      if (pic.pf === 'xhamster') continue;
       if (pic.v) {
         // Video in Teilen (je Anfrage ein Stück); ein angefangenes Video wird fertig gesendet
         let ok = false;

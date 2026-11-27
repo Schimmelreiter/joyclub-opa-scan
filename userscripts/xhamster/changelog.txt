@@ -1,6 +1,26 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.3.0 (27.11.2026)
+- Eigene Altersgrenzen mit Schiebereglern (je Gruppe drei Griffe: Stufe 1, Stufe 2, Ignorieren ab; dazu markieren und
+  ignorieren). Vorgabe sind die Werte von poppen.de; geänderte Gruppen tragen „eigene Werte für xHamster“ und lassen sich
+  mit „Wieder wie poppen.de“ zurücksetzen
+- Werbung ausgeblendet: alle Blöcke mit xHamsters wechselnder Werbe-Vorsilbe (bannerPrefix aus den Seitendaten), dazu
+  Blöcke mit Links zu Cams, Premium und Nude Chat
+- Quallen-Link (Moppel-Liebhaber): Altersobergrenze ein Jahr unter „Ignorieren ab“ der gesuchten Gruppe; eigene Länder
+  (Einstellungsseite, Vorgabe de), bei mehreren ein Aufklappmenü
+- Textvorlagen im Messenger: Knopf rechts neben den Smileys mit den gemeinsamen Vorlagen. Smileys in JOYclub-Schreibweise
+  werden zu xHamster-Smileys (`:name:`) bzw. Unicode-Emoji; mit „https://“ kommen 10 Sternchen und ein Leerzeichen an den
+  Anfang (sonst ersetzt xHamster Zeichen 2–9 durch Sternchen)
+- Bilder und Videos der Fickliste an Home Assistant: für jede Person mit xHamster-Profil im Hintergrund alle Bilder aller
+  Galerien, alle Short Videos und die Videos (bis 5 alle, sonst einzeln eingeschaltet) – Schalter auf der Videoseite
+  zwischen „Favorite“ und „Comments“ und in der Fickliste („Videos (n)“). Videos gehen an Home Assistant, sobald der
+  Player beim Öffnen der Videoseite ihre Videoliste geladen hat. Home-Assistant-Adresse auf der Einstellungsseite
+  (dieselbe wie beim JOYclub-Skript; Home Assistant nimmt sie an, sobald das JOYclub-Skript die Fickliste geschickt hat)
+- Oma-/Opa-Scan: einzelne Fehler beim Blockieren werden übersprungen, Abbruch erst nach 3 Fehlern hintereinander; die
+  Antwort von xHamster steht im Rekorder
+- Rekorder: IPv6-Adressen geschwärzt; „Kopfzeilen für /x-api“ nur noch einmal je Seite und ohne die eigenen Anfragen
+
 0.2.11 (27.11.2026)
 - Fickliste: Profil-Links untereinander, linke Spalte etwas breiter; behoben: bei Personen mit xHamster-Profil hängte die
   Markierung („32 J. · Freund“) sich in die Zeile und schob Treffen und Anmerkung nach unten

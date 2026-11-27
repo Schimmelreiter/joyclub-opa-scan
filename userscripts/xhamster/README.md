@@ -3,7 +3,7 @@
 Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com): Opas markieren und blockieren nach denselben Regeln
 wie das poppen-Skript, dazu die gemeinsame Fickliste. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.2.11 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.3.0 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 
@@ -15,8 +15,15 @@ Stand: Version 0.2.11 – Änderungen siehe [changelog.txt](changelog.txt)
 
 Bei Männern heißt es wie im poppen-Skript „Oma-Schutz“ und „Oma-Scan“ (Ruhrgebiet „Omma“), sonst „Opa“/„Oppa“.
 
-- **Einstellungsseite „Opa-Schutz“** in „Edit profile“ (linke Leiste hinter „Privacy“, auch im Nutzer-Menü): Regeln von
-  poppen.de zum Nachsehen, Anzeige-Schalter, Opa-Scan (Länder, Höchstzahl, letzter Lauf, Start).
+- **Einstellungsseite „Opa-Schutz“** in „Edit profile“ (linke Leiste hinter „Privacy“, auch im Nutzer-Menü):
+  Altersgrenzen mit Schiebereglern (Vorgabe von poppen.de, eigene Werte nur für xHamster), Stand von poppen.de,
+  Länder für den Moppel-Link, Anzeige, Opa-Scan, Home-Assistant-Adresse und Stand der Bilder und Videos.
+- **Werbung** ist ausgeblendet (Werbe-Blöcke mit xHamsters wechselnder Vorsilbe, Cam-, Premium- und Nude-Chat-Links).
+- **Textvorlagen** im Messenger: Knopf rechts neben den Smileys; Smileys werden übersetzt, bei Links kommen 10 Sternchen
+  an den Anfang.
+- **Bilder und Videos an Home Assistant** (Personen der Fickliste mit xHamster-Profil): alle Bilder, alle Short Videos,
+  Videos bis 5 je Person, sonst einzeln einschalten (Videoseite, Fickliste). Videos gehen los, sobald der Player beim
+  Öffnen des Videos die Videoliste geladen hat.
 
 - **Menü:** Im Nutzer-Menü von xHamster (Klick auf den eigenen Avatar oben rechts) stehen unter „Swinger Companion“
   „Fickliste“ und „Opa-Schutz“ (Einstellungsseite), während eines Laufs auch „Anhalten“. Alle Befehle stehen im
@@ -48,7 +55,8 @@ Bei Männern heißt es wie im poppen-Skript „Oma-Schutz“ und „Oma-Scan“ 
   - Ausgenommen: Whitelist, Freunde, Fickliste, man selbst, schon Blockierte, gelöschte Konten, Profile ohne Alter.
   - Läuft im Hintergrund des Tabs weiter (auch nach Neuladen), *■ Anhalten* oder „Abbrechen“ im Kasten stoppt ihn.
 - **Kopfzeile:** „Live Sex“, „Nude Chat“ und „Premium Videos“ sind ausgeblendet. Ist im poppen-Skript „Benutzer ist
-  Moppel-Liebhaber“ an, steht vor „Pornstars“ ein Link zur Dating-Suche mit Figur „Large“, Name und Symbol wie dort.
+  Moppel-Liebhaber“ an, steht vor „Pornstars“ ein Link zur Dating-Suche mit Figur „Large“ bis ein Jahr unter der
+  Grenze, Name und Symbol wie dort; Länder auf der Einstellungsseite.
 - **Fehler 503:** Die Seite wird mit steigendem Abstand (5 s, 10 s, 20 s … höchstens 5 Minuten) neu geladen.
 
 ## Gemeinsame Ablage (Briefkasten)

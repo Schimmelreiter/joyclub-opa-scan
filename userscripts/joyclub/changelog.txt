@@ -1,6 +1,10 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.25 (27.11.2026)
+- Home Assistant: Bilder und Videos von xHamster (gemeinsame Fickliste) schickt jetzt das xHamster-Skript selbst; das
+  JOYclub-Skript meldet sie nur noch in der Liste. Ausgeschaltete Einträge (off) meldet es nicht mehr
+
 2.24 (27.11.2026)
 - Für die Testkonten des Entwicklers: API-Rekorder läuft immer mit, sein Stand geht alle 30 Minuten (nur bei
   Änderungen) an Home Assistant (Swinger Companion ab 0.6.3); Menü „Rekorder: Scan-Lauf starten“ ruft die wichtigsten
