@@ -4,7 +4,7 @@ Ein Tampermonkey-Userscript für [xHamster](https://xhamster.com). Version 0.1 s
 aufgebaut sind und welche Anfragen sie stellen (Rekorder), damit die nächsten Versionen Fickliste, Bilder und
 Blockieren wie bei JOYclub und poppen.de bekommen können. Teil von [Swinger Companion](../../README.md).
 
-Stand: Version 0.1.5 – Änderungen siehe [changelog.txt](changelog.txt)
+Stand: Version 0.1.6 – Änderungen siehe [changelog.txt](changelog.txt)
 
 ## Installation
 

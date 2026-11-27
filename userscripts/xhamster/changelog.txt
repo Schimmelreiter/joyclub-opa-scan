@@ -1,6 +1,10 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.1.6 (27.11.2026)
+- Rekorder: Lesende /x-api-Anfragen bekommen jetzt ihren Vorgangsnamen (xHamster schickt auch bei GET einen Text-Rumpf;
+  der Name steht dann im Parameter r)
+
 0.1.5 (27.11.2026)
 - Aktionstest, Nachrichten: Nimmt xHamster das künstliche Enter nicht an, klickt das Skript den Knopf „Send“ (sobald er
   freigegeben ist). Klappt das Senden zweimal nicht, wird der Nachrichtenteil übersprungen statt alle Varianten mit

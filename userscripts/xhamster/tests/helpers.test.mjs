@@ -53,4 +53,7 @@ test('opNames: x-api operation names and batch urls', () => {
   assert.equal(H.opNames('/api/front/batch/' + b, undefined), ' → /api/front/user/authorized/{n}');
   assert.equal(H.pathPattern('/api/front/batch/' + b), '/api/front/batch/{b64}');
   assert.equal(H.opNames('/api/front/messages/collection', undefined), '');
+  // GET mit Text-Rumpf ohne Vorgang (so schickt es xHamster): Name aus r
+  assert.equal(H.opNames('/x-api?r=' + encodeURIComponent(JSON.stringify([{ name: 'friendsUsersCollectionFetch' }])), '{}'), ' friendsUsersCollectionFetch');
+  assert.equal(H.opNames('/x-api?r=' + encodeURIComponent(JSON.stringify([{ name: 'a' }])), 'null'), ' a');
 });

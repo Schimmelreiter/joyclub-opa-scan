@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.1.5
+// @version      0.1.6
 // @description  Swinger Companion für xHamster: Rekorder (Seitenaufbau und Anfragen sammeln), Scan-Lauf, Aktionstest, Export an Home Assistant, Profilkasten, Alters-Markierung in Dating-Suche und Freundschaftsanfragen
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -175,10 +175,14 @@
       const x = new URL(url, location.origin);
       let list = null;
       if (/\/x-api\/?$/.test(x.pathname)) {
-        const raw = typeof body === 'string' && body ? body : x.searchParams.get('r');
-        if (raw) list = JSON.parse(raw);
-        const names = (Array.isArray(list) ? list : [list]).map((o) => o && o.name).filter(Boolean);
-        return names.length ? ' ' + [...new Set(names)].join('+') : '';
+        // 0.1.6: auch GET-Anfragen tragen einen (leeren) Text-Rumpf – erst den Rumpf, dann den Parameter r versuchen
+        for (const raw of [typeof body === 'string' ? body : '', x.searchParams.get('r')]) {
+          if (!raw) continue;
+          try { list = JSON.parse(raw); } catch (e) { continue; }
+          const names = (Array.isArray(list) ? list : [list]).map((o) => o && o.name).filter(Boolean);
+          if (names.length) return ' ' + [...new Set(names)].join('+');
+        }
+        return '';
       }
       const m = /\/api\/front\/batch\/([^/?#]+)/.exec(x.pathname);
       if (m) {
