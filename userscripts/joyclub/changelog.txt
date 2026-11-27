@@ -1,6 +1,10 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.22 (27.11.2026)
+- Behoben: Auf Unterseiten eines Profils (Fotos & Videos, Fotoalben) fehlte der Fickliste-Knopf, wenn die Seite direkt aufgerufen oder neu geladen wurde
+- Behoben: Personen mit poppen-Profil standen doppelt in der gemeinsamen Fickliste (im poppen-Skript zu sehen), wenn das poppen-Skript sie über die poppen-ID und dieses Skript sie über den poppen-Link kannte. poppen-Profile werden jetzt auch am Nick erkannt; der doppelte Eintrag von hier bekommt beim nächsten Abgleich eine Löschmarke
+
 2.21 (27.11.2026)
 - Videos an Home Assistant: Eine unterbrochene Übertragung geht beim nächsten Senden weiter statt von vorn (ab Swinger Companion 0.6.2; zwei Teilstücke Überlappung, per MD5 geprüft). Solange Home Assistant noch Bilder oder Videos haben will, sendet das Skript alle 15 Minuten statt alle 6 Stunden. Der Stand der Videoübertragung steht bei den Home-Assistant-Einstellungen
 

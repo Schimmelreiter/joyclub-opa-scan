@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.21
+// @version      2.22
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -1967,6 +1967,10 @@ const __jafWinName = (() => { try { return window.name || ''; } catch (e) { retu
   const currentListPage = () => CONFIG.LIST_PAGES.find((l) => !l.background && cleanPath(location.pathname) === l.path);
   const sourceOf = (name) => (CONFIG.LIST_PAGES.find((l) => l.name === name) || {}).source || '';
   const isProfilePage = () => CONFIG.PROFILE_PATH_RE.test(location.pathname);
+  // 2.22: Unterseiten eines Profils (Fotos & Videos, Fotoalben …): /profile/<bereich>/<id>.<nick>.html
+  const PROFILE_SUB_RE = /^\/profile\/[a-z_]+\/(\d+)\.[^/]+\.html$/i;
+  const profileSubId = () => (location.pathname.match(PROFILE_SUB_RE) || [])[1] || '';
+  const profileSubMain = () => location.pathname.replace(/^\/profile\/[a-z_]+\//i, '/profile/');
 
   // ---------- UI ----------
   function panel() {
@@ -11049,7 +11053,11 @@ fragment ImageUIDataFragment on ImageUIData {
   function flPagePid() {
     if (flViewerPid()) return flViewerPid();
     if (flExternPage()) return 'x-' + flExternSlug();
-    if (!isProfilePage()) return '';
+    if (!isProfilePage()) {
+      // 2.22: auch auf Unterseiten des Profils (sonst fehlte der Fickliste-Knopf nach dem Neuladen z. B. von „Fotos & Videos“)
+      const sid = profileSubId();
+      return sid && sid !== String(document.body.getAttribute('data-session-user-id') || ownProfileId() || '') ? sid : '';
+    }
     const id = idOf(location.pathname);
     if (!id || isOwnProfile()) return '';
     return id;
@@ -11538,7 +11546,7 @@ fragment ImageUIDataFragment on ImageUIData {
     if (!pid) return null;
     const p = flGet(pid);
     if (p) return p;
-    return { id: pid, nick: profileName(), type: profileType(), path: cleanPath(location.pathname), status: '', meets: [], hist: [], created: Date.now() };
+    return { id: pid, nick: profileName(), type: profileType(), path: cleanPath(profileSubId() ? profileSubMain() : location.pathname), status: '', meets: [], hist: [], created: Date.now() };
   }
   function flCloseMenus() {
     document.querySelectorAll('.jaf-fl-cm[open]').forEach((m) => m.removeAttribute('open'));
@@ -12254,6 +12262,12 @@ fragment ImageUIDataFragment on ImageUIData {
     if (pr.uid != null && pr.uid !== '') out.push(`${pf}:uid:${String(pr.uid).toLowerCase()}`);
     if (pf === 'joyclub' && /^\d+$/.test(String(pr.uid || ''))) out.push('joyclub:' + pr.uid);
     if (pr.url) { const k = flLinkKey(pr.url); if (k) out.push(k); }
+    // 2.22: poppen-Profile auch am Nick erkennen (Nicks sind dort eindeutig, der Link ist /p/<nick>) – sonst fanden
+    // „poppen-ID ohne Link“ (poppen-Skript) und „Link ohne ID“ (hier eingetragen) nicht zueinander → Doppel in der Ablage
+    if (pf === 'poppen' && !pr.dead) {
+      const n = (String(pr.url || '').match(/poppen\.de\/p\/([^/?#]+)/i) || [])[1] || pr.nick || pr.name || '';
+      if (n) out.push('poppen:nick:' + decodeURIComponent(String(n)).trim().toLowerCase());
+    }
     if (!pr.url && pr.name && ['telegram', 'whatsapp', 'threema', 'signal'].includes(pf)) { const n = flNormProfile(pf, pr.name); if (n) out.push(n.key); }
     // 2.11: gelöschtes Profil ohne ID und Link – am Nick auf der Plattform wiedererkennen (Nicks sind je Plattform eindeutig)
     if (pr.dead && !pr.url && (pr.uid == null || pr.uid === '')) { const k = flDeadKey(pf, pr.name || pr.nick); if (k) out.push(k); }
@@ -14506,7 +14520,7 @@ fragment ImageUIDataFragment on ImageUIData {
           }
         }
       }
-    }
+    } else if (profileSubId() && flPagePid()) flInsertButtons(); // 2.22: Unterseiten des Profils
     flDecorateCards();
     flEventTab();
     flFixNicks().catch(() => {});
@@ -15612,6 +15626,8 @@ fragment ImageUIDataFragment on ImageUIData {
     return v;
   }
   let shFickBusy = false;
+  // 2.22: Eintrag der Ablage, den dieses Skript für die lokale Person lid selbst angelegt hat
+  const shOwnCopy = (sid, lid) => sid === 'x:' + lid || sid === 'j:' + lid;
   async function shFickSync() {
     if (shFickBusy || !shOwnerOk || CONFIG.DRY_RUN) return;
     shFickBusy = true;
@@ -15652,7 +15668,16 @@ fragment ImageUIDataFragment on ImageUIData {
         if (lid) {
           const p = flPrimaryId(lid);
           if (!ids[p]) ids[p] = r.id;
-          else if (ids[p] !== r.id && flIsExt(p) && !(st[r.id] && st[r.id].deleted)) {
+          else if (ids[p] !== r.id && !(st[r.id] && st[r.id].deleted) && shOwnCopy(ids[p], p) !== shOwnCopy(r.id, p)) {
+            // 2.22: dieselbe Person zweimal in der Ablage – ein Eintrag von hier, einer von der anderen Seite (z. B. poppen-ID
+            // gegen poppen-Link): der Eintrag der anderen Seite bleibt, der von hier bekommt eine Löschmarke
+            const own = shOwnCopy(r.id, p) ? r.id : ids[p];
+            const cur = byId.get(own);
+            ids[p] = own === r.id ? ids[p] : r.id;
+            if (cur && !cur.deleted) {
+              try { const res = await SH.call('del', { s: 'fick', k: own, expect: cur.rev || 0, by: shBy() }); if (res && res.ok) st[own] = { rev: res.rev, h: null, deleted: true }; } catch (e) { /* später */ }
+            }
+          } else if (ids[p] !== r.id && flIsExt(p) && !(st[r.id] && st[r.id].deleted)) {
             // 2.11: weiterer Eintrag derselben Person mit gelöschtem Profil (Doppel aus früheren Abgleichen) → Löschmarke
             let keys = [];
             try { keys = flXKeys(flRebaseX(r)); } catch (e) { keys = []; }
