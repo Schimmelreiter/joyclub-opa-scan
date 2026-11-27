@@ -1,6 +1,9 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.21 (27.11.2026)
+- Videos an Home Assistant: Eine unterbrochene Übertragung geht beim nächsten Senden weiter statt von vorn (ab Swinger Companion 0.6.2; zwei Teilstücke Überlappung, per MD5 geprüft). Solange Home Assistant noch Bilder oder Videos haben will, sendet das Skript alle 15 Minuten statt alle 6 Stunden. Der Stand der Videoübertragung steht bei den Home-Assistant-Einstellungen
+
 2.20 (27.11.2026)
 - Neu: Videos von poppen.de (vom poppen-Skript ab 2.50 gemerkt) schickt dieses Skript ebenfalls an Home Assistant; ihre Adresse gilt nur etwa einen Tag, danach kommt eine neue beim nächsten Besuch des Profils auf poppen.de
 

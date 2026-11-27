@@ -45,3 +45,27 @@ def test_thumbs_asked_kept_and_dropped():
     need = d.apply({"persons": persons[:1], "thumbKeys": {"j:1": "a2"}}, "joyclub:9", now)
     assert need == ["j:1"] and d.thumbs == {}
     assert d.accounts["joyclub:9"]["count"] == 1
+
+
+def test_video_parts_resume(tmp_path):
+    from custom_components.swinger_companion import video_parts as vp
+    part = tmp_path / ".parts" / "p" / "v.mp4"
+    chunks = [bytes([n]) * (100 + n) for n in range(6)]
+    assert vp.resume_index(part) == 0
+    for n in range(5):
+        assert vp.put_part(part, n, chunks[n]) == "ok"
+    assert vp.size(part) == sum(len(c) for c in chunks[:5])
+    # half written 6th part: dropped, resume 2 before the last complete one
+    with part.open("ab") as f:
+        f.write(b"\x09" * 50)
+    assert vp.resume_index(part) == 3
+    assert vp.put_part(part, 3, chunks[3]) == "ok"        # same as before → kept, file cut after it
+    assert vp.size(part) == sum(len(c) for c in chunks[:4]) == part.stat().st_size
+    assert vp.put_part(part, 4, chunks[4]) == "ok" and vp.put_part(part, 5, chunks[5]) == "ok"
+    assert part.read_bytes() == b"".join(chunks)
+    assert vp.put_part(part, 8, b"x") == "order"
+    assert vp.put_part(part, 2, b"other") == "mismatch"    # the stream changed
+    assert vp.put_part(part, 0, b"new start") == "ok"      # first part differs → starts over
+    assert part.read_bytes() == b"new start" and vp.resume_index(part) == 0
+    vp.drop(part)
+    assert not part.exists() and vp.resume_index(part) == 0

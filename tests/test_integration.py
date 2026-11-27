@@ -329,7 +329,9 @@ async def test_video_parts(hass: HomeAssistant, hass_client_no_auth, tmp_path) -
     assert (await send(0, raw, k="nope"))["ok"] is False
     assert (await send(0, raw, mime="image/jpeg"))["ok"] is False
     assert (await send(0, b"\x00\x00\x00\x18ftypiso5", mime="video/mp4", k="joyclub-v5"))["ok"]  # fMP4 accepted (then restarted below)
-    assert (await send(2, raw))["error"] == "order"  # out of order → starts over
+    assert (await send(2, raw))["error"] == "order"  # out of order
+    res = decrypt(key, await (await client.post(url, json=encrypt(key, {"format": "swinger-companion", "v": 1, "kind": "vidresume", "pid": "j:1", "k": "joyclub-v5"}))).json())
+    assert res == {"ok": True, "next": 0}
     half = len(raw) // 2
     assert (await send(0, raw[:half])) == {"ok": True, "next": 1}
     assert (await send(2, raw[half:]))["error"] == "order"  # gap → starts over

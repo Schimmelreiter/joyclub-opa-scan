@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.20
+// @version      2.21
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -15801,7 +15801,7 @@ fragment ImageUIDataFragment on ImageUIData {
   // Adresse aus Home Assistant: https://<ha>/api/webhook/<id>#<Schlüssel>. Der Schlüssel (nach „#“) verlässt den Browser nie;
   // gesendet wird AES-256-GCM-verschlüsselt. Nach jeder Änderung der Fickliste (10 s gebündelt), sonst alle 6 Stunden.
   // Vorschaubilder nur, wenn Home Assistant sie anfordert (neu oder geändert), auf 160 px verkleinert.
-  const K_HA_URL = 'jaf_ha_url', K_HA_STAT = 'jaf_ha_stat', K_HA_DIRTY = 'jaf_ha_dirty', K_HA_LOCK = 'jaf_ha_lock';
+  const K_HA_URL = 'jaf_ha_url', K_HA_STAT = 'jaf_ha_stat', K_HA_DIRTY = 'jaf_ha_dirty', K_HA_LOCK = 'jaf_ha_lock', K_HA_VPROG = 'jaf_ha_vprog';
   function haParse(v) {
     const m = /^(https?:\/\/[^#\s]+\/api\/webhook\/[A-Za-z0-9_-]+)#([A-Za-z0-9_-]{43})$/.exec(String(v || '').trim());
     return m ? { url: m[1], key: m[2] } : null;
@@ -15811,7 +15811,9 @@ fragment ImageUIDataFragment on ImageUIData {
     if (!a) return 'Nicht eingerichtet – die Adresse steht in Home Assistant unter Swinger Companion › Konfigurieren.';
     const s = GM_getValue(K_HA_STAT, {}) || {};
     if (s.errAt && (!s.at || s.errAt > s.at)) return `Fehler um ${fmtTs(s.errAt)}: ${s.err}`;
-    return s.at ? `Zuletzt gesendet ${fmtTs(s.at)} · ${s.count || 0} Personen in Home Assistant${s.pics ? ` · ${s.pics} Bilder übertragen` : ''}` : 'Noch nichts gesendet.';
+    const v = GM_getValue(K_HA_VPROG, null);
+    const vt = v && v.k ? ` · Video von ${v.nick}: ${v.mb} MB ${v.stopped ? `(unterbrochen ${fmtTs(v.stopped)}, geht beim nächsten Senden weiter – JOYclub-Tab offen lassen)` : `(läuft, ${fmtTs(v.at)})`}` : '';
+    return s.at ? `Zuletzt gesendet ${fmtTs(s.at)} · ${s.count || 0} Personen in Home Assistant${s.pics ? ` · ${s.pics} Bilder/Videos übertragen` : ''}${s.left ? ` · ${s.left} noch offen` : ''}${vt}` : 'Noch nichts gesendet.';
   }
   let haTimer = 0;
   function haSoon() {
@@ -15895,23 +15897,38 @@ fragment ImageUIDataFragment on ImageUIData {
       if (pic.v) {
         // Video in Teilen (je Anfrage ein Stück); ein angefangenes Video wird fertig gesendet
         let ok = false;
-        try {
-          let part = 0;
-          if (pic.pf === 'poppen' && (!pic.src || (pic.exp && pic.exp < Date.now() + 600000))) continue; // Adresse abgelaufen: beim nächsten Profilbesuch auf poppen.de neu
+        const ask = async (obj) => {
+          const r = await haPost(a.url, await enc(Object.assign({ format: 'swinger-companion', v: 1, pid, k }, obj)));
+          if (r.status < 200 || r.status >= 300) throw new Error('Home Assistant antwortet mit ' + r.status);
+          const env = JSON.parse(r.responseText || '{}');
+          return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data))));
+        };
+        if (pic.pf === 'poppen' && (!pic.src || (pic.exp && pic.exp < Date.now() + 600000))) continue; // Adresse abgelaufen: beim nächsten Profilbesuch auf poppen.de neu
+        const nick = (x.main && (x.main.nick || x.main.name)) || x.name || pid;
+        for (let attempt = 0; attempt < 2 && !ok; attempt++) try {
+          let part = 0, bytesSent = 0;
+          // 2.21: fortsetzen – Home Assistant nennt das Teilstück, ab dem es weitergeht (2 vor dem letzten vollständigen);
+          // das erste erneut gesendete vergleicht es per MD5, bei Abweichung beginnt das Video neu
+          const resume = attempt ? 0 : Number((await ask({ kind: 'vidresume' })).next) || 0;
           const load = pic.pf === 'poppen' ? (cb) => flHlsParts(pic.src, cb) : (cb) => flVideoParts(pic.vid, pic.vuid, cb);
           await load(async (seg, si, segLast, mime) => {
            for (let off = 0; off < seg.length; off += 5 << 20) {
             const bytes = seg.subarray(off, off + (5 << 20)), i = part++, last = segLast && off + (5 << 20) >= seg.length;
+            bytesSent += bytes.length;
+            if (i < resume) continue; // liegt schon in Home Assistant
             GM_setValue(K_HA_LOCK, Date.now());
-            const r = await haPost(a.url, await enc({ format: 'swinger-companion', v: 1, kind: 'vidpart', pid, k, i, last, mime: mime || 'video/mp2t', data: b64(bytes) }));
-            if (r.status < 200 || r.status >= 300) throw new Error('Home Assistant antwortet mit ' + r.status);
-            const env = JSON.parse(r.responseText || '{}');
-            const res = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, key, unb64(env.data))));
+            GM_setValue(K_HA_VPROG, { nick, k, mb: Math.round(bytesSent / 1048576), at: Date.now() });
+            const res = await ask({ kind: 'vidpart', i, last, mime: mime || 'video/mp2t', data: b64(bytes) });
+            if (!res.ok && res.error === 'mismatch' && !attempt) throw Object.assign(new Error('Teilstück weicht ab – Video beginnt neu'), { restart: true });
             if (!res.ok) throw new Error(res.error || 'Video abgelehnt');
             if (last) { ok = true; if (Array.isArray(res.needPics)) need = res.needPics.filter(([p2, k2]) => !tried.has(p2 + '|' + k2)); }
            }
           });
-        } catch (e) { console.warn('[Alter-Filter] Video an Home Assistant', e); }
+        } catch (e) {
+          console.warn('[Alter-Filter] Video an Home Assistant', e);
+          if (!e.restart) break;
+        }
+        GM_setValue(K_HA_VPROG, ok ? null : Object.assign({}, GM_getValue(K_HA_VPROG, null) || {}, { stopped: Date.now() }));
         if (ok) { sent++; await flPicStored(k); }
         continue;
       }
@@ -15927,14 +15944,17 @@ fragment ImageUIDataFragment on ImageUIData {
       if (res.ok) { sent++; await flPicStored(k); }
       if (Array.isArray(res.needPics)) need = res.needPics.filter(([p2, k2]) => !tried.has(p2 + '|' + k2));
     }
+    haNeedLeft = need.length;
     return sent;
   }
-  let haBusy = false;
+  let haBusy = false, haNeedLeft = 0;
   async function haSend(force) {
     const a = haParse(GM_getValue(K_HA_URL, ''));
     if (!a || haBusy || window.top !== window) return;
     const s0 = GM_getValue(K_HA_STAT, {}) || {}, dirty = GM_getValue(K_HA_DIRTY, 0) || 0;
-    if (!force && dirty <= (s0.at || 0) && Date.now() - (s0.at || 0) < 6 * 3600000) return;
+    // 2.21: wartet Home Assistant noch auf Bilder/Videos, alle 15 Minuten erneut
+    const again = (s0.left || 0) > 0 && Date.now() - (s0.at || 0) >= 14 * 60000;
+    if (!force && !again && dirty <= (s0.at || 0) && Date.now() - (s0.at || 0) < 6 * 3600000) return;
     const lock = GM_getValue(K_HA_LOCK, 0) || 0;
     if (!force && Date.now() - lock < 90000) return; // ein anderer Tab sendet gerade
     GM_setValue(K_HA_LOCK, Date.now());
@@ -15977,7 +15997,7 @@ fragment ImageUIDataFragment on ImageUIData {
       }
       if (ans && Array.isArray(ans.changes) && ans.changes.length) haApplyChanges(ans.changes, persons);
       const pics = ans ? await haSendPics(a, key, persons, ans.needPics || []) : 0;
-      GM_setValue(K_HA_STAT, { at: started, count: ans ? ans.count : 0, pics: pics + ((GM_getValue(K_HA_STAT, {}) || {}).pics || 0) });
+      GM_setValue(K_HA_STAT, { at: started, count: ans ? ans.count : 0, left: ans ? haNeedLeft : 0, pics: pics + ((GM_getValue(K_HA_STAT, {}) || {}).pics || 0) });
     } catch (e) {
       GM_setValue(K_HA_STAT, Object.assign({}, GM_getValue(K_HA_STAT, {}) || {}, { err: e.message || String(e), errAt: Date.now() }));
     } finally { haBusy = false; GM_setValue(K_HA_LOCK, 0); }
