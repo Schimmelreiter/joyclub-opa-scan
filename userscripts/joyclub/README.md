@@ -4,7 +4,7 @@ Implementiert einen Schutz vor sabbernden alten Opas in JOYclub.
 
 Ein Tampermonkey-Userscript für [joyclub.de](https://www.joyclub.de). Es findet Mitglieder, die nach einstellbaren Regeln zu alt sind (bzw. Paare mit großem Altersunterschied), schreibt ihnen eine Profilnotiz und setzt sie auf die JOYclub-Ignorierliste – bei Interaktionen („Mögen mich“), Profilbesuchern, auf Partys, in Gruppen und in der Mitgliedersuche.
 
-Stand: Version 2.25 – Änderungen siehe [changelog.txt](changelog.txt). Teil von [Swinger Companion](../../README.md).
+Stand: Version 2.26 – Änderungen siehe [changelog.txt](changelog.txt). Teil von [Swinger Companion](../../README.md).
 
 ---
 

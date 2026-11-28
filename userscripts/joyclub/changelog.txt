@@ -1,6 +1,16 @@
 Changelog – JOYclub Opa-Scan (Userscript)
 Neueste Version oben. Einträge ab Version 1.70.
 
+2.26 (28.11.2026)
+- Neu: Wer ignoriert mich? Öffnet man das Profil eines Mitglieds, das einen ignoriert, leitet JOYclub auf die Seite
+  „Der User ignoriert dich“ um. Das Skript merkt sich das (mit Datum und wie oft gesehen) und zeigt die Liste in den
+  Einstellungen (eigener Abschnitt). Ist das Profil später wieder sichtbar, gilt die Sperre als aufgehoben
+- Neu: Prüflauf (Einstellungen › Sicherung und Tampermonkey-Menü) – geht alle Funktionen durch und ändert nichts:
+  Konto und Kontobindung, Gedächtnis, Briefkasten (Ablage, Fickliste, Textvorlagen, Abgleich), Regeln, Füllstand und
+  Abgleich der Ignorierliste, Abrufe im Hintergrund (Ignorierliste, Mitgliedersuche), Wartungspause, Tab-Sperre,
+  Rekorder; Ergebnis mit ✓ / ! / ✗
+- Rekorder: Diagnose enthält jetzt „Wer ignoriert mich?“ (nur Zahlen und Zeiten, keine Namen)
+
 2.25 (27.11.2026)
 - Home Assistant: Bilder und Videos von xHamster (gemeinsame Fickliste) schickt jetzt das xHamster-Skript selbst; das
   JOYclub-Skript meldet sie nur noch in der Liste. Ausgeschaltete Einträge (off) meldet es nicht mehr

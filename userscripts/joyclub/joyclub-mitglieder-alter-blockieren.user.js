@@ -3,7 +3,7 @@
 // @name:de      Swinger Companion – JOYclub Edition
 // @name:en      Swinger Companion – JOYclub Edition
 // @namespace    local.joyclub-age-filter
-// @version      2.25
+// @version      2.26
 // @description  Swinger Companion für JOYclub: Opa-Scan (Interaktionen, Profilbesucher, Partys, Gruppen und Mitgliedersuche nach Alter je Gruppe und Quelle durchsuchen und Treffer ignorieren), Fickliste, Textvorlagen, Partys synchronisieren, Abgleich mit poppen.de; Einstellungsseite, Whitelist, AWO-Faktor, Sicherung.
 // @match        https://www.joyclub.de/*
 // @match        https://identity.joyclub.com/*
@@ -7337,6 +7337,8 @@ fragment ImageUIDataFragment on ImageUIData {
         const o = on[x] || (on[x] = { text: x, n: 0, example: r.name || '' }); o.n++;
       }
       d.onlineNew = Object.values(on).sort((a, b) => b.n - a.n);
+      // 2.26: wer mich ignoriert – nur Zahlen und Zeiten, keine Namen
+      d.ignoredBy = Object.values(GM_getValue('jaf_ignored_by', {}) || {}).map((e) => ({ first: fmtTs(e.first || 0), last: fmtTs(e.last || 0), n: e.n || 0, ended: e.ended ? fmtTs(e.ended) : '' }));
     } catch (e) { d.error = String(e && e.message || e); }
     return d;
   }
@@ -10798,6 +10800,7 @@ fragment ImageUIDataFragment on ImageUIData {
     row2(tb2, 'Gedächtnis sichern', 'Mitglieder-Wissen, Fickliste, Textvorlagen', txt('Zum Mischen auf einem anderen Konto oder Rechner', 'jaf-val'), jb('Sichern', () => downloadMemory()));
     row2(tb2, 'Wiederherstellen', 'Ersetzt alle Daten durch die Sicherung', txt('Eigene Sicherung', 'jaf-val'), jb('Datei wählen …', () => restoreBackup()));
     row2(tb2, 'Fremde Datensicherung importieren', 'Ergänzt das Wissen über andere Mitglieder', txt('Sicherung eines anderen Kontos', 'jaf-val'), jb('Datei wählen …', () => importForeignBackup()));
+    row2(tb2, 'Prüflauf', 'Geht alle Funktionen durch und ändert nichts', txt((() => { const x = GM_getValue('jaf_selftest_last', null); return x ? `zuletzt ${fmtTs(x.at)}: ${x.err} Fehler, ${x.warn} Hinweise` : 'noch nie'; })(), 'jaf-val'), jb('Prüfen', () => { selfTest().then(() => renderSettingsPage()).catch((e) => flToast('Prüflauf: ' + (e && e.message || e), 6000)); }));
     if (MEM.mode === 'idb') {
       const ms = memStatus();
       const nf = (n) => Number(n || 0).toLocaleString('de-DE');
@@ -10817,6 +10820,8 @@ fragment ImageUIDataFragment on ImageUIData {
           renderSettingsPage();
         }));
     }
+    tb2 = section('Wer ignoriert mich?');
+    row2(tb2, 'Ignorieren mich', 'Erkannt beim Besuch eines Profils', ignByControl(() => renderSettingsPage()));
     // ---- Experten-Einstellungen ----
     const exp = document.createElement('div');
     exp.className = 'jaf-exp-toggle';
@@ -14661,6 +14666,7 @@ fragment ImageUIDataFragment on ImageUIData {
     await storeMigrationInit();
     if (await topGate()) return;
     autoWhiteInit();
+    try { ignByCheck(); } catch (e) { console.warn('[Alter-Filter] Wer ignoriert mich', e); }
     if (isSettingsPage()) { await waitFor(() => document.getElementById('c'), 10000); renderSettingsPage(); }
     await peekInit();
     if (await noteJobInit()) return;
@@ -14732,10 +14738,126 @@ fragment ImageUIDataFragment on ImageUIData {
     return;
   }
 
+  // ---------- 2.26: Wer ignoriert mich? ----------
+  // JOYclub leitet das Profil eines Mitglieds, das mich ignoriert, auf /club/ignored/<id>.<nick>.html um
+  // (<body class="body_profile_ignored">, Titel „Der User ignoriert dich“). Das wird hier gemerkt; ist das
+  // Profil später wieder sichtbar, gilt die Sperre als aufgehoben.
+  const K_IGNBY = 'jaf_ignored_by'; // { id: { nick, url, first, last, n, ended? } }
+  const getIgnBy = () => GM_getValue(K_IGNBY, {}) || {};
+  const IGNBY_RE = /^\/club\/ignored\/(\d+)\.([^/]+?)\.html$/i;
+  const isIgnoredByPage = () => IGNBY_RE.test(location.pathname) || !!(document.body && document.body.classList.contains('body_profile_ignored'));
+  function ignByCheck() {
+    if (IN_FRAME) return;
+    const l = getIgnBy();
+    if (isIgnoredByPage()) {
+      const m = IGNBY_RE.exec(location.pathname);
+      const id = m ? m[1] : idOf(location.pathname);
+      if (!id) return;
+      let nick = m ? m[2] : '';
+      try { nick = decodeURIComponent(nick); } catch (e) { /* so lassen */ }
+      const e = l[id] || { nick, first: Date.now(), n: 0 };
+      const neu = !l[id] || !!e.ended;
+      e.nick = nick || e.nick; e.url = location.origin + location.pathname; e.last = Date.now(); e.n = (e.n || 0) + 1; delete e.ended;
+      l[id] = e; GM_setValue(K_IGNBY, l);
+      if (neu) setTimeout(() => flToast(`Gemerkt: ${e.nick || id} ignoriert dich.`, 4000), 800);
+      return;
+    }
+    if (isProfilePage()) {
+      const id = idOf(location.pathname);
+      if (id && l[id] && !l[id].ended) { l[id].ended = Date.now(); GM_setValue(K_IGNBY, l); setTimeout(() => flToast(`${l[id].nick || id} ignoriert dich nicht mehr.`, 4000), 800); }
+    }
+  }
+  const ignByActive = () => Object.values(getIgnBy()).filter((e) => e && !e.ended);
+  function ignByControl(rerender) {
+    const w = document.createElement('div');
+    const l = getIgnBy();
+    const all = Object.entries(l).sort((a, b) => (b[1].last || 0) - (a[1].last || 0));
+    const act = all.filter(([, e]) => !e.ended), end = all.filter(([, e]) => e.ended);
+    const head = document.createElement('div');
+    head.textContent = all.length ? `${act.length} ignorieren dich${end.length ? ` · ${end.length} nicht mehr` : ''}` : 'Noch niemand – wird beim Besuch eines Profils erkannt, das dich ignoriert.';
+    w.appendChild(head);
+    if (all.length) {
+      const det = document.createElement('details');
+      const sum = document.createElement('summary'); sum.textContent = 'Liste anzeigen'; sum.style.cursor = 'pointer';
+      det.appendChild(sum);
+      const ul = document.createElement('ul'); ul.style.cssText = 'margin:6px 0 0;padding-left:18px';
+      for (const [id, e] of all) {
+        const li = document.createElement('li');
+        const a = document.createElement('a'); a.href = location.origin + `/profile/${id}.${encodeURIComponent(String(e.nick || 'x').toLowerCase())}.html`; a.target = '_blank'; a.textContent = e.nick || id;
+        li.appendChild(a);
+        li.append(` – seit ${fmtTs(e.first || 0)}${e.n > 1 ? `, ${e.n}× gesehen, zuletzt ${fmtTs(e.last || 0)}` : ''}${e.ended ? `, aufgehoben ${fmtTs(e.ended)}` : ''}`);
+        if (e.ended) li.style.opacity = '.6';
+        ul.appendChild(li);
+      }
+      det.appendChild(ul);
+      w.appendChild(det);
+    }
+    if (end.length) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Aufgehobene entfernen';
+      b.style.cssText = 'margin-top:6px;cursor:pointer';
+      b.addEventListener('click', (ev) => { ev.preventDefault(); const x = getIgnBy(); for (const k of Object.keys(x)) if (x[k].ended) delete x[k]; GM_setValue(K_IGNBY, x); rerender(); });
+      w.appendChild(b);
+    }
+    return w;
+  }
+
+  // ---------- 2.26: Prüflauf – geht alle Funktionen durch, ändert nichts ----------
+  async function selfTest() {
+    const res = [];
+    const add = (grp, name, st, info) => res.push({ grp, name, st, info: info || '' });
+    const uid = sessionId(), nick = ownNick();
+    add('Konto', 'Angemeldet', uid ? 'ok' : 'err', uid ? `${nick || '?'} (${uid})` : 'nicht angemeldet');
+    const o = GM_getValue(K_OWNER, null);
+    add('Konto', 'Kontobindung', o && uid && String(o.uid) === String(uid) ? 'ok' : (o ? 'err' : 'warn'), o ? `gebunden an ${o.nick || o.uid}` : 'noch nicht gebunden');
+    add('Speicher', 'Gedächtnis', MEM.mode === 'idb' ? 'ok' : 'warn', `${MEM.mode === 'idb' ? 'verschlüsselt (IndexedDB)' : 'Skript-Speicher'} · ${memTotal().toLocaleString('de-DE')} Einträge`);
+    add('Speicher', 'Bekannte Mitglieder', 'ok', `${Object.keys(getAccounts()).length.toLocaleString('de-DE')}`);
+    let t0 = Date.now();
+    try { await SH.call('get', { s: 'meta', k: 'schema' }, 15000); add('Briefkasten', 'Gemeinsame Ablage erreichbar', 'ok', `${Date.now() - t0} ms`); } catch (e) { add('Briefkasten', 'Gemeinsame Ablage erreichbar', 'err', String(e && e.message || e)); }
+    try { const l = await SH.call('all', { s: 'fick' }, 20000); add('Briefkasten', 'Fickliste lesbar', 'ok', `${(l || []).length} Einträge`); } catch (e) { add('Briefkasten', 'Fickliste lesbar', 'err', String(e && e.message || e)); }
+    try { const l = await SH.call('all', { s: 'tpl' }, 20000); add('Briefkasten', 'Textvorlagen lesbar', (l || []).length ? 'ok' : 'warn', `${(l || []).length} Vorlagen`); } catch (e) { add('Briefkasten', 'Textvorlagen lesbar', 'err', String(e && e.message || e)); }
+    add('Briefkasten', 'Abgleich mit poppen.de', /aktiv/.test(bkStatusText()) ? 'ok' : 'warn', bkStatusText());
+    const G = CONFIG.GROUPS || {};
+    const thOf = (v) => (Array.isArray(v) ? [v[2]] : v && typeof v === 'object' ? Object.values(v).filter(Array.isArray).map((x) => x[2]) : []);
+    const act = GROUP_KEYS.filter((k) => G[k] && G[k].src).map((k) => { const t = Object.values(G[k].src).flatMap(thOf).filter((x) => Number.isFinite(x) && x < 100); return t.length ? `${GROUP_LABELS[k]} ab ${Math.min(...t)}` : `${GROUP_LABELS[k]}: aus`; });
+    add('Regeln', 'Gruppen und Grenzen', act.length ? 'ok' : 'err', act.join(', ') || 'keine');
+    add('Regeln', 'Testlauf (ignoriert niemanden)', CONFIG.DRY_RUN ? 'warn' : 'ok', CONFIG.DRY_RUN ? 'eingeschaltet' : 'aus');
+    const n = ignCount();
+    add('Ignorierliste', 'Füllstand', n < CONFIG.IGNORE_LIMIT * 0.95 ? 'ok' : 'warn', `${n.toLocaleString('de-DE')} von ${CONFIG.IGNORE_LIMIT.toLocaleString('de-DE')}`);
+    const sl = gmGet(K_SYNC_LAST, null);
+    add('Ignorierliste', 'Letzter Abgleich', sl && Date.now() - sl.ts < 30 * 864e5 ? 'ok' : 'warn', sl ? fmtTs(sl.ts) : 'nie');
+    t0 = Date.now();
+    try {
+      const r = await fetch(ignoreUrl(), { credentials: 'include' });
+      const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+      const k = Object.keys(parseIgnoreList(doc)).length;
+      add('Hintergrund', 'Ignorierliste im Hintergrund lesbar', r.status === 200 && doc.body && doc.body.getAttribute('data-session-user-id') ? 'ok' : 'err', `Status ${r.status} · ${k} Einträge auf der Seite · ${Date.now() - t0} ms`);
+    } catch (e) { add('Hintergrund', 'Ignorierliste im Hintergrund lesbar', 'err', String(e && e.message || e)); }
+    t0 = Date.now();
+    try {
+      const r = await fetch(location.origin + '/member/', { credentials: 'include' });
+      const h = await r.text();
+      add('Hintergrund', 'Mitgliedersuche erreichbar', r.status === 200 && /data-session-user-id="\d+"/.test(h) ? 'ok' : 'err', `Status ${r.status} · ${Date.now() - t0} ms`);
+    } catch (e) { add('Hintergrund', 'Mitgliedersuche erreichbar', 'err', String(e && e.message || e)); }
+    const g = gmGet(K_GATE, null);
+    add('Betrieb', 'Wartungspause', g && g.until > Date.now() ? 'warn' : 'ok', g && g.until > Date.now() ? `bis ${fmtTs(g.until)}` : 'keine');
+    const lk = getLock();
+    add('Betrieb', 'Tab-Sperre', !lk || lk.owner === TAB_ID || Date.now() - (lk.ts || 0) > 60000 ? 'ok' : 'warn', lk && Date.now() - (lk.ts || 0) <= 60000 ? `belegt: ${lk.what || lk.url || '?'}` : 'frei');
+    const rs = apiRecStats();
+    add('Betrieb', 'Rekorder', 'ok', `${rs.n} Adressen erfasst, ${rs.neu} neu`);
+    add('Betrieb', 'Wer ignoriert mich?', 'ok', `${ignByActive().length} erkannt`);
+    const ico = { ok: '✓', warn: '!', err: '✗' };
+    const bad = res.filter((r) => r.st === 'err').length, warn = res.filter((r) => r.st === 'warn').length;
+    GM_setValue('jaf_selftest_last', { at: Date.now(), ok: res.length - bad - warn, warn, err: bad });
+    await askPopup({ title: `Prüflauf: ${bad ? bad + ' Fehler' : 'alles in Ordnung'}${warn ? ` · ${warn} Hinweise` : ''}`, warn: !!bad,
+      lines: res.map((r) => `${ico[r.st]} ${r.grp} – ${r.name}${r.info ? ': ' + r.info : ''}`), buttons: [{ label: 'Schließen', value: 'ok', focus: true }] });
+    return res;
+  }
+
   // Tampermonkey-Menü: nur noch Rekorder (der Export enthält auch alle Diagnose-Daten)
   try {
     GM_registerMenuCommand('Swinger Companion: Rekorder exportieren', () => { apiRecDownload(); });
     GM_registerMenuCommand('Swinger Companion: Rekorder leeren', () => { if (confirm('Alle Rekorder-Daten löschen (auch Fehlschläge und Typen-Info)?')) apiRecClear(); });
+    GM_registerMenuCommand('Swinger Companion: Prüflauf', () => { selfTest().catch((e) => flToast('Prüflauf: ' + (e && e.message || e), 6000)); });
   } catch (e) { /* ältere Tampermonkey-Version */ }
 
   // Sperre erneuern, solange dieser Tab arbeitet; sonst freigeben
