@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Swinger Companion – xHamster
 // @namespace    https://github.com/Schimmelreiter/swinger-companion
-// @version      0.5.0
+// @version      0.5.1
 // @description  Swinger Companion für xHamster: Opas markieren und blockieren (Regeln von poppen.de oder eigene), gemeinsame Fickliste mit Bildern und Videos für Home Assistant, Textvorlagen, ohne Werbung; Rekorder für die Testkonten
 // @match        https://xhamster.com/*
 // @match        https://*.xhamster.com/*
@@ -1342,7 +1342,7 @@
   function decorate() {
     if (!People.byId.size) return;
     const src = srcOfPage();
-    const items = document.querySelectorAll('.item.friend, [class*="card"], [class*="Card"], li');
+    const items = document.querySelectorAll('.item.friend, [class*="card"], [class*="Card"], li, .notifications-row');
     for (const it of items) {
       if (it.querySelector('.xhsc-badge') || it.closest('#xhsc-box, header, .user-dropdown, [data-role="header"], .xhsc-fl-list')) continue;
       // 0.2.0: in der Dating-Suche ist die Karte selbst der Link
@@ -1364,7 +1364,7 @@
       b.className = 'xhsc-badge';
       b.style.cssText = 'font:11.5px/1.3 system-ui,sans-serif;color:#ccc;margin-top:2px';
       b.innerHTML = html;
-      (it.querySelector('.info, .conversation-meta, [class*="userInfo-"]') || it).appendChild(b);
+      (it.querySelector('.info, .conversation-meta, [class*="userInfo-"], .user-info') || it).appendChild(b);
       // bei jedem Neuzeichnen (z. B. nach neuen Regeln) setzen, nicht nur hinzufügen
       it.style.display = ''; it.style.opacity = ''; it.removeAttribute('title');
       // 0.3.2: auf eigenen Listen (Blockierte, Freunde, Anfragen) nur das Abzeichen, nicht abdunkeln
@@ -1372,6 +1372,53 @@
       if (c.ignore) { if (ownList) it.title = `${c.label}: ${c.reason}`; else if (opa().hide && src === 'suche') it.style.display = 'none'; else { it.style.opacity = '.35'; it.title = `${c.label}: ${c.reason}`; } }
       if (p.retired) it.style.opacity = '.5';
     }
+  }
+  // 0.5.1: Benachrichtigungen tragen keine Steckbriefe – Profile der Absender nachladen (zwischengespeichert,
+  // gedrosselt, höchstens 40 je Seitenaufruf), damit die Zeilen Abzeichen bekommen
+  const PINFO_K = 'xh_pinfo', PINFO_TTL = 7 * 864e5, PINFO_MAX = 400, PINFO_RUN = 40;
+  let pinfoBusy = false;
+  function pinfoFeed() {
+    const c = gm(PINFO_K, {}) || {};
+    for (const k in c) if (c[k] && c[k].u && now() - (c[k].at || 0) < PINFO_TTL) peopleAdd(c[k].u);
+  }
+  function pinfoStore(nick, dm) {
+    const c = gm(PINFO_K, {}) || {};
+    const pi = dm.personalInfo || {};
+    c[norm(nick)] = { at: now(), u: { modelName: 'userModel', id: dm.id, name: dm.name, pageURL: dm.pageURL, retired: !!dm.retired, thumbURL: dm.thumbURL || '',
+      personalInfo: { birthday: pi.birthday != null ? pi.birthday : null, gender: pi.gender ? { name: pi.gender.name } : null, geo: pi.geo ? { city: pi.geo.city || pi.geo.cityName || '' } : null } } };
+    const ks = Object.keys(c);
+    if (ks.length > PINFO_MAX) ks.sort((a, b) => (c[a].at || 0) - (c[b].at || 0)).slice(0, ks.length - PINFO_MAX).forEach((k) => delete c[k]);
+    gs(PINFO_K, c);
+    return c[norm(nick)].u;
+  }
+  function notiNicks(root = document) {
+    const out = [];
+    for (const a of root.querySelectorAll('.notifications-row a.event-user[href*="/users/"]')) {
+      const m = /\/users\/(?:profiles\/)?([^/?#]+)/.exec(a.getAttribute('href') || '');
+      const n = m ? decodeURIComponent(m[1]) : a.textContent.trim();
+      if (n && !out.some((x) => norm(x) === norm(n))) out.push(n);
+    }
+    return out;
+  }
+  async function notiLookup() {
+    if (pinfoBusy || !/^\/notifications/.test(location.pathname)) return;
+    pinfoBusy = true;
+    try {
+      pinfoFeed();
+      const m = me();
+      const todo = notiNicks().filter((n) => !People.byNick.has(norm(n)) && !(m && norm(m.nick) === norm(n))).slice(0, PINFO_RUN);
+      let i = 0;
+      for (const nick of todo) {
+        i++;
+        try {
+          const ini = initialsOf(await getHtml(profileUrl(nick)));
+          const dm = ini && ini.displayUserModel;
+          if (dm && dm.id) { peopleAdd(pinfoStore(nick, dm)); for (const b of document.querySelectorAll('.notifications-row .xhsc-badge')) b.remove(); decorate(); }
+        } catch (e) { /* nächster */ }
+        if (i < todo.length) await sleep(1500 + Math.random() * 1500);
+      }
+      if (todo.length) recEvent('Benachrichtigungen: Profile nachgeladen', { info: `${todo.length}` });
+    } finally { pinfoBusy = false; }
   }
   // Profilseite: Steckbrief aus dem HTML („I am: Name, 51 years old, male, heterosexual“)
   function profilePerson() {
@@ -3249,7 +3296,7 @@
   }
 
   // ---------- Sicherung: eigener Tampermonkey-Speicher als Datei ----------
-  const BACKUP_SKIP = /^xh_(rpc[qra]_|bkm_|rec$|ha_url$|tab_|oscan_lock$|media_lock$)/;
+  const BACKUP_SKIP = /^xh_(rpc[qra]_|bkm_|rec$|ha_url$|tab_|oscan_lock$|media_lock$|pinfo$)/;
   function backupExport() {
     let keys = [];
     try { keys = GM_listValues(); } catch (e) { uiToast('Sicherung: Tampermonkey erlaubt das Auflisten nicht.'); return; }
@@ -3353,7 +3400,7 @@
     } catch (e) { add('Scan', 'Blockierliste lesbar', 'err', e.message); }
     try {
       const rows = notiRows(await getHtml(location.origin + '/notifications'));
-      add('Scan', 'Benachrichtigungen lesbar', 'ok', `${rows.length} auf Seite 1`);
+      add('Scan', 'Benachrichtigungen lesbar', 'ok', `${rows.length} auf Seite 1 · ${Object.keys(gm(PINFO_K, {}) || {}).length} Absender-Profile zwischengespeichert`);
     } catch (e) { add('Scan', 'Benachrichtigungen lesbar', 'err', e.message); }
     add('Scan', 'Kopfzeilen der Seite für Blockieren', apiHdr ? 'ok' : 'warn', apiHdr ? 'mitgeschnitten' : 'noch keine – erscheint, sobald die Seite selbst etwas lädt');
     const ls = gm(K.lists, {}) || {};
@@ -3751,6 +3798,7 @@
     recPage();
     collect();
     peopleWalk(initials());
+    setTimeout(() => notiLookup().catch(() => {}), 2500);
     // gemeinsame Ablage: Regeln von poppen.de, Fickliste, eigenes Profil
     (async () => {
       try { if (await rulesRefresh()) { for (const b of document.querySelectorAll('.xhsc-badge')) b.remove(); const pb = document.getElementById('xhsc-prof'); if (pb) pb.remove(); const mn = document.querySelector('.xhsc-mop-nav'); if (mn) mn.remove(); setTimeout(relaxCheck, 2000); } } catch (e) { /* egal */ }

@@ -1,6 +1,12 @@
 Changelog – Swinger Companion xHamster (Userscript)
 Neueste Version oben.
 
+0.5.1 (28.11.2026)
+- Neu: Abzeichen auf der Seite „Notifications“. xHamster liefert dort keine Steckbriefe, deshalb lädt das Skript
+  die Profile der Absender im Hintergrund nach (gedrosselt, höchstens 40 je Seitenaufruf) und merkt sie sich
+  7 Tage; Absender über der Grenze werden wie in den anderen Listen abgedunkelt
+- Prüflauf: zeigt die Zahl der zwischengespeicherten Absender-Profile
+
 0.5.0 (27.11.2026)
 - Neu: Prüflauf (Einstellungsseite und Tampermonkey-Menü) – geht alle Funktionen durch und ändert nichts: Konto,
   Briefkasten, Regeln, Fickliste, Textvorlagen, Termine, Abrufe im Hintergrund (Dating-Suche, Blockierliste,
